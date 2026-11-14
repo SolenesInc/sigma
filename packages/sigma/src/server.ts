@@ -129,7 +129,7 @@ export type KernelHarnessService = {
 }
 
 export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessService>()("sigma/KernelHarness") {
-  static readonly layer = (home: Home, readOnly: boolean, live: ClaudeLiveOptions) =>
+  static readonly layer = (home: Home, readOnly: boolean, live: ClaudeLiveOptions, bashTimeout?: number) =>
     Layer.effect(
       KernelHarness,
       Effect.gen(function* () {
@@ -160,7 +160,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           [...instances.values()].flatMap((instance) => (instance.provider ? [instance.provider] : [])),
         )
         const typesOf: AgentTypes = (agent) => agentTypes(agent.model?.provider, agent.cwd ?? home.dir)
-        const base = [sigmaTools(images), agentTools(agents, typesOf), codeModeTools(sandbox)]
+        const base = [sigmaTools(images, bashTimeout), agentTools(agents, typesOf), codeModeTools(sandbox)]
         for (const extension of base) registry.install(extension)
         registry.install(workspaceInstructions(home, instances, typesOf))
         // Claude Code has its own tools and subagents, so sigma's built-in ones are not offered to it.
@@ -779,6 +779,8 @@ export interface ServerOptions {
   readonly readOnly?: boolean
   readonly providers: ProviderOptions
   readonly connectionQueue?: number
+  /** Seconds `bash` lets a command run when its call gives no `timeout`; default the tool's. Tests shorten it. */
+  readonly bashTimeout?: number
 }
 
 export const serverLayer = (home: Home, options: ServerOptions) =>
@@ -789,12 +791,17 @@ export const serverLayer = (home: Home, options: ServerOptions) =>
     Layer.provide(readableNdJsonRpc),
     Layer.provide(homeSocketServer(home.socket)),
     Layer.provideMerge(
-      KernelHarness.layer(home, options.readOnly === true, {
-        ...(options.claudeIdle === undefined ? {} : { idle: options.claudeIdle }),
-        ...(options.claudeStop === undefined ? {} : { stop: options.claudeStop }),
-        ...(options.claudeClock === undefined ? {} : { clock: options.claudeClock }),
-        idleCompaction: options.providers.config.claude_idle_compaction !== false,
-      }),
+      KernelHarness.layer(
+        home,
+        options.readOnly === true,
+        {
+          ...(options.claudeIdle === undefined ? {} : { idle: options.claudeIdle }),
+          ...(options.claudeStop === undefined ? {} : { stop: options.claudeStop }),
+          ...(options.claudeClock === undefined ? {} : { clock: options.claudeClock }),
+          idleCompaction: options.providers.config.claude_idle_compaction !== false,
+        },
+        options.bashTimeout,
+      ),
     ),
     Layer.provideMerge(
       Providers.layer(

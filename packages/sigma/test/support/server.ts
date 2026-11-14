@@ -48,6 +48,8 @@ export interface ServerOptions {
   readonly claudeStop?: Duration.Input
   /** The clock the live Claude Code processes keep time by, which the test advances. */
   readonly claudeClock?: Clock.Clock
+  /** Seconds `bash` lets a command run when its call gives no `timeout`. */
+  readonly bashTimeout?: number
 }
 
 /** The providers a test's server has: `script` playing `script` and preferred, then those `options` configure. */
@@ -80,6 +82,7 @@ export const runningServer = async (
         ...(options.claudeIdle === undefined ? {} : { claudeIdle: options.claudeIdle }),
         ...(options.claudeStop === undefined ? {} : { claudeStop: options.claudeStop }),
         ...(options.claudeClock === undefined ? {} : { claudeClock: options.claudeClock }),
+        ...(options.bashTimeout === undefined ? {} : { bashTimeout: options.bashTimeout }),
       }).pipe(Layer.provide(recorder)),
       scope,
     ),

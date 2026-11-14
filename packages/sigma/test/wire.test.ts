@@ -460,6 +460,37 @@ test("approval-wire: two clients answer one approval at once and the first answe
   bo.close()
 })
 
+test("bash-default-timeout: a bash command past the default ends with an error naming the limit and the timeout argument", async () => {
+  await using server = await runningServer(
+    [
+      { tool: { name: "bash", input: { command: "sleep 60" } } },
+      { tool: { name: "bash", input: { command: "sleep 60", timeout: 2 } } },
+      { text: "all done" },
+    ],
+    { bashTimeout: 1 },
+  )
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = await start(client, server.home.dir)
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "hang")
+  for (const answered of [1, 2]) {
+    const approval = await waitingApproval(view)
+    await client.call("approval/resolve", { conversation, approval, author: person("ada"), allow: true })
+    await view.until(() => toolResults(view).length === answered)
+  }
+  await view.until(settled(1))
+  expect(toolResults(view)).toEqual([
+    {
+      text: expect.stringContaining(
+        "Command timed out after 1 seconds. That is the default limit; pass the timeout argument, in seconds, to allow a command longer",
+      ),
+      isError: true,
+    },
+    { text: "<harness>\n[error] Command timed out after 2 seconds\n</harness>", isError: true },
+  ])
+  client.close()
+})
+
 test("approval-wire: a denied call is reported to the model as denied and does not run, and an unknown approval is refused by name", async () => {
   await using server = await runningServer([
     { tool: { name: "bash", input: { command: "touch made" } } },
