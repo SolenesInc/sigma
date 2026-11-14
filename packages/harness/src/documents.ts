@@ -4,13 +4,16 @@ import { type CommitError, defineDoc, type InvocationEnded, type ReadFailure, ty
 import { Effect } from "effect"
 import { uuidv7 } from "@sigma/models"
 
-/** The provider-facing identity; every fork starts with a fresh one. */
+/**
+ * The provider-facing identity: sent to ChatGPT as the prompt cache key and session. A new conversation gets a fresh
+ * one; a fork keeps its parent's, so its first request reads the history it shares with its parent from the cache.
+ */
 export const ProviderDoc = defineDoc<{ sessionId: string }>({
   kind: "pi.provider",
   version: 1,
   scope: "conversation",
   history: "latest",
-  fork: "initial",
+  fork: "current",
   initial: () => ({ sessionId: uuidv7() }),
   checkpointWhen: () => true,
 })

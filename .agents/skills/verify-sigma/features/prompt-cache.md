@@ -25,6 +25,11 @@ with what the last one had. A person sees the result in `/usage`, whose
   `Updated system prompt section "<name>":` and the section's new text.
 - `cache-fresh-subagent` does the same among the requests of a subagent
   started with `fork_turns: "none"`, under a `prompt_cache_key` of its own.
+- `cache-conversation-fork` sends a fork's requests, from a `spawn_agent`
+  with its parent's history or from `conversation/fork`, under its parent's
+  `prompt_cache_key` and `session-id`, so its first request can read the
+  history it shares with its parent from the cache. A new conversation,
+  `fork_turns: "none"` subagents among them, gets a key of its own.
 - `cache-shown` shows cached input per model in `/usage`, as
   `<total> (<n> in, <n> cached, <n> out)`, with `<n> cache write` before `out`
   when the provider charged for writing to its cache; `usage/get` returns it
@@ -118,6 +123,21 @@ Preconditions:
 
   Both lines read `true` for all four.
 
+- **Forks** (`cache-conversation-fork`). `drive.ts r up --fake-openai subagent,fresh_subagent_tool_call`,
+  `drive.ts r sigma exec --provider openai --auto 'Ask a scout where the gnome lives.'`:
+  stderr `› spawn_agent(scout)` and `› wait_agent`. Take the id and its
+  `sigma.run_end` entry's id from `drive.ts r watch <id> --save parent`, then
+  `drive.ts r serve` and
+  `drive.ts r rpc conversation/fork '{"conversation": "<id>", "at": <run_end id>, "author": {"id": "ada", "name": "ada"}}'`:
+  `{"conversation": "<fork>"}`. Then
+  `drive.ts r sigma exec --conversation <fork> --auto 'Ask a scout what echo prints.'`.
+  `jq -c '{request, key: .body.prompt_cache_key, inputs: (.body.input|length)}'`
+  on the log shows seven requests, all `as recorded`: 1 to 3 (the parent, its
+  scout fork with the parent's history, the parent again) and 4 and 7 (the
+  `conversation/fork`) under one key; 5 and 6, the fork's `fork_turns: "none"`
+  scout, under another. The log has no headers: the provider test checks that
+  `session-id` matches each key.
+
 - **The cached column** (`cache-shown`). A script
   `[{"text": "answer one", "usage": {"input": 1200, "output": 300}}, {"text": "answer two", "usage": {"input": 2000, "output": 500, "cacheRead": 1200}}]`,
   `drive.ts r up --script s.json`, `drive.ts r tui start --conversation talk`,
@@ -157,8 +177,9 @@ Preconditions:
 - **Provider.** ChatGPT is the provider sigma builds requests for, so sigma
   owns its cache. On Claude, Claude Code builds the requests, and sigma
   controls only what each process starts with and how long it lives.
-- **Subagents.** A ChatGPT subagent has a cache key of its own. A Claude
-  Code fork subagent shares its parent's cache in Claude Code.
+- **Subagents.** A ChatGPT subagent spawned with its parent's history keeps
+  its parent's cache key; one spawned with `fork_turns: "none"` has its own. A
+  Claude Code fork subagent shares its parent's cache in Claude Code.
 - **Server restart.** A restarted server reopens Claude Code processes with
   `--resume`, which reads the cache only when the process starts as the one
   before did (`cache-claude-resume`).
@@ -170,6 +191,7 @@ Provider, `packages/sigma/test/openai.test.ts`:
 - cache-turns: each ChatGPT request of a conversation, within a run and across runs, repeats the one before it and adds to its end
 - cache-instructions-change, section-deltas: instructions changed between two prompts reach ChatGPT after the history, and the request keeps the instructions it started with
 - cache-fresh-subagent: a subagent started without its parent's history keeps its own requests' front, under a cache key of its own
+- cache-conversation-fork: a spawn_agent fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own
 
 Provider, `packages/sigma/test/claude.test.ts`:
 
@@ -253,6 +275,18 @@ ChatGPT, in a run made with `drive.ts r up --openai-auth <your saved sign-in>`:
   12,065 and `cacheRead` 0, then `amber-412-cedar` with `input` 206 and
   `cacheRead` 11,904. Before sigma sent the change in place, a change to
   `instructions` read nothing from the cache (F2 in seed `s-4yhmqe`).
+- **A fork.** In a new run, the same first `exec`: `noted`. Take the id and
+  its `sigma.run_end` entry's id from `drive.ts r watch <id> --save parent`,
+  then
+  `drive.ts r rpc conversation/fork '{"conversation": "<id>", "at": <run_end id>, "author": {"id": "ada", "name": "ada"}}'`
+  and
+  `drive.ts r watch <fork> --submit 'Which label is number 412? Reply with it only.' --until run_end --timeout 120000 --save fork`:
+  `amber-412-cedar`. The same `jq` on `fork.ndjson`: the fork's answer has a
+  `cacheRead` of nearly all of the parent's first `input`, as a second turn
+  in one conversation does, and the view's `pi.provider` holds the parent's
+  `sessionId`. Measured on 2026-11-14 with gpt-6-luna: the parent's `noted`
+  with `input` 12,042, then the fork's `amber-412-cedar` with `input` 162 and
+  `cacheRead` 11,904.
 
 Claude, in a run made with `drive.ts r up --real-claude`; give each `rpc` and
 `watch` `--timeout 120000`:

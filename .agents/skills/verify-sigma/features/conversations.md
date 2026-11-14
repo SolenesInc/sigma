@@ -8,7 +8,9 @@ as the conversation has now (not as they were at the fork's entry), so the
 prompt can be tried another way. The fork's header says what it forked,
 `⑂ fork of <id> · <that conversation's first prompt>`, and `conversation/list`
 gives each fork `fork: {of, at}`. `conversation/fork` forks at any
-entry, with a chosen id. The conversation it left is unchanged.
+entry, with a chosen id. The conversation it left is unchanged. On ChatGPT a fork
+keeps its parent's prompt cache key, so it reads the history they share from
+the cache (`cache-conversation-fork` in [Prompt cache](./prompt-cache.md)).
 
 ## Sub-features
 
@@ -18,7 +20,6 @@ entry, with a chosen id. The conversation it left is unchanged.
 - `fork-rpc` The client path for Fork at any entry (R716-723, §3.7): Try another direction from an earlier point
 - `fork-shown` The TUI's header marks a fork and names the conversation it forked, and `conversation/list` gives each fork the conversation and entry it goes on from
 - `fork-document-policy` [kernel] Fork document policies: asOf, current, initial (§3.7): Each kind of state chooses what a fork inherits
-- `fork-provider-identity` [kernel] Each fork has its own provider session identity (§3.7, R716): Forks don't collide in provider session or cache
 - `conversation-list` [kernel] Conversation list (§2.2): Find conversations
 - `conversation-reopen` [kernel] Reopen by id and continue (§2.2): Come back to a conversation
 - `conversation-init` [kernel] `init` on create, fork and root writes per-call data in the creating commit.
@@ -84,7 +85,6 @@ Screen, `packages/sigma/test/screen.test.ts`:
 
 Package, `packages/harness/test/harness.test.ts`:
 
-- fork-provider-identity: the root and each of its forks have their own provider session id
 - conversation-list, conversation-reopen: conversations are found again after a restart, with their agent and history
 - reset-context, reset-handoff, fork-at-entry: a fork that resets starts a new context with its handoff, and the original and the fork's earlier entries keep theirs
 

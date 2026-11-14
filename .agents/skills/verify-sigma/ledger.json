@@ -254,9 +254,9 @@
   {
     "id": "C5",
     "area": "C",
-    "feature": "Each fork has its own provider session identity (\u00a73.7, R716)",
+    "feature": "A fork keeps its parent's provider session identity (\u00a73.7, R716, amended)",
     "verdict": "bring",
-    "useCases": ["fork-provider-identity"]
+    "useCases": ["cache-conversation-fork"]
   },
   {
     "id": "C6",
