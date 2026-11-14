@@ -13,6 +13,8 @@ server three times in a row ends instead of looping.
 - `crash-committed` commits the answer once, in a run that ends `answered`.
 - `crash-call` records a running call as
   `Tool bash was interrupted and may have partially run` and goes on.
+- `crash-command-once` kills a local command the crash left running, before
+  the restarted server resumes any run, so a rerun of it is the only copy.
 - `crash-limit` ends the run with `restart_limit` after the server stopped
   during it three times in a row.
 - `crash-claude` resumes a Claude Code run whose server was killed while a
@@ -136,6 +138,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 - crash-claude-settled: a Claude Code answer committed before the server was killed is not run again
 - crash-exec: a run cut off by a crashed server finishes after the server comes back, and sigma exec prints it and exits 0
 - crash-call: a call cut off by a crashed server is recorded as interrupted and the run carries on
+- crash-command-once: a command cut off by a crashed server is killed before the run resumes, so its rerun is the only copy
 - crash-claude: a Claude subagent cut off by a crashed server ends interrupted, and nothing runs it on its own
 
 ## Gotchas

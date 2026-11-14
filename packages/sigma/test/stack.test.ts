@@ -1190,6 +1190,61 @@ test("crash-call: a call cut off by a crashed server is recorded as interrupted 
   client.close()
 }, 30_000)
 
+/** Whether a process is alive and not a zombie waiting to be reaped. */
+const running = (pid: number) => {
+  const state = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)])
+    .stdout.toString()
+    .trim()
+  return state !== "" && !state.startsWith("Z")
+}
+
+/** The output of the bash call running in the view, once it has printed a whole line. */
+const runningOutput = (view: View) =>
+  ((view.docs["pi.live"] as { tools?: Array<{ output?: string }> } | undefined)?.tools ?? []).find((slot) =>
+    slot.output?.endsWith("\n"),
+  )?.output
+
+test("crash-command-once: a command cut off by a crashed server is killed before the run resumes, so its rerun is the only copy", async () => {
+  const sigmaHome = home()
+  const release = join(sigmaHome.dir, "release.fifo")
+  expect(Bun.spawnSync(["mkfifo", release]).exitCode).toBe(0)
+  // Opened at the end, so whatever copy still waits exits with the test.
+  await using _released = { [Symbol.asyncDispose]: async () => closeSync(openSync(release, "r+")) }
+  // Each copy prints its pid, then waits; the script calls it again after the restart, as a model would. The test
+  // learns the pid from the call's live output, which the server commits only once it has the command in hand.
+  const call = { tool: { name: "bash", input: { command: `echo $$; cat ${release}` } } }
+  const first = await serving(await scriptEnv(sigmaHome, [call]))
+  let client = await RawClient.connect(sigmaHome.socket)
+  const conversation = (
+    await client.call("conversation/start", { author: person("ada"), cwd: sigmaHome.dir, approvals: "auto" })
+  ).result.conversation as string
+  const cutOff = watchView(client, conversation)
+  await submit(client, conversation, "go")
+  await cutOff.until((watch) => runningOutput(watch.view()) !== undefined, 10_000)
+  const before = Number(runningOutput(cutOff.view()))
+  first.kill("SIGKILL")
+  await first.exited
+  client.close()
+  expect(running(before)).toBe(true)
+
+  await serving(await scriptEnv(sigmaHome, [call, { text: "ran it once" }]))
+  client = await RawClient.connect(sigmaHome.socket)
+  const view = watchView(client, conversation)
+  // The view opens on the live output the crash left, so the rerun is the call that prints another pid.
+  const rerun = (watch: ViewWatch) => Number(runningOutput(watch.view()) ?? before)
+  await view.until((watch) => rerun(watch) !== before, 10_000)
+  const after = rerun(view)
+  expect(running(before)).toBe(false)
+  closeSync(openSync(release, "w"))
+  await view.until(settled(1), 20_000)
+  expect(toolResults(view.seen())).toEqual([
+    { text: expect.stringContaining("Tool bash was interrupted and may have partially run"), isError: true },
+    { text: `${after}\n`, isError: false },
+  ])
+  expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: ran it once", "run_end: answered"])
+  client.close()
+}, 30_000)
+
 test("crash-claude: a Claude subagent cut off by a crashed server ends interrupted, and nothing runs it on its own", async () => {
   using claude = new FakeClaude("subagent_working")
   const sigmaHome = home()
