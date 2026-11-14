@@ -70,7 +70,7 @@ Preconditions: a fresh run for each group, `drive.ts r down` after.
 
 Needs a ChatGPT sign-in kept for verification, as SKILL.md's
 [Real accounts](../SKILL.md#real-accounts) says. Start with
-`drive.ts r up --openai-auth <that file>`, `drive.ts r serve`, and check that
+`drive.ts r up --openai-kept`, `drive.ts r serve`, and check that
 `drive.ts r rpc providers/list '{}'` lists `openai` as `"status": "ready"`;
 otherwise stop and report what it shows.
 

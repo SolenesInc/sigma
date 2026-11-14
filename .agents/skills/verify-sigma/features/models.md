@@ -198,7 +198,7 @@ shows `none running`, run `drive.ts r serve` again.
   `drive.ts r tui start --conversation <id>`,
   `drive.ts r tui wait READY` and `drive.ts r tui screen switched`. The
   session lands in your own Claude Code configuration.
-- **To ChatGPT.** In a new run, `drive.ts r up --openai-auth <your sign-in file>`.
+- **To ChatGPT.** In a new run, `drive.ts r up --openai-kept`.
   First check: `drive.ts r serve` and `drive.ts r rpc providers/list '{}'`
   list `openai` as `"status": "ready"` with your account; otherwise stop and
   report what it shows. Run the same first `exec` and question, switching to

@@ -539,7 +539,7 @@ real subagents ask. Follow the skill's [Real accounts](../SKILL.md#real-accounts
 and start each run with its first check. No step needs a person. Give every
 `tui wait` `--timeout 180000`, and save `evidence/` and the screens.
 
-ChatGPT, in a run made with `drive.ts r up --openai-auth <your saved sign-in>`:
+ChatGPT, in a run made with `drive.ts r up --openai-kept`:
 
 - **Spawn and answer.** `drive.ts r tui start --provider openai`, send
   `Start a subagent named scout that replies with exactly: found it. Wait for it, then tell me what it said.`,

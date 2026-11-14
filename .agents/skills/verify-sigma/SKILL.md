@@ -219,16 +219,21 @@ The fakes prove sigma's side of the wire. A feature's `With a real account`
 section holds what only the real ChatGPT or Claude Code can show; an agent
 holding the account drives it cold, like this.
 
-- **ChatGPT.** Use a sign-in kept for verification, never the production
-  `~/.sigma`'s: a refresh in a run rotates the token, and the copy it came
-  from would stop working. Make one once: `drive.ts keep up`,
+- **ChatGPT.** Use the sign-in this machine keeps for verification, at
+  `~/.local/state/sigma-verify/openai.json`, never the production `~/.sigma`'s:
+  a refresh in a run rotates the token, and the copy it came from would stop
+  working. Every checkout and agent on the machine shares it, so start each
+  run with `drive.ts r up --openai-kept`, and ask a person for a sign-in only
+  when `up` says none is kept or the first check below says it is signed out.
+  Then make it once: `drive.ts keep up`,
   `drive.ts keep tui start login openai --device-code`, and a person enters
   the code it shows at the address it names (a browser sign-in works only
-  when their browser runs on this machine), copy `/tmp/sigma-verify/keep/home/auth/openai.json`
-  to a file of your own with mode 0600, then `drive.ts keep down`. Start each
-  run with `drive.ts r up --openai-auth <that file>`; `down` writes the
-  sign-in back when a refresh changed it. Don't drive two runs on one sign-in
-  at once.
+  when their browser runs on this machine), then `drive.ts keep keep-openai`
+  and `drive.ts keep down`. One run holds the sign-in from its `up` to its
+  `down`, which writes a refreshed token back; another run's `up` meanwhile
+  fails and names the holder, so do its other steps and take the sign-in
+  after that `down`. `--openai-auth <file>` does the same with a sign-in of
+  your own.
 - **Claude.** `drive.ts r up --real-claude` runs the Claude Code bundled with
   the Claude Agent SDK, as a person's sigma does, not the `claude` on your
   PATH, whose version may differ. It uses your own login, and its sessions land

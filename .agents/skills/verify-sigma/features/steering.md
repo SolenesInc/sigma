@@ -223,7 +223,7 @@ SKILL.md's "Real accounts" first, and run the first check before any step.
   run's `sigma.run_end`, and a second run answers `BANANA`; `drive.ts r watch <id> --save real-claude-late-steer` shows two `sigma.run_end`s. Report what the screen and
   the watch show if they differ: a steer folded into the story, a steer that
   never runs, or a run that does not end.
-- **ChatGPT.** Start with `drive.ts r up --openai-auth <file>`. Run
+- **ChatGPT.** Start with `drive.ts r up --openai-kept`. Run
   `drive.ts r tui start --provider openai`, wait for `READY`, and type
   ``Run `echo one` and then `echo two` with the bash tool, one call at a time, then say what they printed.``.
   At the first `allow this call?` press `Tab`, type
