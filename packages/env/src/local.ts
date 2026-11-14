@@ -24,6 +24,7 @@ import { Effect } from "effect"
 import { StreamDecoder } from "./decode.ts"
 import { killProcessTree, resolveTimeoutMs, runProcess, shellConfig } from "./exec.ts"
 import type { ProcessRegistry } from "./registry.ts"
+import { searchFiles } from "./search.ts"
 import {
   type BinaryReader,
   type DirReader,
@@ -35,6 +36,8 @@ import {
   type FileKind,
   type FileWatcher,
   type LineScan,
+  type SearchQuery,
+  type SearchResult,
   type ShellExecOptions,
   type ShellExecResult,
   type TextLine,
@@ -555,6 +558,10 @@ export class LocalExecutionEnv implements ExecutionEnv {
       ),
       (watcher) => watcher.stopNow(),
     )
+  }
+
+  search(path: string, query: SearchQuery): Effect.Effect<SearchResult, FileError> {
+    return searchFiles(this, path, query)
   }
 
   canonicalPath(path: string): Effect.Effect<string, FileError> {

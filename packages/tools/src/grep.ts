@@ -1,14 +1,13 @@
 // `grep`: regular expression search of file contents through the call's environment.
 import { defineTool, type ToolExecutionApi, type ToolExecutionResult } from "@sigma/harness"
 import { bool, obj, opt, type Static, str } from "@sigma/schema"
-import type { ExecutionEnv, FileError } from "@sigma/env"
+import type { SearchQuery } from "@sigma/env"
+import { searchFiles } from "@sigma/env/search"
 import { Effect } from "effect"
-import { requireEnv, resolveToolPath } from "./environment.ts"
-import { filesBelow, globMatcher } from "./files.ts"
+import { normalizeToolPath, requireEnv } from "./environment.ts"
 
 const MATCH_LIMIT = 200
 const LINE_CHARS = 500
-const BINARY_PROBE = 8192
 
 const grepSchema = obj({
   pattern: str({ description: "The regular expression to search for." }),
@@ -33,71 +32,36 @@ export function createGrepTool() {
     replay: "safe",
     execute: (input: GrepToolInput, api: ToolExecutionApi) =>
       Effect.gen(function* () {
-        let regex: RegExp
         try {
-          regex = new RegExp(input.pattern, input.case_insensitive ? "i" : "")
+          new RegExp(input.pattern)
         } catch (error) {
           return text(`bad pattern: ${(error as Error).message}`, true)
         }
         const env = yield* requireEnv(api)
-        const root = yield* resolveToolPath(env, input.path ?? ".")
-        const files = yield* filesBelow(env, root)
-        if (files === undefined) return text(`${input.path} does not exist`, true)
-        const wanted = input.glob === undefined ? () => true : globMatcher(input.glob)
-        const shownRoot = input.path === undefined || input.path === "." ? "" : input.path.replace(/\/+$/, "")
-        const matches: string[] = []
-        for (const file of files) {
-          // A file named by `path` is matched as the model wrote it.
-          if (!wanted(file === "" ? (input.path ?? "") : file)) continue
-          const path = file === "" ? root : yield* env.joinPath([root, file])
-          if (!(yield* Effect.orElseSucceed(isText(env, path), () => false))) continue
-          const shown = file === "" ? (input.path ?? root) : shownRoot === "" ? file : `${shownRoot}/${file}`
-          yield* Effect.orElseSucceed(
-            searchLines(env, path, regex, (number, line) => {
-              matches.push(
-                `${shown}:${number}:${line.length > LINE_CHARS ? `${line.slice(0, LINE_CHARS)} [line cut]` : line}`,
-              )
-              return matches.length < MATCH_LIMIT
-            }),
-            () => undefined,
-          )
-          if (matches.length === MATCH_LIMIT) {
-            return text(`${matches.join("\n")}\n[stopped at ${MATCH_LIMIT} matches; narrow the pattern or path]`)
-          }
+        const path = normalizeToolPath(input.path ?? ".")
+        const query: SearchQuery = {
+          pattern: input.pattern,
+          maxMatches: MATCH_LIMIT,
+          maxLineChars: LINE_CHARS,
+          ...(input.case_insensitive ? { caseInsensitive: true } : {}),
+          ...(input.glob === undefined ? {} : { glob: input.glob }),
         }
-        return text(matches.length === 0 ? "No matches." : matches.join("\n"))
+        // An environment that searches where its files are answers in one call; otherwise grep walks through it.
+        const found = yield* Effect.catchIf(
+          env.search === undefined ? searchFiles(env, path, query) : env.search(path, query),
+          (error) => error.code === "not_found",
+          () => Effect.succeed(undefined),
+        )
+        if (found === undefined) return text(`${input.path} does not exist`, true)
+        const { matches, truncated } = found
+        const shownRoot = input.path === undefined || input.path === "." ? "" : input.path.replace(/\/+$/, "")
+        const lines = matches.map(({ path: file, line, text, cut }) => {
+          const shown = file === "" ? (input.path ?? path) : shownRoot === "" ? file : `${shownRoot}/${file}`
+          return `${shown}:${line}:${cut ? `${text} [line cut]` : text}`
+        })
+        if (truncated)
+          return text(`${lines.join("\n")}\n[stopped at ${MATCH_LIMIT} matches; narrow the pattern or path]`)
+        return text(lines.length === 0 ? "No matches." : lines.join("\n"))
       }),
   })
 }
-
-/** Whether the file's first bytes hold no NUL, read without loading the rest. */
-const isText = (env: ExecutionEnv, path: string) =>
-  Effect.acquireUseRelease(
-    env.openBinaryReader(path),
-    (reader) => Effect.map(reader.read(0, BINARY_PROBE), (head) => !head.includes(0)),
-    (reader) => reader.close(),
-  )
-
-/**
- * Hands each line of the file that matches `regex` to `found`, one line in memory at a time, until `found` returns
- * false.
- */
-const searchLines = (
-  env: ExecutionEnv,
-  path: string,
-  regex: RegExp,
-  found: (number: number, line: string) => boolean,
-): Effect.Effect<void, FileError> =>
-  Effect.acquireUseRelease(
-    env.openTextLineReader(path),
-    (reader) =>
-      Effect.gen(function* () {
-        for (let number = 1; ; number++) {
-          const line = yield* reader.readLine()
-          if (line === undefined) return
-          const text = line.text.endsWith("\r") ? line.text.slice(0, -1) : line.text
-          if (regex.test(text) && !found(number, text)) return
-        }
-      }),
-    (reader) => reader.close(),
-  )
