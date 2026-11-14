@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url"
 import { Effect } from "effect"
 import { StreamDecoder } from "./decode.ts"
 import { killProcessTree, resolveTimeoutMs, runProcess, shellConfig } from "./exec.ts"
+import type { ProcessRegistry } from "./registry.ts"
 import {
   type BinaryReader,
   type DirReader,
@@ -334,6 +335,8 @@ export interface LocalExecutionEnvOptions {
   readonly shellPath?: string
   readonly shellEnv?: NodeJS.ProcessEnv
   readonly watch?: LocalWatchOptions
+  /** Where each command's process group is recorded while it runs, so the next server can kill what a crash left. */
+  readonly processes?: ProcessRegistry
 }
 
 /** The machine sigma runs on. */
@@ -345,12 +348,14 @@ export class LocalExecutionEnv implements ExecutionEnv {
   readonly #shellEnv: NodeJS.ProcessEnv | undefined
   readonly #watchOptions: LocalWatchOptions
   readonly #activePids = new Set<number>()
+  readonly #processes: ProcessRegistry | undefined
 
   constructor(options: LocalExecutionEnvOptions) {
     this.cwd = options.cwd
     this.#shellPath = options.shellPath
     this.#shellEnv = options.shellEnv
     this.#watchOptions = options.watch ?? {}
+    this.#processes = options.processes
   }
 
   #resolve(path: string): string {
@@ -646,8 +651,14 @@ export class LocalExecutionEnv implements ExecutionEnv {
         timeoutMs,
         options,
         createSpillFile: () => env.createTempFile({ prefix: "pi-output-", suffix: ".log" }),
-        started: (pid) => env.#activePids.add(pid),
-        ended: (pid) => env.#activePids.delete(pid),
+        started: (pid) => {
+          env.#activePids.add(pid)
+          env.#processes?.record(pid)
+        },
+        ended: (pid) => {
+          env.#activePids.delete(pid)
+          env.#processes?.remove(pid)
+        },
       })
     })
   }
