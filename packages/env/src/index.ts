@@ -172,6 +172,34 @@ export interface FileListing {
   truncated: boolean
 }
 
+/** What `FileSystem.search` looks for: grep's regular expression over the text files below a path. */
+export interface SearchQuery {
+  /** A JavaScript regular expression. */
+  pattern: string
+  caseInsensitive?: boolean
+  /** Only files whose path below the searched directory matches; a pattern without `/` matches the file name alone. */
+  glob?: string
+  /** Most matching lines; the search stops at this many with `truncated`. */
+  maxMatches: number
+  /** Longest line text returned; a longer line is cut to it and marked `cut`. */
+  maxLineChars: number
+}
+
+export interface SearchMatch {
+  /** Relative to the searched directory with `/` separators; `""` when the searched path is the file. */
+  path: string
+  /** 1-based. */
+  line: number
+  text: string
+  cut?: boolean
+}
+
+export interface SearchResult {
+  /** In path order, then line order. */
+  matches: SearchMatch[]
+  truncated: boolean
+}
+
 /** Files of one namespace. Interrupting an operation stops it; an operation that started writing may have written. */
 export interface FileSystem {
   /** Equal ids see the same files at the same paths, whatever their `cwd`. */
@@ -200,6 +228,12 @@ export interface FileSystem {
   /** Optional: everything below a directory. `not_supported` tells callers to fall back to their own walk. */
   listFiles?(path: string, options?: ListFilesOptions): Effect.Effect<FileListing, FileError>
   openDirReader(path: string): Effect.Effect<DirReader, FileError>
+  /**
+   * Optional: the lines matching `query` in the text files below `path`, skipping binary files and, inside a git work
+   * tree, what git ignores, run where the files are. Absent, callers search through the other operations. A path that
+   * does not exist fails with `not_found`, a bad pattern with `invalid`.
+   */
+  search?(path: string, query: SearchQuery): Effect.Effect<SearchResult, FileError>
   /** When the returned watcher exists, coverage is established: a watch before a load cannot miss a change during it. */
   watch(targets: readonly WatchTarget[], onChange: (change: FileChange) => void): Effect.Effect<FileWatcher, FileError>
   canonicalPath(path: string): Effect.Effect<string, FileError>

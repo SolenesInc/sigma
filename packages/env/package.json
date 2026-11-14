@@ -7,6 +7,8 @@
     ".": "./src/index.ts",
     "./local": "./src/local.ts",
     "./registry": "./src/registry.ts",
+    "./remote": "./src/remote.ts",
+    "./search": "./src/search.ts",
     "./decode": "./src/decode.ts",
     "./line-scan": "./src/line-scan.ts",
     "./truncate": "./src/truncate.ts"
