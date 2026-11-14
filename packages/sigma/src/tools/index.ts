@@ -17,8 +17,11 @@ import {
 
 const asking = <T extends ToolRegistration>(tool: T): T => ({ ...tool, asks: true })
 
-/** Sigma's tools, where `read` prepares images with `images`, as attached ones are. */
-export const sigmaTools = (images: ImageProcessor) =>
+/**
+ * Sigma's tools, where `read` prepares images with `images`, as attached ones are, and `bash` stops a command after
+ * `bashTimeout` seconds unless its call says otherwise.
+ */
+export const sigmaTools = (images: ImageProcessor, bashTimeout?: number) =>
   defineExtension({
     name: "sigma-tools",
     tools: [
@@ -28,7 +31,12 @@ export const sigmaTools = (images: ImageProcessor) =>
       asking(createWriteTool()),
       asking(createEditTool()),
       asking(createApplyPatchTool()),
-      asking(createBashTool({ prepare: rootConversationEnv })),
+      asking(
+        createBashTool({
+          prepare: rootConversationEnv,
+          ...(bashTimeout === undefined ? {} : { defaultTimeout: bashTimeout }),
+        }),
+      ),
     ],
   })
 

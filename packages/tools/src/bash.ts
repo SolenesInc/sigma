@@ -9,11 +9,20 @@ import { requireEnv } from "./environment.ts"
 
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000
 
+/**
+ * How long a command may run when the call gives no `timeout`: a tripwire past every healthy command, so only a stuck
+ * one reaches it. Measured on 2026-11-14 over 172,222 completed Bash calls in 3,233 Claude Code transcripts on one Mac
+ * (`~/.claude/projects`, copied first): p99 is 182 s, p99.9 is 601 s, and the longest runs end at 600-623 s because
+ * Claude Code kills a command at its own 600 s cap (499 results say "timed out"), so 600 s is where the data stops, not
+ * the longest command. 1800 s is three times that. A legitimate command that needs longer passes `timeout`.
+ */
+const DEFAULT_TIMEOUT_SECONDS = 1800
+
 // Open objects, as the tools accepted extra arguments when their schemas were TypeBox's.
 const bashSchema = obj(
   {
     command: str({ description: "Bash command to execute" }),
-    timeout: opt(num({ description: "Timeout in seconds (optional, no default timeout)" })),
+    timeout: opt(num({ description: `Timeout in seconds (optional, default ${DEFAULT_TIMEOUT_SECONDS})` })),
   },
   { open: true },
 )
@@ -21,7 +30,7 @@ const bashSchema = obj(
 const powershellSchema = obj(
   {
     command: str({ description: "PowerShell command to execute" }),
-    timeout: opt(num({ description: "Timeout in seconds (optional, no default timeout)" })),
+    timeout: opt(num({ description: `Timeout in seconds (optional, default ${DEFAULT_TIMEOUT_SECONDS})` })),
   },
   { open: true },
 )
@@ -55,6 +64,8 @@ export interface BashToolOptions {
   /** Lines run before each command. */
   commandPrefix?: string
   prepare?: BashPrepare
+  /** Seconds a command may run when the call gives no `timeout`; default `DEFAULT_TIMEOUT_SECONDS`. */
+  defaultTimeout?: number
 }
 
 export interface PowerShellToolOptions extends BashToolOptions {
@@ -89,13 +100,14 @@ const prepareExecution = (command: string, options: BashToolOptions | undefined,
 /**
  * Runs each command form in turn until one starts, streaming output to `api.output()` within the retained window, and
  * turns the result into the tool's result: a spill diagnostic, an error result for a nonzero exit, and a failure for a
- * timeout. The structured output repeats the retained output with the exit code.
+ * timeout, which names the limit and, for the default, the `timeout` argument that raises it. The structured output repeats the retained output with the exit code.
  */
 const runCommand = (
   commands: readonly (string | readonly string[])[],
   execution: BashExecution,
-  timeout: number | undefined,
+  timeout: number,
   api: ToolExecutionApi,
+  explicit: boolean,
 ) =>
   Effect.gen(function* () {
     const env = yield* requireEnv(api)
@@ -106,7 +118,7 @@ const runCommand = (
           cwd: execution.cwd,
           env: execution.env,
           inheritEnv: execution.inheritEnv,
-          ...(timeout === undefined ? {} : { timeout }),
+          timeout,
           onOutput: (text, info) => api.output(text, info.skipped),
           spill: { afterBytes: DEFAULT_MAX_BYTES, afterLines: DEFAULT_MAX_LINES },
           // An environment may then omit output outside the retained tail and report the omission.
@@ -121,7 +133,7 @@ const runCommand = (
       const error = failure(exit)
       if (error === undefined) return yield* exit
       if (error.spillPath !== undefined) spilled(api, error.spillPath)
-      if (error.code === "timeout") return yield* Effect.fail(new Error(`Command timed out after ${timeout} seconds`))
+      if (error.code === "timeout") return yield* Effect.fail(new Error(timedOut(timeout, explicit)))
       if (error.code === "aborted") return yield* Effect.fail(new Error("Command aborted"))
       return yield* Effect.fail(error)
     }
@@ -141,6 +153,11 @@ const runCommand = (
       diagnostics: [{ severity: "error", code: "exit_code", message: `Command exited with code ${exitCode}` }],
     } satisfies ToolExecutionResult
   })
+
+/** A command that ran into its limit says which limit it was and how to raise it. */
+const timedOut = (timeout: number, explicit: boolean) =>
+  `Command timed out after ${timeout} seconds` +
+  (explicit ? "" : ". That is the default limit; pass the timeout argument, in seconds, to allow a command longer")
 
 const failure = (exit: Exit.Failure<unknown, ExecutionError>): ExecutionError | undefined => {
   const reason = exit.cause.reasons[0]
@@ -164,7 +181,7 @@ const spilled = (api: ToolExecutionApi, path: string) =>
 export function createBashTool(options?: BashToolOptions) {
   return defineTool({
     name: "bash",
-    description: `Execute a bash command in the current working directory. Returns combined stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+    description: `Execute a bash command in the current working directory. Returns combined stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds (default ${DEFAULT_TIMEOUT_SECONDS}).`,
     parameters: bashSchema,
     structuredOutputSchema: shellStructuredOutputSchema,
     outputLimits: { retain: "tail" },
@@ -172,7 +189,8 @@ export function createBashTool(options?: BashToolOptions) {
       Effect.gen(function* () {
         yield* validateTimeout(args.timeout)
         const execution = yield* prepareExecution(args.command, options, api)
-        return yield* runCommand([execution.command], execution, args.timeout, api)
+        const timeout = args.timeout ?? options?.defaultTimeout ?? DEFAULT_TIMEOUT_SECONDS
+        return yield* runCommand([execution.command], execution, timeout, api, args.timeout !== undefined)
       }),
   })
 }
@@ -189,7 +207,7 @@ export function createPowerShellTool(options?: PowerShellToolOptions) {
   const programs = options?.programs ?? ["pwsh", "powershell"]
   return defineTool({
     name: "powershell",
-    description: `Execute a PowerShell command in the current working directory. Returns combined stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+    description: `Execute a PowerShell command in the current working directory. Returns combined stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds (default ${DEFAULT_TIMEOUT_SECONDS}).`,
     parameters: powershellSchema,
     structuredOutputSchema: shellStructuredOutputSchema,
     outputLimits: { retain: "tail" },
@@ -199,7 +217,8 @@ export function createPowerShellTool(options?: PowerShellToolOptions) {
         const execution = yield* prepareExecution(args.command, options, api)
         const script = `${UTF8_OUTPUT}\n${execution.command}`
         const commands = programs.map((program) => [program, ...POWERSHELL_ARGS, script])
-        return yield* runCommand(commands, execution, args.timeout, api)
+        const timeout = args.timeout ?? options?.defaultTimeout ?? DEFAULT_TIMEOUT_SECONDS
+        return yield* runCommand(commands, execution, timeout, api, args.timeout !== undefined)
       }),
   })
 }

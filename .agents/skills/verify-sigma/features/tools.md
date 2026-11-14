@@ -39,6 +39,7 @@ Tools return separate channels for the model, programs and clients, are bounded 
 - `tool-read` [kernel] `read` with text and images (R245-305): Reads handle pictures
 - `tool-write` [kernel] `write` (R245-305): Create or replace a file
 - `tool-bash` [kernel] `bash` with streaming and timeouts (R245-305): Run commands
+- `bash-default-timeout` ends a `bash` command that runs past 30 minutes, or past its `timeout` argument in seconds, with an error naming the limit and the argument: a command that never ends does not hold a run for ever
 - `tool-bash-prefix` [kernel] `commandPrefix` and `prepare` on `bash` (`tools/bash.ts`): Set up shells or wrap commands per deployment
 - `tool-argument-validation` [kernel] Argument coercion and validation (R245-305): A bad call returns a readable error
 - `tool-crash-result` [kernel] A tool crash becomes an error result (§7.3): One broken tool doesn't kill the run
@@ -56,17 +57,36 @@ Tools return separate channels for the model, programs and clients, are bounded 
 
 ### People
 
-None.
+- In the TUI, a conversation's `bash` call that runs past its limit ends with the error. The model reads it and may retry with a larger `timeout`.
 
 ### Agents
 
-None. These are kernel use cases, with no client path of their own and no `drive.ts` steps.
+- Any conversation's `bash` call, from `sigma exec`, `conversation/submit` or a script's `tools.bash`. The `tool-*` kernel use cases have no client path of their own and no `drive.ts` steps.
+
+## Driving it with drive.ts
+
+Preconditions: `drive.ts r up --script <file>` whose first step is
+`{"tool": {"name": "bash", "input": {"command": "sleep 5", "timeout": 1}}}`,
+then `{"text": "done"}`.
+
+- **Explicit timeout** (`bash-default-timeout`). Run
+  `drive.ts r sigma exec --auto 'go'`: stdout `done` after about a second.
+  Take the id from `drive.ts r rpc conversation/list`, then
+  `drive.ts r watch <id> --save timeout`: the `pi.tool-result` for `bash` has
+  `"isError": true` and the text `Command timed out after 1 seconds`. The
+  `bash` tool's `description` in `pi.system` ends `(default 1800)`. The
+  30-minute default has no recipe: it is the same path with no `timeout`
+  argument, and a wire test shortens it (see Tests).
 
 ## Sources
 
 Feature ledger area L: spec §5.4, §7.3, §8.2, §8.4, §8.5; README Tools, Calling tools from tools, Who may call a tool, Tasks a restart abandons; examples 16-coding-tools, 25-coding-agent, 29-tool-override.
 
 ## Tests
+
+Wire, `packages/sigma/test/wire.test.ts`:
+
+- bash-default-timeout: a bash command past the default ends with an error naming the limit, its seconds and the timeout argument, and one past its own timeout says only the seconds
 
 `bun run coverage` lists every id here with its test, its mapped upstream rows or its owning child.
 
