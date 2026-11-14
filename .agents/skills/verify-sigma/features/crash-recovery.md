@@ -3,7 +3,8 @@
 A run cut off by a crashed server carries on when the server comes back. The
 client that was watching reconnects, starts a new server if none runs, and
 shows the answer the restarted run gives. A call that was running when the server died is
-recorded as interrupted and the model carries on. A run that crashes the
+recorded as interrupted and the model carries on; a local command the crash
+left running is killed before the run resumes. A run that crashes the
 server three times in a row ends instead of looping.
 
 ## Sub-features
@@ -78,6 +79,12 @@ Preconditions:
   calls it again, which shows `slept`, then `carried on`. `watch <id>` shows
   the interrupted `pi.tool-result` with `"isError": true` and one
   `sigma.run_end` with `"outcome": "answered"`.
+- **Command runs once.** As **Call cut off**, with the command
+  `echo $$ >> /tmp/sigma-verify/r/pids; sleep 8; echo slept`. Before
+  `kill-server`, `ps -o stat= -p <first pid in pids>` shows it running. Once
+  `pids` has a second line, the first pid is gone from `ps` and the second
+  runs; `ls /tmp/sigma-verify/r/home/processes` lists only the second, and
+  nothing once the run ends.
 - **Limit.** In a fresh `count` run, start the run as in the first step. Each
   killed attempt leaves its partial answer committed on screen, so for `k`
   from 1 to 3 wait until `k` screen lines show `three` (`k - 1` earlier
