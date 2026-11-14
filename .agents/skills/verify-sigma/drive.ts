@@ -715,6 +715,11 @@ const commands: Record<string, () => Promise<void> | void> = {
   "keep-openai": async () => {
     requireUp()
     if (!existsSync(openaiAuth)) fail(`run ${run} has no ChatGPT sign-in at ${openaiAuth}: sign in first`)
+    const source = existsSync(openaiAuthSource) ? readFileSync(openaiAuthSource, "utf8") : undefined
+    if (source !== undefined && source !== KEPT_OPENAI)
+      fail(
+        `run ${run} holds the sign-in ${source}, which its down writes back; copy that file to ${KEPT_OPENAI} after the down instead`,
+      )
     mkdirSync(join(KEPT_OPENAI, ".."), { recursive: true, mode: 0o700 })
     holdSignIn(KEPT_OPENAI)
     writeFileSync(KEPT_OPENAI, readFileSync(openaiAuth), { mode: 0o600 })
