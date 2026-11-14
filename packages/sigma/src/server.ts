@@ -3,6 +3,7 @@
 import { claudeRunTasks, makeClaudeProcesses } from "@sigma/claude"
 import { CodemodeSandbox } from "@sigma/codemode/sandbox"
 import { LocalExecutionEnv } from "@sigma/env/local"
+import { ProcessRegistry } from "@sigma/env/registry"
 import {
   answerApproval,
   AgentDoc,
@@ -196,12 +197,16 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
                 }),
               )
             : Effect.void
+        // A crash leaves the local commands it ran running. They are killed before any run resumes, which would start them
+        // again beside the old copies (D15). The home's lock is held, so none of them is another server's.
+        const commands = new ProcessRegistry(home.processes)
+        if (!readOnly) commands.sweep()
         const harness = yield* Effect.acquireRelease(
           Effect.flatMap(openSqliteStorage(home.database), (storage) =>
             openHarness(storage, {
               registry,
               models,
-              env: ({ cwd }) => Effect.succeed(new LocalExecutionEnv({ cwd: cwd ?? home.dir })),
+              env: ({ cwd }) => Effect.succeed(new LocalExecutionEnv({ cwd: cwd ?? home.dir, processes: commands })),
               runEnded,
               inputWithdrawn,
               viewDocs: [StatusLinesDoc],

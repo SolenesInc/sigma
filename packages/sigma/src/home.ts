@@ -14,6 +14,8 @@ export interface Home {
   readonly nextLock: string
   readonly log: string
   readonly extensions: string
+  /** The process groups of the local commands running now, one file each; see `ProcessRegistry`. */
+  readonly processes: string
 }
 
 export const homeAt = (dir: string): Home => ({
@@ -24,6 +26,7 @@ export const homeAt = (dir: string): Home => ({
   nextLock: join(dir, "sigma.next.lock"),
   log: join(dir, "sigma.log"),
   extensions: join(dir, "extensions"),
+  processes: join(dir, "processes"),
 })
 
 export const defaultHome = () => homeAt(resolve(process.env.SIGMA_HOME ?? join(homedir(), ".sigma")))
