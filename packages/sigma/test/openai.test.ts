@@ -356,6 +356,40 @@ test("cache-turns: each ChatGPT request of a conversation, within a run and acro
   expectCacheKept(second!, third!)
 })
 
+test("cache-instructions-change, section-deltas: instructions changed between two prompts reach ChatGPT after the history, and the request keeps the instructions it started with", async () => {
+  await using fake = new FakeOpenAi()
+  fake.play("text_answer")
+  fake.play("text_answer")
+  await using session = await conversationWith(fake, { instructions: "Be brief." })
+  await session.submit("hello")
+  await session.view.until(settled(1))
+  await session.client.call("conversation/configure", {
+    conversation: session.conversation,
+    author: person("bo"),
+    instructions: "Answer in French.",
+  })
+  await session.submit("again")
+  await session.view.until(settled(2))
+  const [first, second] = sentBodies(fake)
+  expect(sentBodies(fake)).toHaveLength(2)
+  expect(first!.instructions).toEndWith("<instructions>\nBe brief.\n</instructions>")
+  expectCacheKept(first!, second!)
+  expect(second!.input.slice(first!.input.length)).toEqual([
+    { type: "message", role: "assistant", content: [{ type: "output_text", text: "Hello there" }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "again" }] },
+    {
+      type: "message",
+      role: "developer",
+      content: [
+        {
+          type: "input_text",
+          text: 'Updated system prompt section "instructions":\n\n<instructions>\nAnswer in French.\n</instructions>',
+        },
+      ],
+    },
+  ])
+})
+
 test("cache-fresh-subagent: a subagent started without its parent's history keeps its own requests' front, under a cache key of its own", async () => {
   await using fake = new FakeOpenAi()
   fake.play("fresh_subagent_tool_call")
@@ -480,12 +514,16 @@ test("openai-instructions, agents-md, skills-found, skills-nearest, skills-front
     ].join("\n\n"),
   )
 
-  // What the folders hold is read again for each request.
+  // What the folders hold is read again for each request, and a change reaches ChatGPT after the history.
   rmSync(join(app, ".claude"), { recursive: true })
   write(join(home, "repo", "AGENTS.md"), "New repo rules.")
   await session.submit("again")
   await session.view.until(settled(2))
-  const again = instructionsOf(fake, 1)
+  expect(instructionsOf(fake, 1)).toBe(instructionsOf(fake, 0))
+  const update = (JSON.parse(fake.responses()[1]!.body).input as Array<any>).at(-1)
+  expect(update.role).toBe("developer")
+  const again: string = update.content[0].text
+  expect(again).toStartWith('Updated system prompt section "workspace":\n\n')
   expect(again).toContain("\n\nNew repo rules.\n")
   expect(again).not.toContain("\n\nRepo rules.\n")
   expect(again).toEndWith(
@@ -528,18 +566,24 @@ test("skills-found: a conversation outside any repository is told only its own f
   expect(instructions).toContain("Home rules.")
 })
 
-test("start-instructions: ChatGPT is told the instructions its conversation started with, after the AGENTS.md files, and a subagent is not", async () => {
+test("start-instructions: ChatGPT is told the instructions its conversation started with, after the AGENTS.md files, and a subagent's replace them", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("subagent")
   await using session = await conversationWith(fake, { cwd: project, instructions: "Report with attn when done." })
   await session.submit("Ask a scout where the gnome lives.")
   await session.view.until(settled(1), 20_000)
   expectRequests(fake, expected)
-  const [parent, child] = [instructionsOf(fake, 0), instructionsOf(fake, 1)]
+  const parent = instructionsOf(fake, 0)
   expect(parent).toEndWith("\n\n<instructions>\nReport with attn when done.\n</instructions>")
   expect(parent.indexOf("Report with attn when done.")).toBeGreaterThan(parent.indexOf("App override rules."))
-  expect(child).toContain("App override rules.")
-  expect(child).not.toContain("Report with attn when done.")
+  // A forked subagent starts from its parent's instructions, and its own arrive after the inherited history.
+  expect(instructionsOf(fake, 1)).toBe(parent)
+  const update = (JSON.parse(fake.responses()[1]!.body).input as Array<any>).at(-1)
+  expect(update.role).toBe("developer")
+  expect(update.content[0].text).toStartWith(
+    'Updated system prompt section "instructions":\n\n<instructions>\nYour task name is /root/scout.',
+  )
+  expect(update.content[0].text).not.toContain("Report with attn when done.")
 })
 
 test("subagent-types: an agent of a type gets its instructions and its model, and fork_turns none leaves the parent's history out", async () => {

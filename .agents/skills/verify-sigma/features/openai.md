@@ -231,7 +231,12 @@ Package, `packages/models/test/chatgpt.test.ts`:
   files and the skill list, read again before each request), then the
   instructions the conversation started with, wrapped in `<instructions>`
   tags. Both are committed as a `pi.system` entry, so every client sees what
-  ChatGPT was told, and a changed `AGENTS.md` shows as a new one. A skill a
+  ChatGPT was told, and a changed `AGENTS.md` shows as a new one. Only the
+  conversation's first `pi.system` entry (or the first after a compaction)
+  is `instructions`: each later one is sent where it stands in the
+  transcript, as a `developer` message saying which section changed, so the
+  front of the request stays the same (`cache-instructions-change` in
+  [Prompt cache](./prompt-cache.md)). A skill a
   message names is attached: its `SKILL.md`, read when the message is placed,
   follows the message's text in `<skill>` tags, and the `sigma.user` entry's
   data holds `skills`.

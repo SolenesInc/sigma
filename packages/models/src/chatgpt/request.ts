@@ -1,11 +1,14 @@
-// The body of a request to ChatGPT's `/codex/responses`, from a transcript. Every system message is folded into
-// `instructions`, after the provider's own; the tools are the transcript's current ones; nothing is stored on
+// The body of a request to ChatGPT's `/codex/responses`, from a transcript. The leading system message is
+// `instructions`, after the provider's own, and each later one is a `developer` message at its place, so a
+// conversation's requests only grow at their end and ChatGPT reads their front from its prompt cache. pi-ai's
+// `openai-codex-responses` sends them the same way. The tools are the transcript's current ones; nothing is stored on
 // ChatGPT's side (`store: false`), so each request carries the whole input.
 //
 // Assistant messages that failed or were stopped are left out, and a call left without a result gets one saying so,
 // as pi-ai's `transformMessages` does (`src/api/transform-messages.ts` at 7d073328e): the API refuses a call without
 // its output, and a cut-off response is not something the model said.
-import { getCurrentSystemPrompt, getCurrentTools } from "../transcript.ts"
+import { getSystemMessageText, renderSystemMessageUpdate } from "../text.ts"
+import { getCurrentTools, getInitialSystemMessage } from "../transcript.ts"
 import type {
   AssistantMessage,
   ImageContent,
@@ -68,7 +71,10 @@ const inputContent = (content: string | ReadonlyArray<TextContent | ImageContent
 const resultOutput = (content: ReadonlyArray<TextContent | ImageContent>) =>
   content.every((part) => part.type === "text") ? content.map((part) => part.text).join("\n") : inputContent(content)
 
-/** The messages as sent: failed responses left out, and every call answered before anything follows it. */
+/**
+ * The messages as sent: failed responses left out, and every call answered before anything follows it, a system
+ * message included, so nothing sits between a call and its output.
+ */
 const answered = (messages: ReadonlyArray<Message>): ReadonlyArray<Message> => {
   const result: Array<Message> = []
   let open: Array<ToolCall> = []
@@ -89,7 +95,6 @@ const answered = (messages: ReadonlyArray<Message>): ReadonlyArray<Message> => {
     answeredIds.clear()
   }
   for (const message of messages) {
-    if (message.role === "system") continue
     if (message.role === "toolResult") {
       answeredIds.add(message.toolCallId)
       result.push(message)
@@ -173,7 +178,9 @@ const tryGrammar = (tool: Tool) => {
 export function requestBody(request: Request, context: TranscriptContext): RequestBody {
   const tools = getCurrentTools(context.messages)
   const calls = grammarCalls(context.messages)
-  const input = answered(context.messages).flatMap((message): Array<unknown> => {
+  const leading = getInitialSystemMessage(context.messages)
+  const later = leading === undefined ? context.messages : context.messages.slice(1)
+  const input = answered(later).flatMap((message): Array<unknown> => {
     if (message.role === "user") {
       const content = inputContent(message.content)
       return content.length === 0 ? [] : [{ type: "message", role: "user", content }]
@@ -188,9 +195,11 @@ export function requestBody(request: Request, context: TranscriptContext): Reque
         },
       ]
     }
-    return []
+    const text = renderSystemMessageUpdate(message)
+    // A change that only adds or removes tools says nothing here: the request's `tools` carries it.
+    return text.length === 0 ? [] : [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }]
   })
-  const instructions = [request.instructions, getCurrentSystemPrompt(context.messages)]
+  const instructions = [request.instructions, leading === undefined ? "" : getSystemMessageText(leading)]
     .filter((text) => text.length > 0)
     .join("\n\n")
   return {
