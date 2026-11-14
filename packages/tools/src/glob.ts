@@ -3,7 +3,7 @@ import { defineTool, type ToolExecutionApi, type ToolExecutionResult } from "@si
 import { obj, opt, type Static, str } from "@sigma/schema"
 import { Effect } from "effect"
 import { requireEnv, resolveToolPath } from "./environment.ts"
-import { filesBelow, globMatcher } from "./files.ts"
+import { filesBelow, globMatcher } from "@sigma/env/search"
 
 const GLOB_LIMIT = 200
 

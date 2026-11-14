@@ -12,7 +12,8 @@ export const requireEnv = (api: Pick<ToolExecutionApi, "env">): Effect.Effect<Ex
 const UNICODE_SPACES = /[  -   　]/g
 const NARROW_NO_BREAK_SPACE = " "
 
-function normalizeToolPath(path: string): string {
+/** A path as a model wrote it, with unusual spaces made spaces and a leading `@` dropped. */
+export function normalizeToolPath(path: string): string {
   const normalized = path.replace(UNICODE_SPACES, " ")
   return normalized.startsWith("@") ? normalized.slice(1) : normalized
 }
