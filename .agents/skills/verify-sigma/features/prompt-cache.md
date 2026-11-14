@@ -18,6 +18,11 @@ with what the last one had. A person sees the result in `/usage`, whose
 - `cache-turns` sends each ChatGPT request of a conversation, within a run and
   across runs, with the same `instructions`, `tools` and `prompt_cache_key`
   as the one before, and an `input` that starts with all of the one before's.
+- `cache-instructions-change` keeps a ChatGPT conversation's `instructions`
+  as they were in its first request after a section changes (its
+  instructions through `conversation/configure`, an `AGENTS.md` file, a
+  skill), and sends the change after the history as a `developer` message,
+  `Updated system prompt section "<name>":` and the section's new text.
 - `cache-fresh-subagent` does the same among the requests of a subagent
   started with `fork_turns: "none"`, under a `prompt_cache_key` of its own.
 - `cache-shown` shows cached input per model in `/usage`, as
@@ -81,6 +86,22 @@ Preconditions:
 
   Requests 2 and 3 read `true` for all four. Request 3 is marked `differs`
   because `text_answer` was recorded as a conversation's first request.
+
+- **Instructions changed** (`cache-instructions-change`, `section-deltas`).
+  `drive.ts r up --fake-openai text_answer,text_answer`,
+  `drive.ts r sigma exec --provider openai --instructions 'Be brief.' hello`:
+  `Hello there`. Take the id, then
+  `drive.ts r rpc conversation/configure '{"conversation": "<id>", "author": {"id": "ada", "name": "ada"}, "instructions": "Answer in French."}'`
+  and `drive.ts r sigma exec --conversation <id> again`. Compare the two
+  requests, and show what the second added:
+
+  ```sh
+  jq -s -c '[.[] | .body] as $b | {instructions: ($b[1].instructions == $b[0].instructions), front: ($b[1].input[0:($b[0].input|length)] == $b[0].input), added: [$b[1].input[($b[0].input|length):][] | {role, text: .content[0].text}]}' /tmp/sigma-verify/r/evidence/fake-openai.ndjson
+  ```
+
+  `instructions` and `front` read `true`, and `added` ends with
+  `{"role": "developer", "text": "Updated system prompt section \"instructions\":\n\n<instructions>\nAnswer in French.\n</instructions>"}`
+  after the answer and `again`.
 
 - **A fresh subagent** (`cache-fresh-subagent`). `drive.ts r up --fake-openai fresh_subagent_tool_call`,
   `drive.ts r sigma exec --provider openai --auto 'Ask a scout what echo prints.'`:
@@ -147,6 +168,7 @@ Preconditions:
 Provider, `packages/sigma/test/openai.test.ts`:
 
 - cache-turns: each ChatGPT request of a conversation, within a run and across runs, repeats the one before it and adds to its end
+- cache-instructions-change, section-deltas: instructions changed between two prompts reach ChatGPT after the history, and the request keeps the instructions it started with
 - cache-fresh-subagent: a subagent started without its parent's history keeps its own requests' front, under a cache key of its own
 
 Provider, `packages/sigma/test/claude.test.ts`:
@@ -166,6 +188,10 @@ Screen, `packages/sigma/test/screen.test.ts`:
 
 ## Gotchas
 
+- After an instruction change on ChatGPT, the model reads both the old
+  section, in `instructions`, and the update after the history; the update
+  says it replaces the section by name. A compaction starts a new baseline
+  whose `instructions` hold only the current text.
 - The recordings report no usage, so the fakes prove only what sigma sends.
   Only a real account shows the cache being read.
 - On ChatGPT, `input` is the part not read from the cache: a hit shows as a
@@ -216,6 +242,17 @@ ChatGPT, in a run made with `drive.ts r up --openai-auth <your saved sign-in>`:
   2026-11-14: `noted` with `input` 12,042 and `cacheRead` 0, then
   `amber-412-cedar` with `input` 162 and `cacheRead` 11,904.
   `drive.ts r rpc usage/get '{"conversation": "<id>"}'` sums both.
+- **Instructions changed** (`cache-instructions-change`). In a new
+  conversation, `drive.ts r sigma exec --provider openai --model gpt-6-luna --instructions 'Be brief.' "$(cat /tmp/sigma-verify/long.txt)"`:
+  `noted`. Take the id, then
+  `drive.ts r rpc conversation/configure '{"conversation": "<id>", "author": {"id": "ada", "name": "ada"}, "instructions": "Answer in French."}'`
+  and the same `watch --submit` and `jq` as **Turns**, saved as `second`:
+  the second answer's `cacheRead` is still nearly all of the first's
+  `input`, and the `pi.system` entry before it holds only the
+  `instructions` section. Measured on 2026-11-14: `noted` with `input`
+  12,065 and `cacheRead` 0, then `amber-412-cedar` with `input` 206 and
+  `cacheRead` 11,904. Before sigma sent the change in place, a change to
+  `instructions` read nothing from the cache (F2 in seed `s-4yhmqe`).
 
 Claude, in a run made with `drive.ts r up --real-claude`; give each `rpc` and
 `watch` `--timeout 120000`:
