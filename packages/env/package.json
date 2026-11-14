@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./local": "./src/local.ts",
+    "./registry": "./src/registry.ts",
     "./decode": "./src/decode.ts",
     "./line-scan": "./src/line-scan.ts",
     "./truncate": "./src/truncate.ts"

@@ -13,6 +13,8 @@ export interface Home {
   /** Held by `sigma serve --restart` while it replaces the running server; see `replaceServer`. */
   readonly nextLock: string
   readonly log: string
+  /** The process groups of the local commands running now, one file each; see `ProcessRegistry`. */
+  readonly processes: string
 }
 
 export const homeAt = (dir: string): Home => ({
@@ -22,6 +24,7 @@ export const homeAt = (dir: string): Home => ({
   lock: join(dir, "sigma.lock"),
   nextLock: join(dir, "sigma.next.lock"),
   log: join(dir, "sigma.log"),
+  processes: join(dir, "processes"),
 })
 
 export const defaultHome = () => homeAt(resolve(process.env.SIGMA_HOME ?? join(homedir(), ".sigma")))
