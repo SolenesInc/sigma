@@ -10,13 +10,15 @@ import { signIn } from "../../../packages/sigma/test/support/openai.ts"
 const REPO = resolve(import.meta.dir, "../../..")
 const MAIN = join(REPO, "packages/sigma/src/main.ts")
 const ROOT = "/tmp/sigma-verify"
+/** The ChatGPT sign-in this machine keeps for verification, shared by every checkout and outside /tmp so a reboot keeps it. */
+const KEPT_OPENAI = join(homedir(), ".local/state/sigma-verify/openai.json")
 const COLS = "100"
 const ROWS = "30"
 
 const usage = `usage: drive.ts <run> <command> [args]
 
   up [--script steps.json] [--fake-openai fixture,...] [--openai-refreshes N] [--openai-signed-out]
-     [--fake-claude fixture | --real-claude] [--openai-auth file]
+     [--fake-claude fixture | --real-claude] [--openai-kept | --openai-auth file]
                                    make the run's home and evidence folders. --fake-openai serves a
                                    fake ChatGPT replaying fixtures/openai/<fixture>.ndjson in order,
                                    signed in unless --openai-signed-out, granting N token refreshes.
@@ -24,7 +26,10 @@ const usage = `usage: drive.ts <run> <command> [args]
                                    default models (signed in, no turns); --real-claude runs the
                                    SDK's bundled Claude Code with your own login and without your
                                    ~/.claude/settings.json. --openai-auth copies a real
-                                   ChatGPT sign-in in, and down writes it back if a refresh rotated it.
+                                   ChatGPT sign-in in, and down writes it back if a refresh rotated it;
+                                   one run holds a sign-in at a time. --openai-kept is
+                                   --openai-auth ${KEPT_OPENAI}.
+  keep-openai                      keep the run's ChatGPT sign-in as the machine's, for --openai-kept
   doctor                           is this run's instance worth driving?
   sigma <args...>                  run the sigma CLI against the run's home
   serve [sigma serve args...]      start the run's server in the foreground of a tmux window,
@@ -159,6 +164,34 @@ const switchOn = (name: string) => {
   const at = args.indexOf(name)
   if (at >= 0) args.splice(at, 1)
   return at >= 0
+}
+
+// A refresh rotates a ChatGPT sign-in's token, so two runs on one sign-in would sign each other out.
+// The run that copies a sign-in in holds `<sign-in>.lease` until its down; a lease whose run is gone is stale.
+const leaseOf = (signIn: string) => `${signIn}.lease`
+
+const holdSignIn = (signIn: string) => {
+  const lease = leaseOf(signIn)
+  for (;;) {
+    try {
+      writeFileSync(lease, dir, { flag: "wx", mode: 0o600 })
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+    }
+    const holder = readFileSync(lease, "utf8")
+    if (holder === dir) return
+    if (existsSync(join(holder, "home")))
+      fail(
+        `the ChatGPT sign-in ${signIn} is held by the run at ${holder} until its down; a second run on it would rotate its token from under the first. Run this step after that run's down.`,
+      )
+    rmSync(lease, { force: true })
+  }
+}
+
+const releaseSignIn = (signIn: string) => {
+  const lease = leaseOf(signIn)
+  if (existsSync(lease) && readFileSync(lease, "utf8") === dir) rmSync(lease, { force: true })
 }
 
 const requireUp = () => {
@@ -452,7 +485,7 @@ const commands: Record<string, () => Promise<void> | void> = {
     const openai = flag("--fake-openai")?.split(",")
     const refreshes = flag("--openai-refreshes") ?? "0"
     const signedOut = switchOn("--openai-signed-out")
-    const auth = flag("--openai-auth")
+    const auth = switchOn("--openai-kept") ? KEPT_OPENAI : flag("--openai-auth")
     const real = switchOn("--real-claude")
     const fakeClaude = flag("--fake-claude")
     if (real && fakeClaude) fail("--real-claude and --fake-claude exclude each other")
@@ -476,6 +509,13 @@ const commands: Record<string, () => Promise<void> | void> = {
     if (auth) {
       if (resolve(auth).startsWith(resolve(homedir(), ".sigma") + "/"))
         fail("copy a sign-in kept for verification, not the production ~/.sigma's: a refresh here would rotate it")
+      if (!existsSync(auth))
+        fail(
+          auth === KEPT_OPENAI
+            ? `no ChatGPT sign-in is kept on this machine (${KEPT_OPENAI}); sign one in once, as the skill's Real accounts says, then drive.ts <run> keep-openai`
+            : `no ChatGPT sign-in at ${auth}`,
+        )
+      holdSignIn(resolve(auth))
       mkdirSync(join(home, "auth"), { recursive: true, mode: 0o700 })
       writeFileSync(openaiAuth, readFileSync(auth), { mode: 0o600 })
       writeFileSync(openaiAuthSource, resolve(auth))
@@ -672,6 +712,22 @@ const commands: Record<string, () => Promise<void> | void> = {
     }
   },
 
+  "keep-openai": async () => {
+    requireUp()
+    if (!existsSync(openaiAuth)) fail(`run ${run} has no ChatGPT sign-in at ${openaiAuth}: sign in first`)
+    const source = existsSync(openaiAuthSource) ? readFileSync(openaiAuthSource, "utf8") : undefined
+    if (source !== undefined && source !== KEPT_OPENAI)
+      fail(
+        `run ${run} holds the sign-in ${source}, which its down writes back; copy that file to ${KEPT_OPENAI} after the down instead`,
+      )
+    mkdirSync(join(KEPT_OPENAI, ".."), { recursive: true, mode: 0o700 })
+    holdSignIn(KEPT_OPENAI)
+    writeFileSync(KEPT_OPENAI, readFileSync(openaiAuth), { mode: 0o600 })
+    writeFileSync(openaiAuthSource, KEPT_OPENAI)
+    record(`kept the ChatGPT sign-in as ${KEPT_OPENAI}`)
+    console.log(`kept ${KEPT_OPENAI}; this run holds it until its down, and later runs take it with up --openai-kept`)
+  },
+
   down: async () => {
     if (!existsSync(dir)) return console.log(`run ${run} has nothing to stop`)
     const tui = tuiPid()
@@ -692,6 +748,7 @@ const commands: Record<string, () => Promise<void> | void> = {
         record(`wrote the refreshed ChatGPT sign-in back to ${source}`)
       }
     }
+    if (existsSync(openaiAuthSource)) releaseSignIn(readFileSync(openaiAuthSource, "utf8"))
     rmSync(openaiAuthSource, { force: true })
     rmSync(home, { recursive: true, force: true })
     rmSync(scriptPath, { force: true })

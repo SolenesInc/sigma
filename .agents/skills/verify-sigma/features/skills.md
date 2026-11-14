@@ -209,7 +209,7 @@ finds its own skills. Follow the skill's
 [Real accounts](../SKILL.md#real-accounts), start each run with its first
 check, and save the `.ndjson` files and `steps.log`. No step needs a person.
 
-ChatGPT, in a run made with `drive.ts r up --openai-auth <your saved sign-in>`:
+ChatGPT, in a run made with `drive.ts r up --openai-kept`:
 make the project and the `AGENTS.md` files as in the faked steps above, run
 `drive.ts r serve`, start a conversation with
 `drive.ts r rpc conversation/start '{"author": {"id": "ada", "name": "ada"}, "cwd": "/tmp/sigma-verify/r/project/app", "provider": "openai"}'`,

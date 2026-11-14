@@ -205,7 +205,7 @@ Package, `packages/models/test/chatgpt.test.ts`:
 - The server reads the sign-in file on every request, so a changed file
   needs no server restart.
 - A refresh may rotate the refresh token, leaving the copy the sign-in came
-  from stale. `down` writes a refreshed `--openai-auth` sign-in back to its
+  from stale. `down` writes a refreshed `--openai-kept` or `--openai-auth` sign-in back to its
   file; a sign-in copied in by hand must be copied back by hand.
 - A refresh turned down keeps the provider listed signed out, even after the
   file changes, until the next sign-in, a ChatGPT request that succeeds, or a
@@ -246,7 +246,7 @@ Package, `packages/models/test/chatgpt.test.ts`:
 Needs a ChatGPT sign-in kept for verification, made once as SKILL.md's
 [Real accounts](../SKILL.md#real-accounts) says (making it needs a person at
 a browser). Run every step in one run started with
-`drive.ts r up --openai-auth <that file>`, and run **Refresh** last, since it
+`drive.ts r up --openai-kept`, and run **Refresh** last, since it
 rotates the sign-in; `down` writes the rotated one back. First check:
 `drive.ts r serve` and `drive.ts r rpc providers/list '{}'` list `openai`
 as `"status": "ready"` with your account. Otherwise stop and report what it

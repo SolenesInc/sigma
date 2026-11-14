@@ -249,7 +249,7 @@ needs a person. Write the long first prompt once:
 It is about 12,000 tokens (12,042 on gpt-6-luna), past the 1,024 a provider
 needs before it caches.
 
-ChatGPT, in a run made with `drive.ts r up --openai-auth <your saved sign-in>`:
+ChatGPT, in a run made with `drive.ts r up --openai-kept`:
 
 - **Turns.** `drive.ts r sigma exec --provider openai --model gpt-6-luna "$(cat /tmp/sigma-verify/long.txt)"`
   (any model `drive.ts r rpc models/list` lists for openai; the account may not

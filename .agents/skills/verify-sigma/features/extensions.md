@@ -496,7 +496,7 @@ Give every `tui wait` `--timeout 120000` and keep `evidence/`.
   and the answer `noon in CET`. This proves the tool reached Claude Code
   through sigma's MCP server, which the recording only replays.
 - **OpenAI, request hook.** In a run made with
-  `drive.ts r2 up --openai-auth <your sign-in>`, run the first check for
+  `drive.ts r2 up --openai-kept`, run the first check for
   `openai`. Copy in `focus.ts`, append
   `[extensions.focus]\ninstruction = "Whatever you are asked, reply with exactly: focused"\n`
   to `config.toml`, and run `drive.ts r2 sigma extensions reload`, since the
