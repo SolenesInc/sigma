@@ -2,8 +2,8 @@
 
 This is pi-durable's specification (`packages/durable/docs/spec.md` in earendil-works/pi at commit `7d073328e`,
 MIT, see `../LICENSE`), the behavioral contract of sigma's kernel. Below this list it is unchanged. Where the list
-and the text disagree, the list wins. Each amendment names the decision of the "Rebuild sigma on a durable kernel
-written on Effect" plan that made it.
+and the text disagree, the list wins. Each amendment names the decision that made it, of the "Rebuild sigma on a
+durable kernel written on Effect" plan unless it names another.
 
 - **Deferred commits are gone (D5).** Section 4.1, invariants 2, 3 and 7, and the deferred parts of sections 4, 7.3,
   8.2 and 8.3 do not apply, nor does `persistWithinMs` (Session option and `settings.progress`). Every commit is
@@ -28,6 +28,12 @@ written on Effect" plan that made it.
   replaces the request and waits for a new answer. A denied call settles with an error result, diagnostic code
   `denied`, without running. The commit that settles the tool task, however it ends, removes its request. The
   conversation view (section 9.3) mounts `sigma.approvals`.
+- **A fork keeps its parent's provider session (D3 of "Sigma keeps the ChatGPT prompt cache across forks and
+  instruction changes").** `pi.provider` forks `current` (section 2.2's table), so a forked conversation, task-owned
+  or not, keeps its parent's UUID instead of receiving its own, and the creation hook (section 2.2) creates
+  `pi.provider` only where the conversation has none. A fork's requests then carry its parent's `options.sessionId`,
+  which ChatGPT uses as the prompt cache key, and its first request reads the history it shares with its parent from
+  the cache. A new conversation, task-owned or raw-created, still receives a fresh UUID.
 
 ---
 

@@ -500,7 +500,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 
 Provider, `packages/sigma/test/openai.test.ts`:
 
-- subagent-fork: a spawned agent's requests carry its own conversation, and its last answer reaches the parent
+- subagent-fork: a spawned agent's last answer reaches the parent
 - subagent-types: an agent of a type gets its instructions and its model, and fork_turns none leaves the parent's history out
 
 Provider, `packages/sigma/test/claude.test.ts`:

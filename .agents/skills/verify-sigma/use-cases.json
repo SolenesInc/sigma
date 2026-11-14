@@ -15,6 +15,13 @@
   "amended/harness-blocked.test.ts :: tasks that cannot run > tells the graph and the host when a migration fails": [
     "task-blocked"
   ],
+  "amended/harness-conversations.test.ts :: Harness agent > gives conversations created through Tx their documents: empty, an owner copy, or the fork's as-of copy": [
+    "agent-document"
+  ],
+  "amended/harness-conversations.test.ts :: Harness root and conversations > keeps root and conversation identity and state across reopen": [
+    "conversation-root",
+    "doc-provider"
+  ],
   "amended/harness-idle-scopes.test.ts :: kept context ranges > applies a longer retention to idle ranges at an unrelated commit": [
     "settings-context-retention"
   ],

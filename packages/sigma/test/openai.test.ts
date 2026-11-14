@@ -1,7 +1,7 @@
 // ChatGPT: a real server in process, driven as a raw JSON-RPC client over its
 // socket, with ChatGPT played by the fake OpenAI server replaying the recorded exchanges in `fixtures/openai`.
 import { expect, test } from "bun:test"
-import type { EntryRecord } from "@sigma/protocol"
+import { type EntryRecord, RUN_END_KIND } from "@sigma/protocol"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Home } from "../src/home.ts"
@@ -10,6 +10,7 @@ import { accessToken, ACCOUNT, FakeOpenAi, matches, signIn } from "./support/ope
 import { deadline, RawClient } from "./support/raw.ts"
 import {
   person,
+  runEnds,
   runningServer,
   settled,
   submit,
@@ -405,16 +406,48 @@ test("cache-fresh-subagent: a subagent started without its parent's history keep
   expect(session.said().at(-2)).toBe("assistant: The scout says echo prints hi.")
 })
 
-test("subagent-fork: a spawned agent's requests carry its own conversation, and its last answer reaches the parent", async () => {
+test("cache-conversation-fork: a spawn_agent fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own", async () => {
+  await using fake = new FakeOpenAi()
+  fake.play("subagent")
+  fake.play("fresh_subagent_tool_call")
+  await using session = await conversationWith(fake)
+  await session.submit("Ask a scout where the gnome lives.")
+  await session.view.until(settled(1), 20_000)
+  const at = session.view.seen().find((entry) => entry.kind === RUN_END_KIND)!.id
+  const forked = await session.client.call("conversation/fork", {
+    author: person("ada"),
+    conversation: session.conversation,
+    at,
+  })
+  const fork = forked.result.conversation as string
+  const forkView = watchView(session.client, fork)
+  await forkView.until(() => true)
+  const before = runEnds(forkView.seen()).length
+  await submit(session.client, fork, "Ask a scout what echo prints.")
+  await forkView.until(settled(before + 1), 20_000)
+  // The parent's first request, its spawn_agent fork's, the fork's three, then conversation/fork's four: its own, its
+  // fresh subagent's two, and its own again.
+  const sent = fake.responses()
+  expect(sent).toHaveLength(7)
+  const keys = sent.map((request) => {
+    const body = JSON.parse(request.body) as Sent
+    expect(request.headers.get("session-id")).toBe(body.prompt_cache_key)
+    return body.prompt_cache_key
+  })
+  const [parent, spawned, , forkFirst, fresh] = keys
+  expect(spawned).toBe(parent)
+  expect(forkFirst).toBe(parent)
+  expect(fresh).not.toBe(parent)
+})
+
+test("subagent-fork: a spawned agent's last answer reaches the parent", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("subagent")
   await using session = await conversationWith(fake)
   await session.submit("Ask a scout where the gnome lives.")
   await session.view.until(settled(1), 20_000)
   expectRequests(fake, expected)
-  const [parent, child, parentAgain] = fake.responses().map((request) => JSON.parse(request.body))
-  expect(child.prompt_cache_key).not.toBe(parent.prompt_cache_key)
-  expect(parentAgain.prompt_cache_key).toBe(parent.prompt_cache_key)
+  const [, , parentAgain] = fake.responses().map((request) => JSON.parse(request.body))
   expect(JSON.stringify(parentAgain.input)).toContain("Under the floor.")
   expect(session.said().at(-2)).toBe("assistant: The scout says: under the floor.")
 })

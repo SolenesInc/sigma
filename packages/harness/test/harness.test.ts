@@ -28,7 +28,6 @@ import {
   type Harness,
   type HarnessOptions,
   openHarness,
-  ProviderDoc,
   type Registry,
   section,
   TaskServices,
@@ -199,22 +198,6 @@ describe("conversation agents", () => {
 })
 
 describe("conversations", () => {
-  test("fork-provider-identity: the root and each of its forks have their own provider session id", async () => {
-    await run(
-      Effect.gen(function* () {
-        const harness = yield* open(databasePath(), createRegistry())
-        const root = yield* harness.root()
-        const entry = yield* note(root, "first")
-        const fork = yield* root.fork(entry.id, { ownership: { kind: "ownerless" } })
-        const again = yield* root.fork(entry.id, { ownership: { kind: "ownerless" } })
-        const ids = [root, fork, again].map((conversation) => harness.session.snapshot(ProviderDoc, conversation.id))
-        const sessionIds = (yield* Effect.all(ids)).map((state) => state?.sessionId)
-        for (const id of sessionIds) expect(id).toBeString()
-        expect(new Set(sessionIds).size).toBe(3)
-      }),
-    )
-  })
-
   test("conversation-list, conversation-reopen: conversations are found again after a restart, with their agent and history", async () => {
     const path = databasePath()
     const created = await run(
