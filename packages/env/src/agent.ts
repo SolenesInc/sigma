@@ -90,7 +90,9 @@ const main = () => {
     for (const call of running.values()) call.controller.abort()
     void Promise.all([...running.values()].map((call) => call.settled)).finally(() => {
       registry?.removeProcess(process.pid)
-      process.exit(0)
+      // A pipe takes writes asynchronously and exit drops what it has not taken, such as the answers just written. The
+      // callback runs once the earlier writes are in the pipe, or failed because nobody reads it.
+      process.stdout.write("", () => process.exit(0))
     })
   }
 
