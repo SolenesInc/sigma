@@ -1,6 +1,7 @@
 // An `ExecutionEnv` on a target, served by `sigma-env` over a channel the target's connector opens (D1). One channel per
 // target, shared by every view of it; a lost channel fails its calls with the connector's reason, and the next call
-// connects again once (D5). While an exec runs the client pings, so the agent can tell a silent server (D7).
+// connects again once (D5). While a call is in flight the client pings and the agent answers, so each end can tell
+// a silent peer: the agent stops its commands (D7), and the client kills the connector and fails its calls (D17).
 import { spawn } from "node:child_process"
 import { posix } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -33,10 +34,11 @@ import {
   type Handle,
   PROTOCOL,
   type ServerFrame,
+  SILENCE_MS,
   type WireError,
 } from "./protocol.ts"
 
-/** Pings while an exec runs: over 4 minutes at load 2 to 15 they arrived at most 15 ms late (F14). */
+/** Pings while a call is in flight: over 4 minutes at load 2 to 15 they arrived at most 15 ms late (F14). */
 const PING_MS = 5_000
 /**
  * How long a connector may take to bring the agent's hello: a start through ssh and `docker exec`, with the sweep and
@@ -132,13 +134,18 @@ class Session {
   readonly #listeners = new Map<number, Listener>()
   readonly #execs = new Set<number>()
   #ping: ReturnType<typeof setInterval> | undefined
+  #silence: ReturnType<typeof setTimeout> | undefined
+  readonly #silenceMs: number
+  readonly #lost: (reason: string) => void
   readonly closed: Promise<void>
 
   constructor(
     readonly target: string,
     readonly channel: Channel,
     owner: string,
+    silenceMs: number,
   ) {
+    this.#silenceMs = silenceMs
     let greet!: (hello: AgentHello) => void
     let refuse!: (error: TargetUnreachable) => void
     this.hello = new Promise((resolve, reject) => ((greet = resolve), (refuse = reject)))
@@ -166,16 +173,21 @@ class Session {
         }
         return greet(frame)
       }
+      this.#watch()
       if (frame.t === "event") return this.#listeners.get(frame.id)?.(frame)
-      if (frame.t === "hello") return
+      if (frame.t === "hello" || frame.t === "pong") return
       const settle = this.#waiting.get(frame.id)
       this.#waiting.delete(frame.id)
       this.#ended(frame.id)
+      this.#watch()
       settle?.(frame)
     })
-    this.closed = new Promise((resolve) =>
-      channel.onClose((reason) => {
+    let lose!: (reason: string) => void
+    this.closed = new Promise((resolve) => {
+      lose = (reason) => {
+        if (this.#reason !== undefined) return
         clearTimeout(late)
+        clearTimeout(this.#silence)
         this.#reason = reason
         refuse(new TargetUnreachable(target, reason))
         const waiting = [...this.#waiting.values()]
@@ -186,8 +198,10 @@ class Session {
           listener({ id, t: "event", kind: "change", change: { kind: "failed", error: lostError(target, reason) } })
         this.#listeners.clear()
         resolve()
-      }),
-    )
+      }
+    })
+    this.#lost = lose
+    channel.onClose(lose)
     channel.send(encode({ t: "hello", protocol: PROTOCOL, owner }))
   }
 
@@ -202,10 +216,9 @@ class Session {
     const id = this.#next++
     this.#waiting.set(id, settle)
     if (listener !== undefined) this.#listeners.set(id, listener)
-    if (call.handle === undefined && call.method === "exec") {
-      this.#execs.add(id)
-      this.#ping ??= setInterval(() => this.#frame({ t: "ping" }), PING_MS)
-    }
+    if (call.handle === undefined && call.method === "exec") this.#execs.add(id)
+    this.#ping ??= setInterval(() => this.#frame({ t: "ping" }), PING_MS)
+    if (this.#silence === undefined) this.#watch()
     this.#frame({ id, t: "call", ...call })
     return id
   }
@@ -220,13 +233,27 @@ class Session {
   }
 
   #ended(id: number) {
-    if (!this.#execs.delete(id)) return
     // A watcher's events outlive its answer; an exec's end with it.
-    this.#listeners.delete(id)
-    if (this.#execs.size === 0 && this.#ping !== undefined) {
+    if (this.#execs.delete(id)) this.#listeners.delete(id)
+    if (this.#waiting.size === 0 && this.#ping !== undefined) {
       clearInterval(this.#ping)
       this.#ping = undefined
     }
+  }
+
+  /**
+   * Restarts the silence timer while a call is in flight; each frame from the agent calls it. A link that dies without
+   * closing (F21) gives no EOF, so past the limit the connector is killed and every waiting call fails, a pending
+   * cancel too (D17).
+   */
+  #watch() {
+    clearTimeout(this.#silence)
+    this.#silence = undefined
+    if (this.#waiting.size === 0 || this.#reason !== undefined) return
+    this.#silence = setTimeout(() => {
+      this.#lost(`no frame from sigma-env for ${this.#silenceMs / 1000} s`)
+      this.channel.kill()
+    }, this.#silenceMs)
   }
 
   #frame(frame: ServerFrame) {
@@ -245,6 +272,8 @@ export interface TargetPoolOptions {
   readonly owner: string
   /** Opens a channel to `sigma-env` on the target's current instance. */
   readonly connect: (target: string) => Channel
+  /** How long a call in flight waits for any frame from the agent; default `SILENCE_MS`. */
+  readonly silenceMs?: number
 }
 
 /** The channel to each target, opened on first use and opened again on the first call after it is lost. */
@@ -262,7 +291,12 @@ export class TargetPool {
     return Effect.callback<Session, TargetUnreachable>((resume) => {
       let session = this.#sessions.get(target)
       if (session === undefined || session.reason !== undefined) {
-        const opened = new Session(target, this.#options.connect(target), this.#options.owner)
+        const opened = new Session(
+          target,
+          this.#options.connect(target),
+          this.#options.owner,
+          this.#options.silenceMs ?? SILENCE_MS,
+        )
         this.#sessions.set(target, opened)
         void opened.closed.then(() => {
           if (this.#sessions.get(target) === opened) this.#sessions.delete(target)

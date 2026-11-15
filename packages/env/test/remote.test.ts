@@ -92,6 +92,28 @@ test("env-remote-stop: a target's command is killed after the silence limit with
   expect(Object.values(pids).filter(alive)).toEqual([])
 })
 
+test("env-remote-stop: a call on a channel gone silent without closing, and the cancel of another, fail with the silence limit once it passes", async () => {
+  // The client's limit is past the agent's, so the agent has stopped its commands when the connector is killed.
+  const dead = opened({ runtime: temporary("sigma-env-run-"), agentArgs: ["--silence-ms", "1000"], silenceMs: 1500 })
+  const env = dead.pool.env("here", temporary("sigma-env-"))
+  const { quiet, interrupted } = await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* dead.pool.connect("here")
+      const quiet = yield* Effect.forkDetach(Effect.exit(env.exec("sleep 60")))
+      const cancelled = yield* Effect.forkDetach(env.exec("sleep 60"))
+      yield* Effect.promise(() => dead.sent(2))
+      // The link dies both ways without an EOF, as a connector or ssh link that dies alone can (F21).
+      dead.deafen()
+      const interrupted = yield* Effect.exit(Fiber.interrupt(cancelled))
+      return { quiet: yield* Fiber.join(quiet), interrupted }
+    }),
+  )
+  expect(interrupted._tag).toBe("Success")
+  expect(String(quiet._tag === "Failure" ? quiet.cause : "")).toContain(
+    "target here unavailable: no frame from sigma-env for 1.5 s",
+  )
+})
+
 test("env-remote-stop: a new agent of the same owner kills an earlier agent and its commands before it answers the hello", async () => {
   const runtime = temporary("sigma-env-run-")
   const cwd = temporary("sigma-env-")
