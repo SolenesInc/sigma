@@ -13,11 +13,9 @@ import {
   DEFAULT_AGENT_LIMITS,
   defineExtension,
   defineTool,
-  depthOf,
   InboxDoc,
   LiveDoc,
   recordOrigin,
-  refusedSpawn,
   refusedWork,
   ROOT_TASK,
   type ToolExecutionApi,
@@ -105,14 +103,17 @@ const mailEntry = (kind: MailKind, task: string, sender: string) => ({
 
 /** The line in a subagent's instructions that names it; the `script` model reads it to pick the agent's steps. */
 export const taskNameLine = (task: string) => `Your task name is ${task}.`
-const TASK_NAME = /Your task name is (\/[^\s.]+)\./
+const TASK_NAME = /Your task name is (\/[^\s.]+)\./g
 
-/** The task a request is for: the last instructions that name one, or the root. */
+/**
+ * The task a request is for: the last task name in the instructions, or the root. A subagent's instructions follow
+ * its parent's, which name the parent's task first.
+ */
 export const taskOfRequest = (messages: ReadonlyArray<{ readonly role: string }>): string => {
   for (const message of [...messages].reverse()) {
     if (message.role !== "system") continue
-    const named = TASK_NAME.exec(JSON.stringify(message))
-    if (named !== null) return named[1]!
+    const named = [...JSON.stringify(message).matchAll(TASK_NAME)].at(-1)
+    if (named !== undefined) return named[1]!
   }
   return ROOT_TASK
 }
@@ -315,7 +316,7 @@ const MAX_WAIT_MS = 3_600_000
 
 const spawnDescription = `Spawns an agent to work on the specified task. If your current task is \`/root/task1\` and you spawn_agent with task_name "task_3" the agent will have canonical task name \`/root/task1/task_3\`.
 You are then able to refer to this agent as \`task_3\` or \`/root/task1/task_3\` interchangeably. However an agent \`/root/task2/task_3\` would only be able to communicate with this agent via its canonical name \`/root/task1/task_3\`.
-The spawned agent will have the same tools as you.
+The spawned agent will have the same tools as you and the ability to spawn its own subagents.
 Spawned agents inherit your current model by default. Do not set the \`model\` field unless the user explicitly asks for a different model.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
 The new agent's canonical task name will be provided to it along with the message.
@@ -388,7 +389,15 @@ const spawnAgent = (limits: AgentLimits, agentTypes: AgentTypes) =>
         const model =
           input.model ?? (parentModel !== undefined && listed(agentType?.model) ? agentType!.model : undefined)
         const task = `${own}/${name}`
-        const instructions = `${taskNameLine(task)} You are a subagent; your final answer goes to ${own}.`
+        // A subagent keeps its parent's instructions, so a fork's prompt matches its parent's up to its notice.
+        const notice = `${taskNameLine(task)} You are a subagent; your final answer goes to ${own}.`
+        const instructions = [
+          agent.instructions,
+          notice,
+          agentType === undefined ? undefined : `# You are a ${agentType.name} agent\n\n${agentType.instructions}`,
+        ]
+          .filter((part) => part !== undefined && part !== "")
+          .join("\n\n")
         // A subagent of a conversation that runs every call without asking does too: nobody watches it to answer.
         const auto = (yield* api.snapshot(ApprovalsDoc, api.conversationId))?.auto === true
         const started = yield* api.commit((tx) =>
@@ -398,7 +407,7 @@ const spawnAgent = (limits: AgentLimits, agentTypes: AgentTypes) =>
             const already = registry.reporters[String(api.taskId)]
             if (already !== undefined) return registry.agents[name]?.conversationId
             if (Object.hasOwn(registry.agents, name)) return undefined
-            const refused = refusedSpawn(limits, own, working(registry))
+            const refused = refusedWork(limits, working(registry))
             if (refused !== undefined) return refused
             const forkAt = input.fork_turns === "none" ? undefined : yield* tx.latestEntryId(api.conversationId)
             const anchor = yield* tx.createTask(Anchor, null, background)
@@ -408,16 +417,9 @@ const spawnAgent = (limits: AgentLimits, agentTypes: AgentTypes) =>
                 ? yield* tx.createConversation({ ownership })
                 : yield* tx.forkConversation(api.conversationId, forkAt, { ownership })
             yield* configure(tx, child.id, {
-              // The instructions a conversation started with are its own; a subagent starts without them.
-              instructions:
-                agentType === undefined
-                  ? instructions
-                  : `${instructions}\n\n# You are a ${agentType.name} agent\n\n${agentType.instructions}`,
+              instructions,
               ...(model === undefined ? {} : { model: { provider: parentModel!.provider, modelId: model } }),
               ...(input.reasoning_effort === undefined ? {} : { thinkingLevel: input.reasoning_effort }),
-              // Past the depth limit a subagent has no spawn_agent at all: not offered to its model, nor callable from
-              // its code mode scripts.
-              ...(depthOf(task) >= limits.maxDepth ? { tools: { remove: [{ name: "spawn_agent" }] } } : {}),
             })
             ;(yield* tx.doc(TaskPathDoc, child.id)).task = task
             yield* recordOrigin(tx, child.id, {
@@ -666,8 +668,8 @@ export const agentTools = (limits: AgentLimits = DEFAULT_AGENT_LIMITS, agentType
     name: AGENTS_EXTENSION,
     tasks: [Anchor, Reporter],
     tools: [
-      // With no depth to nest into, every conversation is at the limit, the root included, so none is offered spawn_agent.
-      ...(limits.maxDepth > 0 ? [spawnAgent(limits, agentTypes)] : []),
+      // With no subagent allowed to work, no conversation is offered spawn_agent, the root included.
+      ...(limits.maxThreads > 0 ? [spawnAgent(limits, agentTypes)] : []),
       sendMessage,
       followupTask(limits),
       waitAgent,

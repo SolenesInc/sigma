@@ -30,6 +30,12 @@ with what the last one had. A person sees the result in `/usage`, whose
   `prompt_cache_key` and `session-id`, so its first request can read the
   history it shares with its parent from the cache. A new conversation,
   `fork_turns: "none"` subagents among them, gets a key of its own.
+- `cache-fork-subagent` sends a forked subagent's first request with its
+  parent's `instructions` and `tools`: a subagent keeps its parent's tools,
+  `spawn_agent` among them, and its instructions are its parent's followed by
+  the line naming its task and its agent type's body. Those reach ChatGPT
+  after the inherited history, as an update of the `instructions` section.
+  A `fork_turns: "none"` subagent is told the same in its `instructions`.
 - `cache-shown` shows cached input per model in `/usage`, as
   `<total> (<n> in, <n> cached, <n> out)`, with `<n> cache write` before `out`
   when the provider charged for writing to its cache; `usage/get` returns it
@@ -138,6 +144,18 @@ Preconditions:
   scout, under another. The log has no headers: the provider test checks that
   `session-id` matches each key.
 
+- **A forked subagent** (`cache-fork-subagent`). `drive.ts r up --fake-openai subagent`,
+  `drive.ts r sigma exec --provider openai --auto --instructions 'Report with attn when done.' 'Ask a scout where the gnome lives.'`:
+  `The scout says: under the floor.` Compare the scout's first request, the
+  log's second, with the parent's first, and show what it added at its end:
+
+  ```sh
+  jq -s -c '[.[] | .body] as $b | {key: ($b[1].prompt_cache_key == $b[0].prompt_cache_key), instructions: ($b[1].instructions == $b[0].instructions), tools: ($b[1].tools == $b[0].tools), front: ($b[1].input[0:($b[0].input|length)] == $b[0].input), last: ($b[1].input[-1] | {role, text: .content[0].text})}' /tmp/sigma-verify/r/evidence/fake-openai.ndjson
+  ```
+
+  `key`, `instructions`, `tools` and `front` read `true`, and `last` is
+  `{"role": "developer", "text": "Updated system prompt section \"instructions\":\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/scout. You are a subagent; your final answer goes to /root.\n</instructions>"}`.
+
 - **The cached column** (`cache-shown`). A script
   `[{"text": "answer one", "usage": {"input": 1200, "output": 300}}, {"text": "answer two", "usage": {"input": 2000, "output": 500, "cacheRead": 1200}}]`,
   `drive.ts r up --script s.json`, `drive.ts r tui start --conversation talk`,
@@ -192,6 +210,8 @@ Provider, `packages/sigma/test/openai.test.ts`:
 - cache-instructions-change, section-deltas: instructions changed between two prompts reach ChatGPT after the history, and the request keeps the instructions it started with
 - cache-fresh-subagent: a subagent started without its parent's history keeps its own requests' front, under a cache key of its own
 - cache-conversation-fork: a spawn_agent fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own
+- cache-fork-subagent: a forked subagent of a type sends its parent's cache key, instructions and tools, and gets its notice and type after the inherited history
+- subagent-types, cache-fork-subagent: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out
 
 Provider, `packages/sigma/test/claude.test.ts`:
 
@@ -287,6 +307,18 @@ ChatGPT, in a run made with `drive.ts r up --openai-kept`:
   `sessionId`. Measured on 2026-11-14 with gpt-6-luna: the parent's `noted`
   with `input` 12,042, then the fork's `amber-412-cedar` with `input` 162 and
   `cacheRead` 11,904.
+
+- **A forked subagent** (`cache-fork-subagent`). In a new run, the same
+  first `exec`: `noted`. Take the id, then
+  `drive.ts r watch <id> --submit 'Use spawn_agent to start a subagent named scout, with your history, and ask it which label is number 412. Wait for it, then reply with its answer only.' --until run_end --timeout 180000 --save parent`:
+  `amber-412-cedar`. Take the scout's id from `drive.ts r rpc conversation/list`
+  (`"task": "/root/scout"`), and
+  `drive.ts r watch <scout id> --save scout`. The same `jq` on `scout.ndjson`:
+  the scout's first answer, the first `pi.assistant` entry of the scout's own
+  conversation, has a `cacheRead` of nearly all of the parent's first
+  `input`, and its `input` is a few hundred tokens. Measured on 2026-11-15
+  with gpt-6-luna: the parent's `noted` with `input` 12,065, then the scout's
+  `amber-412-cedar` with `input` 231 and `cacheRead` 12,032.
 
 Claude, in a run made with `drive.ts r up --real-claude`; give each `rpc` and
 `watch` `--timeout 120000`:

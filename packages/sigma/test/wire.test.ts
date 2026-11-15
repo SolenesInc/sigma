@@ -703,7 +703,7 @@ const spawnSeven = {
     input: { task_name: name, message: "hold", fork_turns: "none" },
   })),
 }
-const MAX_THREADS = "at most 6 subagents work at once (maxThreads); 6 are working, so wait for one to finish"
+const MAX_THREADS = "at most 6 subagents work at once (max_threads); 6 are working, so wait for one to finish"
 
 test("subagent-limits, child-tools: spawns in one response start at most maxThreads subagents", async () => {
   await using server = await runningServer([spawnSeven, { text: "spawned them" }, ...holding])
@@ -789,10 +789,9 @@ test("child-tools: a follow-up task reaches a working subagent at its next step,
   client.close()
 }, 30_000)
 
-test("child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks, and cannot start subagents past the depth limit", async () => {
+test("child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks", async () => {
   await using server = await runningServer([
     call("spawn_agent", { task_name: "helper", message: "first", fork_turns: "none" }),
-    call("spawn_agent", { task_name: "deeper", message: "go" }, "/root/helper"),
     { text: "first done", agent: "/root/helper" },
     call("wait_agent", { timeout_ms: 600_000 }),
     call("send_message", { target: "helper", message: "fyi" }),
@@ -817,8 +816,6 @@ test("child-tools, subagent-message, subagent-followup: a subagent takes message
     { kind: "message", task: "/root/helper", sender: "/root" },
     { kind: "new_task", task: "/root/helper", sender: "/root" },
   ])
-  // At the depth limit the helper is not offered spawn_agent; its call is refused and it answers anyway.
-  expect(toolResults(helper)).toEqual([{ text: expect.stringContaining("not available"), isError: true }])
   expect(transcript(helper.seen()).filter((line) => line.startsWith("assistant: ") && line !== "assistant: ")).toEqual([
     "assistant: first done",
     "assistant: second done",
@@ -1466,14 +1463,14 @@ test("subagent-limits: a tree runs at most as many subagents at once as config.t
   const results = toolResults(view)
   expect(results.filter((result) => !result.isError)).toHaveLength(2)
   expect(results.filter((result) => result.isError)).toHaveLength(5)
-  expect(results.find((result) => result.isError)?.text).toContain("at most 2 subagents work at once (maxThreads)")
+  expect(results.find((result) => result.isError)?.text).toContain("at most 2 subagents work at once (max_threads)")
   client.close()
 }, 30_000)
 
-test("subagent-limits: with max_depth 0 in config.toml the root conversation is not offered spawn_agent", async () => {
+test("subagent-limits: with max_threads 0 in config.toml the root conversation is not offered spawn_agent", async () => {
   await using server = await runningServer(
     [call("spawn_agent", { task_name: "scout", message: "go", fork_turns: "none" }), { text: "alone then" }],
-    { config: { agents: { max_depth: 0 } } },
+    { config: { agents: { max_threads: 0 } } },
   )
   const client = await RawClient.connect(server.home.socket)
   const conversation = await start(client, server.home.dir)
@@ -1488,38 +1485,32 @@ test("subagent-limits: with max_depth 0 in config.toml the root conversation is 
   client.close()
 }, 30_000)
 
-test("subagent-limits: a code-mode subagent at the depth limit has no spawn_agent to call from its scripts", async () => {
-  const spawn = `await tools.spawn_agent({ task_name: "helper", message: "go", fork_turns: "none" })
-await tools.wait_agent({ timeout_ms: 600000 })`
-  const probe = `text(Object.keys(tools).includes("spawn_agent") ? "has spawn_agent" : "no spawn_agent")
-await tools.spawn_agent({ task_name: "deeper", message: "go" })`
+test("subagent-limits, child-tools: under the default config a subagent starts a subagent of its own", async () => {
   await using server = await runningServer([
-    call("codemode", { code: spawn }),
-    call("codemode", { code: probe }, "/root/helper"),
+    call("spawn_agent", { task_name: "helper", message: "go", fork_turns: "none" }),
+    call("wait_agent", { timeout_ms: 600_000 }),
+    call("spawn_agent", { task_name: "deeper", message: "dig", fork_turns: "none" }, "/root/helper"),
+    call("wait_agent", { timeout_ms: 600_000 }, "/root/helper"),
+    { text: "dug", agent: "/root/helper/deeper" },
     { text: "helper done", agent: "/root/helper" },
     { text: "all done" },
   ])
   const client = await RawClient.connect(server.home.socket)
-  const conversation = (
-    await client.call("conversation/start", {
-      author: person("ada"),
-      cwd: server.home.dir,
-      approvals: "auto",
-      model: "script-code-mode",
-    })
-  ).result.conversation as string
+  const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "send a helper")
   await view.until(settled(1), 20_000)
-  // The helper is the only conversation the root started.
-  const listed = await list(client)
-  expect(listed).toHaveLength(2)
-  const helper = watchView(client, listed.find((candidate) => candidate.id !== conversation)!.id)
+  const helper = watchView(client, spawned(view, "/root/helper"))
   await helper.until(settled(1), 20_000)
-  const [probed] = toolResults(helper)
-  expect(probed!.text).toContain("no spawn_agent")
-  expect(probed!.text).toContain("tools.spawn_agent does not exist")
-  expect(transcript(helper.seen()).slice(-2)).toEqual(["assistant: helper done", "run_end: answered"])
+  const deeper = watchView(client, spawned(helper, "/root/helper/deeper"))
+  await deeper.until(settled(1), 20_000)
+  expect(mails(deeper)).toEqual([{ kind: "new_task", task: "/root/helper/deeper", sender: "/root/helper" }])
+  expect(mails(helper)).toEqual([
+    { kind: "new_task", task: "/root/helper", sender: "/root" },
+    { kind: "final_answer", task: "/root/helper", sender: "/root/helper/deeper" },
+  ])
+  expect(transcript(deeper.seen()).slice(-2)).toEqual(["assistant: dug", "run_end: answered"])
+  expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: all done", "run_end: answered"])
   client.close()
 }, 30_000)
 

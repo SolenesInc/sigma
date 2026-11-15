@@ -40,5 +40,5 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - subagent-limits, child-tools: a follow-up task does not wake an idle subagent while maxThreads subagents work
 - child-tools: a subagent's answer that waits in its parent's queue still reaches it when the person stops the parent
 - child-tools: a follow-up task reaches a working subagent at its next step, in the same run
-- child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks, and cannot start subagents past the depth limit
+- child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks
 - child-tools, subagent-agents: interrupting a subagent stops its turn and reports what it was doing
