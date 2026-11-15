@@ -1,12 +1,13 @@
 // The process groups a server's commands run in, kept on disk so the next server can kill what a crash left running.
 import { spawnSync } from "node:child_process"
-import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 /**
- * A folder holding one empty file per running process group, named by its id; the file's mtime is when it started.
- * A command records its group when it starts and removes it when it ends, so after a crash the folder lists exactly the
- * groups still running. The local env keeps one under `$SIGMA_HOME/processes`; `sigma-env` keeps one per owner.
+ * A folder holding one empty file per running process group, named by its id, and one per process that is no group
+ * leader, named `<pid>.process`; the file's mtime is when it started. A command records its group when it starts and
+ * removes it when it ends, so after a crash the folder lists exactly the groups still running. The local env keeps one
+ * under `$SIGMA_HOME/processes`. `sigma-env` keeps one per owner, where each agent also records itself (D7).
  */
 export class ProcessRegistry {
   readonly dir: string
@@ -24,9 +25,20 @@ export class ProcessRegistry {
     rmSync(join(this.dir, String(group)), { force: true })
   }
 
+  /** Records one process, which the sweep kills alone, before the groups. */
+  recordProcess(pid: number): void {
+    mkdirSync(this.dir, { recursive: true })
+    writeFileSync(join(this.dir, `${pid}.process`), "")
+  }
+
+  removeProcess(pid: number): void {
+    rmSync(join(this.dir, `${pid}.process`), { force: true })
+  }
+
   /**
-   * Kills every recorded group still running and forgets them all. A group id the OS has since given to another process,
-   * one that started after the record, as after a reboot, is left alone. Run it before anything records again.
+   * Kills every recorded process and group still running and forgets them all, processes first, so a recorded agent
+   * starts no command while its groups die. An id the OS has since given to another process, one that started after the
+   * record, as after a reboot, is left alone. Run it before anything records again.
    */
   sweep(): void {
     let names: string[]
@@ -35,28 +47,59 @@ export class ProcessRegistry {
     } catch {
       return // never recorded anything
     }
-    const recorded = new Map<number, number>()
+    const recorded = new Map<number, { startedMs: number; group: boolean }>()
     for (const name of names) {
-      const group = Number(name)
+      const group = !name.endsWith(".process")
+      const id = Number(group ? name : name.slice(0, -".process".length))
       const path = join(this.dir, name)
-      if (Number.isInteger(group) && group > 1) recorded.set(group, statSync(path).mtimeMs)
+      if (Number.isInteger(id) && id > 1) recorded.set(id, { startedMs: statSync(path).mtimeMs, group })
       rmSync(path, { force: true })
     }
     if (recorded.size === 0) return
-    for (const [group, startedMs] of leaderStarts([...recorded.keys()])) {
-      // `ps` gives whole seconds of age, so its start is up to a second late.
-      if (startedMs > recorded.get(group)! + 1000) continue
-      try {
-        process.kill(-group, "SIGKILL")
-      } catch {
-        // Gone since `ps` looked.
+    const live = [...starts([...recorded.keys()])].filter(([id, startedMs]) => {
+      // Starts are read in whole seconds, or ticks, so a start is up to a second late.
+      return startedMs <= recorded.get(id)!.startedMs + 1000
+    })
+    for (const ordered of [false, true])
+      for (const [id] of live) {
+        if (recorded.get(id)!.group !== ordered) continue
+        try {
+          process.kill(ordered ? -id : id, "SIGKILL")
+        } catch {
+          // Gone since its start was read.
+        }
       }
-    }
   }
 }
 
-/** When each live process among `pids` started, by `ps`'s elapsed time; a pid that is gone is left out. */
-function leaderStarts(pids: readonly number[]): Map<number, number> {
+/** When each live process among `pids` started; a pid that is gone is left out. */
+function starts(pids: readonly number[]): Map<number, number> {
+  return process.platform === "linux" ? procStarts(pids) : psStarts(pids)
+}
+
+/**
+ * Starts from `/proc`, which every Linux has, where `ps` may be missing, as in slim container images. A process's
+ * start is in clock ticks after boot, and Linux reports ticks at 100 a second to user space on every architecture.
+ */
+function procStarts(pids: readonly number[]): Map<number, number> {
+  const bootSeconds = Number(/^btime (\d+)$/m.exec(readFileSync("/proc/stat", "utf8"))?.[1])
+  const found = new Map<number, number>()
+  for (const pid of pids) {
+    let stat: string
+    try {
+      stat = readFileSync(`/proc/${pid}/stat`, "utf8")
+    } catch {
+      continue // gone
+    }
+    // The command name in parentheses may hold spaces; the fields after it are fixed. starttime is field 22.
+    const ticks = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19])
+    found.set(pid, bootSeconds * 1000 + ticks * 10)
+  }
+  return found
+}
+
+/** Starts by `ps`'s elapsed time. */
+function psStarts(pids: readonly number[]): Map<number, number> {
   const now = Date.now()
   const out = spawnSync("ps", ["-o", "pid=,etime=", "-p", pids.join(",")], { encoding: "utf8" }).stdout ?? ""
   const starts = new Map<number, number>()

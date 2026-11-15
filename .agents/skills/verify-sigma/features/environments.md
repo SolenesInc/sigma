@@ -17,6 +17,8 @@ Tools work through an execution environment, per conversation, for commands, fil
 - `env-filesystem` [kernel] Files and directories read, write, list, rename and fail with typed errors.
 - `env-shell` [kernel] Shell execution streams, spills, times out, aborts and reports exit codes.
 - `env-truncate` [kernel] Truncation by lines and UTF-8 bytes reports what it cut.
+- `env-remote` [kernel] `RemoteExecutionEnv` acts on another computer through `sigma-env` over a connector's channel, as the local env acts here.
+- `env-remote-stop` [kernel] A target's commands die when the server's channel closes, after 120 s with no frame while they run, or at the next agent's sweep for the same owner, before its hello.
 
 ## How to get to it
 
@@ -41,6 +43,10 @@ Feature ledger area N: spec §7.3; README Environment; example 28-sandbox-per-co
 - `packages/env` is the implementation: `LocalExecutionEnv` from `@sigma/env/local`, on Effect. Interrupting an
   operation is how it is cancelled, and an interrupted `exec` completes only once its processes are gone. A caller that
   needs the spill path of an interrupted command passes `onSpill`.
+- `@sigma/env/remote` is the client: `TargetPool` keeps one channel per target, opened by a `connect` the server
+  supplies, and `pool.env(target, cwd)` is a view over it. `@sigma/env/agent` is `sigma-env`, built by
+  `bun scripts/sigma-env.ts`. Nothing in the server uses them yet; the conversation binding comes with targets.
+- `search` is optional in the interface; grep uses it when present, so a remote grep is one call, and walks otherwise.
 - `listFiles` is optional in the interface, and the local environment does not implement it, as upstream's does not;
   its conformance cases run only for an environment that does.
 - The `env` factory per conversation is the harness's (`harness-tools`), and the file mutation queue keyed by the

@@ -1,11 +1,15 @@
 // `grep` and `glob` through a real Harness, in a git work tree and in a plain directory.
 import { afterEach, expect, test } from "bun:test"
-import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { join, resolve } from "node:path"
+import type { ExecutionEnv } from "@sigma/env"
 import { fauxAssistantMessage, fauxToolCall } from "@sigma/models/faux"
 import { Effect } from "effect"
 import { createGlobTool, createGrepTool } from "../src/index.ts"
+import { link, runtimeDir } from "../../env/test/support/agent.ts"
 import { type Chat, openChat, removeDirectories, resultText, run } from "./support.ts"
+
+const REPOSITORY = resolve(import.meta.dir, "../../..")
 
 afterEach(removeDirectories)
 
@@ -112,5 +116,38 @@ test("tool-grep: grep and glob search a directory the model names through a syml
         "linked/a.ts:1:const needle = 1\nlinked/a.ts:3:export { needle }",
         "linked/a.ts",
       ])
+    }),
+  ))
+
+test("tool-grep: grep through a target's environment searches a whole copy of sigma in one call, with the matches it finds here", () =>
+  run(
+    Effect.gen(function* () {
+      const runtime = runtimeDir()
+      const remote = link({ runtime })
+      yield* Effect.addFinalizer(() =>
+        Effect.andThen(
+          remote.pool.close(),
+          Effect.sync(() => rmSync(runtime, { recursive: true })),
+        ),
+      )
+      const grep = (env?: (env: ExecutionEnv) => ExecutionEnv) =>
+        Effect.gen(function* () {
+          const chat = yield* openChat({
+            tools: [createGrepTool()],
+            responses: calls(["grep", { pattern: "ProcessRegistry", glob: "*.ts" }]),
+            ...(env === undefined ? {} : { env }),
+          })
+          const cloned = Bun.spawnSync(["git", "clone", "-q", "--shared", REPOSITORY, chat.workspace])
+          if (cloned.exitCode !== 0) throw new Error(`git clone failed: ${cloned.stderr}`)
+          yield* chat.ask("search")
+          return resultText((yield* chat.toolResults())[0]!)
+        })
+      const here = yield* grep()
+      const before = remote.calls()
+      const there = yield* grep((local) => remote.pool.env("copy", local.cwd))
+      // Walking line by line made 192,922 calls for the whole repository; `search` makes one (F13).
+      expect(remote.calls() - before).toBe(1)
+      expect(there).toBe(here)
+      expect(here).toContain("packages/env/src/registry.ts:")
     }),
   ))
