@@ -17,17 +17,11 @@ import {
   type Handle,
   PROTOCOL,
   type ServerFrame,
+  SILENCE_MS,
   type ServerHello,
   toWire,
 } from "./protocol.ts"
 import { ProcessRegistry } from "./registry.ts"
-
-/**
- * How long a running command waits for any frame before the agent decides its server is gone. Pings come every 5 s,
- * and over 4 minutes at load 2 to 15 the worst gap was 5,015 ms while single calls stalled up to 5.2 s; 120 s is 23
- * times the worst stall, so only a dead link or a frozen server reaches it (F14).
- */
-export const SILENCE_MS = 120_000
 
 /** The environment methods a call may name; everything else is refused. */
 const METHODS = new Set([
@@ -213,6 +207,7 @@ const main = () => {
     }
     watch()
     if (frame.t === "call") answer(frame)
+    else if (frame.t === "ping") write({ t: "pong" })
     else if (frame.t === "cancel") running.get(frame.id)?.controller.abort()
   })
   lines.on("close", () => stop("input closed"))

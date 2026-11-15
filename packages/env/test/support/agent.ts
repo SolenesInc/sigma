@@ -1,5 +1,5 @@
 // `sigma-env` on this machine, as a target's connector would start it: a channel to a fresh agent per connect, with a
-// runtime folder this test owns. `mute` models a link that goes silent without closing (F21).
+// runtime folder this test owns. `mute` and `deafen` model a link that goes silent without closing (F21).
 import { mkdtempSync } from "node:fs"
 import { join } from "node:path"
 import { type Channel, spawnChannel, TargetPool } from "@sigma/env/remote"
@@ -10,17 +10,32 @@ export interface Link {
   readonly pool: TargetPool
   /** Call frames sent since the link opened. */
   calls(): number
+  /** Settles once `count` call frames have been sent. */
+  sent(count: number): Promise<void>
   /** Drops every frame the server sends from now on, as a dead link or a frozen server would. */
   mute(): void
+  /**
+   * Drops every frame the agent sends from now on too, and its end, as a link dead both ways would: the server sees
+   * nothing until it kills the connector.
+   */
+  deafen(): void
 }
 
 export const runtimeDir = () => mkdtempSync(join("/tmp", "sigma-env-run-"))
 
-export function link(options: { runtime: string; owner?: string; agentArgs?: readonly string[] }): Link {
+export function link(options: {
+  runtime: string
+  owner?: string
+  agentArgs?: readonly string[]
+  silenceMs?: number
+}): Link {
   let calls = 0
   let muted = false
+  let deaf = false
+  const waiting: { count: number; done: () => void }[] = []
   const pool = new TargetPool({
     owner: options.owner ?? "test-owner",
+    ...(options.silenceMs === undefined ? {} : { silenceMs: options.silenceMs }),
     connect: (): Channel => {
       const channel = spawnChannel([
         "env",
@@ -29,15 +44,31 @@ export function link(options: { runtime: string; owner?: string; agentArgs?: rea
         AGENT,
         ...(options.agentArgs ?? []),
       ])
+      let killed = false
       return {
         ...channel,
+        kill: () => {
+          killed = true
+          channel.kill()
+        },
+        onLine: (listener) => channel.onLine((line) => deaf || listener(line)),
+        onClose: (listener) => channel.onClose((reason) => (deaf && !killed) || listener(reason)),
         send: (line) => {
           if (muted) return
-          if (line.includes('"t":"call"')) calls++
+          if (line.includes('"t":"call"')) {
+            calls++
+            for (const waiter of waiting.filter((waiter) => waiter.count <= calls)) waiter.done()
+          }
           channel.send(line)
         },
       }
     },
   })
-  return { pool, calls: () => calls, mute: () => (muted = true) }
+  return {
+    pool,
+    calls: () => calls,
+    sent: (count) => (count <= calls ? Promise.resolve() : new Promise((done) => void waiting.push({ count, done }))),
+    mute: () => (muted = true),
+    deafen: () => (muted = deaf = true),
+  }
 }

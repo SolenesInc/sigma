@@ -38,8 +38,18 @@ export type Call = {
 /** Stops call `id`; its answer comes once what it started is gone. */
 export type Cancel = { readonly id: number; readonly t: "cancel" }
 
-/** Sent every few seconds while an exec runs, so the agent can tell a live server from a silent one. */
+/**
+ * How long either end waits for a frame from the other while work is in flight before deciding the other is gone.
+ * Pings come every 5 s, and over 4 minutes at load 2 to 15 the worst gap was 5,015 ms while single calls stalled up to
+ * 5.2 s; 120 s is 23 times the worst stall, so only a dead link or a frozen peer reaches it (F14, D7, D17).
+ */
+export const SILENCE_MS = 120_000
+
+/** Sent every 5 s while a call is in flight, so each end can tell a live peer from a silent one. */
 export type Ping = { readonly t: "ping" }
+
+/** The agent's answer to each ping. */
+export type Pong = { readonly t: "pong" }
 
 export type ServerFrame = ServerHello | Call | Cancel | Ping
 
@@ -67,7 +77,7 @@ export type Event =
   | { readonly id: number; readonly t: "event"; readonly kind: "spill"; readonly path: string }
   | { readonly id: number; readonly t: "event"; readonly kind: "change"; readonly change: unknown }
 
-export type AgentFrame = AgentHello | Answer | Event
+export type AgentFrame = AgentHello | Answer | Event | Pong
 
 const replacer = (_key: string, value: unknown) =>
   value instanceof Uint8Array ? { $b64: Buffer.from(value).toString("base64") } : value
