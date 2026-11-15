@@ -2,7 +2,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
-import type { ExecutionEnv } from "@sigma/env"
 import { fauxAssistantMessage, fauxToolCall } from "@sigma/models/faux"
 import { Effect } from "effect"
 import { createGlobTool, createGrepTool } from "../src/index.ts"
