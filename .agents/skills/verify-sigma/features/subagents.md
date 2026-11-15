@@ -52,20 +52,22 @@ subagent's requests keep of the prompt cache is in
 - `subagent-exec` makes `sigma exec` without `--auto` deny the calls its
   subagents would ask about, as it does its own; `exec` follows every
   conversation of its tree.
-- `subagent-limits` takes `[agents] max_depth` (default 1) and `max_threads`
-  (default 6) from `SIGMA_HOME/config.toml`: a conversation at the depth
-  limit is not offered `spawn_agent`, the root too when `max_depth = 0`, and
-  its code mode scripts have no `tools.spawn_agent` either; a tree runs at
-  most `max_threads` subagents at once.
+- `subagent-limits` takes `[agents] max_threads` (default 6) from
+  `SIGMA_HOME/config.toml`: a tree runs at most `max_threads` subagents at
+  once, and a spawn past it fails naming `max_threads`. A subagent keeps
+  `spawn_agent` and starts subagents of its own, as deep as the limit allows.
+  `max_threads = 0` turns subagents off: no conversation, the root included,
+  is offered `spawn_agent`.
 - `subagent-types` reads agent types from `.claude/agents/*.md` from the
   directory up to the repository root, then Claude Code's config directory's
   `agents/` (`$CLAUDE_CONFIG_DIR`, else `~/.claude`). A ChatGPT conversation
   that can call `spawn_agent`, directly or from a code mode script, is told
   them under `# Agent types` and names one as `spawn_agent`'s `agent_type`;
-  an unknown one fails the call, naming the types there are. A subagent
-  without `spawn_agent` is told no types. The subagent's
-  instructions end with `# You are a <name> agent` and the
-  type's body, its `lineage` has `agentType`, its card reads
+  an unknown one fails the call, naming the types there are. A subagent's
+  instructions are those its parent inherited (the root's own, for a
+  subagent of the root), then the line naming its task, then
+  `# You are a <name> agent` and the type's body; a parent's own task line
+  and type do not pass down, its `lineage` has `agentType`, its card reads
   `⧉ <name> (<agent type>)`, and it runs on the type's `model` when ChatGPT
   lists it.
 - `subagent-claude` gives each subagent Claude Code starts a conversation of
@@ -83,14 +85,14 @@ subagent's requests keep of the prompt cache is in
 - Ask an OpenAI conversation for work it hands to subagents, in the TUI.
 - Ask a Claude conversation to use its Task tool.
 - Open a subagent with `sigma --conversation <id>`.
-- Set `[agents] max_depth` and `max_threads` in `SIGMA_HOME/config.toml` before the server starts.
+- Set `[agents] max_threads` in `SIGMA_HOME/config.toml` before the server starts.
 
 ### Agents
 
 - Run `sigma exec --provider openai` with such a prompt.
 - Drive it without a model through `SIGMA_MODEL_SCRIPT`: a step with `"agent": "/root/<name>"` is played by that subagent, the others by the parent.
 - Read the tree with `conversation/list` (`lineage`).
-- Set `[agents] max_depth` and `max_threads` in `SIGMA_HOME/config.toml` before the server starts.
+- Set `[agents] max_threads` in `SIGMA_HOME/config.toml` before the server starts.
 
 ## Driving it with drive.ts
 
@@ -198,14 +200,8 @@ Preconditions:
   shows the `sigma.approval` by `bo`, the `pi.tool-result` `scribbled`, then
   `wrote it`, and `drive.ts r watch <id>` ends `the scribe is done`.
 
-- **Asked two levels down.** After `up`, write the depth to the home's config
-  before anything starts the server:
-
-  ```sh
-  printf '[agents]\nmax_depth = 2\n' > /tmp/sigma-verify/r/home/config.toml
-  ```
-
-  and use the script
+- **Asked two levels down.** A subagent starts its own under the default
+  config. Use the script
 
   ```json
   [
@@ -366,9 +362,9 @@ Preconditions:
   `drive.ts r sigma exec spread`: stdout `one at a time`, and
   `drive.ts r watch <parent id> --save threads` shows the second
   `spawn_agent`'s result starting
-  `at most 1 subagents work at once (maxThreads)`.
-  Depth limit: in a fresh run, `drive.ts r up --fake-openai subagent`, write
-  `[agents]` and `max_depth = 0` to the same file, and run
+  `at most 1 subagents work at once (max_threads)`.
+  Subagents off: in a fresh run, `drive.ts r up --fake-openai subagent`, write
+  `[agents]` and `max_threads = 0` to the same file, and run
   `drive.ts r sigma exec --provider openai 'Send a scout to find the gnome.'`:
   in `evidence/fake-openai.ndjson` the first request's `tools` has no
   `spawn_agent`. The recording calls it anyway, and the call's result is
@@ -478,10 +474,12 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - subagent-types: spawning an agent of a type sigma doesn't know is refused, naming it
 - subagent-limits, child-tools: spawns in one response start at most maxThreads subagents
 - subagent-limits, child-tools: a follow-up task does not wake an idle subagent while maxThreads subagents work
-- child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks, and cannot start subagents past the depth limit
+- child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks
 - child-tools, subagent-agents: interrupting a subagent stops its turn and reports what it was doing
 - subagent-root-env, tool-root-env: an extension's tool run by a subagent knows the conversation people started
 - subagent-limits: a tree runs at most as many subagents at once as config.toml allows
+- subagent-limits: with max_threads 0 in config.toml the root conversation is not offered spawn_agent
+- subagent-limits, child-tools: under the default config a subagent starts a subagent of its own, told only its own task
 - subagent-interrupt: interrupting a conversation stops the runs of its subagents too, and the tree goes idle
 - subagent-spawn, subagent-model: conversation/list shows each subagent with its lineage, on its parent's model or the one its spawn_agent names, and an unlisted model fails the call
 - subagent-answer: a subagent's answer reaches its idle parent as input that starts a run, so the parent acts on it
@@ -501,7 +499,8 @@ Stack, `packages/sigma/test/stack.test.ts`:
 Provider, `packages/sigma/test/openai.test.ts`:
 
 - subagent-fork: a spawned agent's last answer reaches the parent
-- subagent-types: an agent of a type gets its instructions and its model, and fork_turns none leaves the parent's history out
+- subagent-types, cache-fork-subagent: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out
+- subagent-types, code-mode-models: a code-mode model that can spawn is told the agent types, and so is its subagent
 
 Provider, `packages/sigma/test/claude.test.ts`:
 

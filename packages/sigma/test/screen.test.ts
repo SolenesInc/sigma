@@ -411,7 +411,6 @@ test("subagent-card, codemode-nested-policy: a subagent a script started shows a
 
 test("subagent-approve: a call a subagent's subagent asks about shows on the card above it, and ctrl+y answers it", async () => {
   const sigmaHome = home()
-  await Bun.write(join(sigmaHome.dir, "config.toml"), "[agents]\nmax_depth = 2\n")
   const session = await open(
     [
       call("spawn_agent", { task_name: "lead", message: "delegate further", fork_turns: "none" }),

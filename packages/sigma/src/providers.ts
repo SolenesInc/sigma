@@ -176,10 +176,7 @@ export class Providers extends Context.Service<
         const agents = options.config.agents
         return Providers.of({
           instances,
-          agents: {
-            maxDepth: agents?.max_depth ?? DEFAULT_AGENT_LIMITS.maxDepth,
-            maxThreads: agents?.max_threads ?? DEFAULT_AGENT_LIMITS.maxThreads,
-          },
+          agents: { maxThreads: agents?.max_threads ?? DEFAULT_AGENT_LIMITS.maxThreads },
           claude: claudeInstances(options),
           agentTypes: (provider, cwd) =>
             provider !== undefined && instances.get(provider)?.kind === "openai"

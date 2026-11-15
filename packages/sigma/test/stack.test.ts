@@ -539,8 +539,6 @@ test("subagent-exec: sigma exec without --auto denies the calls its subagents wo
 
 test("subagent-exec: sigma exec continuing a subagent denies the calls of the subagents it starts", async () => {
   const sigmaHome = home()
-  // A subagent may start its own only past the default depth of 1.
-  await Bun.write(`${sigmaHome.dir}/config.toml`, "[agents]\nmax_depth = 2\n")
   const env = await scriptEnv(sigmaHome, [
     { tool: { name: "spawn_agent", input: { task_name: "kid", message: "get ready" } } },
     { tool: { name: "wait_agent", input: { timeout_ms: 600_000 } } },

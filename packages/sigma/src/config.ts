@@ -14,8 +14,7 @@ const Instance = Schema.Struct({
 export type Instance = typeof Instance.Type
 
 const AgentsConfig = Schema.Struct({
-  max_depth: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-  max_threads: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+  max_threads: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 })
 
 const HomeConfig = Schema.Struct({

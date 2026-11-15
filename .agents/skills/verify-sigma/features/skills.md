@@ -36,10 +36,10 @@ scripted conversations list none and carry none.
   after a reopen.
 - `start-instructions` keeps the instructions a conversation started with
   (`--instructions`, or `instructions` on `conversation/start`) on the
-  conversation, for every client to see; a subagent's own instructions
-  replace them. A forked ChatGPT subagent's requests keep its parent's
-  `instructions`, and its own arrive after the inherited history as an
-  update of the `instructions` section (`cache-instructions-change` in
+  conversation, for every client to see; a subagent's instructions are
+  those its parent inherited, the root's own at the top, followed by its own. A forked ChatGPT subagent's requests keep its
+  parent's `instructions`, and its own arrive after the inherited history as
+  an update of the `instructions` section (`cache-fork-subagent` in
   [Prompt cache](./prompt-cache.md)).
   Claude Code appends them to its own system prompt, and ChatGPT is told them
   after the `AGENTS.md` files. Only a signed-in run shows the model taking
@@ -179,7 +179,7 @@ Provider, `packages/sigma/test/openai.test.ts`:
 
 - openai-instructions, agents-md, skills-found, skills-nearest, skills-frontmatter: ChatGPT is told its working directory, the AGENTS.md files from home down to it, and the skills it can use
 - skills-found: a conversation outside any repository is told only its own folder's skills and the home's
-- start-instructions: ChatGPT is told the instructions its conversation started with, after the AGENTS.md files, and a subagent's replace them
+- start-instructions: ChatGPT is told the instructions its conversation started with, after the AGENTS.md files, and a subagent's follow its parent's
 - skills-list, skills-attach, skills-snapshot: a skill named in a message comes with it as SKILL.md read then, for the model and every client
 - skills-list: a conversation on a provider that finds its own skills lists none, and an unknown one is refused
 

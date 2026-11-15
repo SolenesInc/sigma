@@ -440,6 +440,37 @@ test("cache-conversation-fork: a spawn_agent fork and a conversation/fork send t
   expect(fresh).not.toBe(parent)
 })
 
+test("cache-fork-subagent: a forked subagent of a type sends its parent's cache key, instructions and tools, and gets its notice and type after the inherited history", async () => {
+  await using fake = new FakeOpenAi()
+  const expected = fake.play("forked_subagent_of_a_type")
+  await using session = await conversationWith(fake, {
+    instructions: "Report with attn when done.",
+    cwd: (home) => {
+      write(
+        join(home, "claude", "agents", "reviewer.md"),
+        "---\nname: reviewer\ndescription: Reviews diffs\n---\nBe strict about tests.",
+      )
+      return home
+    },
+  })
+  await session.submit("Get the diff reviewed.")
+  await session.view.until(settled(1), 20_000)
+  expectRequests(fake, expected)
+  const [parent, child] = sentBodies(fake)
+  expectCacheKept(parent!, child!)
+  expect(child!.input.at(-1)).toEqual({
+    type: "message",
+    role: "developer",
+    content: [
+      {
+        type: "input_text",
+        text: 'Updated system prompt section "instructions":\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/review. You are a subagent; your final answer goes to /root.\n\n# You are a reviewer agent\n\nBe strict about tests.\n</instructions>',
+      },
+    ],
+  })
+  expect(session.said().slice(-2)).toEqual(["assistant: The reviewer approves.", "run_end: answered"])
+})
+
 test("subagent-fork: a spawned agent's last answer reaches the parent", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("subagent")
@@ -599,7 +630,7 @@ test("skills-found: a conversation outside any repository is told only its own f
   expect(instructions).toContain("Home rules.")
 })
 
-test("start-instructions: ChatGPT is told the instructions its conversation started with, after the AGENTS.md files, and a subagent's replace them", async () => {
+test("start-instructions: ChatGPT is told the instructions its conversation started with, after the AGENTS.md files, and a subagent's follow its parent's", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("subagent")
   await using session = await conversationWith(fake, { cwd: project, instructions: "Report with attn when done." })
@@ -613,16 +644,16 @@ test("start-instructions: ChatGPT is told the instructions its conversation star
   expect(instructionsOf(fake, 1)).toBe(parent)
   const update = (JSON.parse(fake.responses()[1]!.body).input as Array<any>).at(-1)
   expect(update.role).toBe("developer")
-  expect(update.content[0].text).toStartWith(
-    'Updated system prompt section "instructions":\n\n<instructions>\nYour task name is /root/scout.',
+  expect(update.content[0].text).toBe(
+    'Updated system prompt section "instructions":\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/scout. You are a subagent; your final answer goes to /root.\n</instructions>',
   )
-  expect(update.content[0].text).not.toContain("Report with attn when done.")
 })
 
-test("subagent-types: an agent of a type gets its instructions and its model, and fork_turns none leaves the parent's history out", async () => {
+test("subagent-types, cache-fork-subagent: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("subagent_of_a_type")
   await using session = await conversationWith(fake, {
+    instructions: "Report with attn when done.",
     cwd: (home) => {
       // The fake's Claude Code config directory is the home's `claude` folder.
       write(
@@ -641,8 +672,13 @@ test("subagent-types: an agent of a type gets its instructions and its model, an
   expect(parent).toContain(
     "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
   )
-  expect(child).toContain("# You are a reviewer agent\n\nBe strict about tests.")
-  expect(child).not.toContain("# Agent types")
+  // The reviewer can spawn too, so it is told the types as well; its instructions follow its parent's.
+  expect(child).toContain(
+    "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
+  )
+  expect(child).toEndWith(
+    "\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/review. You are a subagent; your final answer goes to /root.\n\n# You are a reviewer agent\n\nBe strict about tests.\n</instructions>",
+  )
   expect(JSON.parse(fake.responses()[1]!.body).input).toHaveLength(1)
   const listed = (await session.client.call("conversation/list")).result as Array<{ lineage?: unknown }>
   expect(listed.map((conversation) => conversation.lineage).filter(Boolean)).toEqual([
@@ -650,7 +686,7 @@ test("subagent-types: an agent of a type gets its instructions and its model, an
   ])
 })
 
-test("subagent-types, code-mode-models: a code-mode model that can spawn is told the agent types, and its subagent at the depth limit is not", async () => {
+test("subagent-types, code-mode-models: a code-mode model that can spawn is told the agent types, and so is its subagent", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("code_mode_subagent_of_a_type")
   await using session = await conversationWith(fake, {
@@ -671,7 +707,9 @@ test("subagent-types, code-mode-models: a code-mode model that can spawn is told
     "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
   )
   expect(child).toContain("# You are a reviewer agent\n\nBe strict.")
-  expect(child).not.toContain("# Agent types")
+  expect(child).toContain(
+    "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
+  )
   expect(session.said().slice(-2)).toEqual(["assistant: Reviewed.", "run_end: answered"])
 })
 
