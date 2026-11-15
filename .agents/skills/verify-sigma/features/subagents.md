@@ -64,8 +64,10 @@ subagent's requests keep of the prompt cache is in
   that can call `spawn_agent`, directly or from a code mode script, is told
   them under `# Agent types` and names one as `spawn_agent`'s `agent_type`;
   an unknown one fails the call, naming the types there are. A subagent's
-  instructions are its parent's, then the line naming its task, then
-  `# You are a <name> agent` and the type's body, its `lineage` has `agentType`, its card reads
+  instructions are those its parent inherited (the root's own, for a
+  subagent of the root), then the line naming its task, then
+  `# You are a <name> agent` and the type's body; a parent's own task line
+  and type do not pass down, its `lineage` has `agentType`, its card reads
   `⧉ <name> (<agent type>)`, and it runs on the type's `model` when ChatGPT
   lists it.
 - `subagent-claude` gives each subagent Claude Code starts a conversation of
@@ -477,7 +479,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - subagent-root-env, tool-root-env: an extension's tool run by a subagent knows the conversation people started
 - subagent-limits: a tree runs at most as many subagents at once as config.toml allows
 - subagent-limits: with max_threads 0 in config.toml the root conversation is not offered spawn_agent
-- subagent-limits, child-tools: under the default config a subagent starts a subagent of its own
+- subagent-limits, child-tools: under the default config a subagent starts a subagent of its own, told only its own task
 - subagent-interrupt: interrupting a conversation stops the runs of its subagents too, and the tree goes idle
 - subagent-spawn, subagent-model: conversation/list shows each subagent with its lineage, on its parent's model or the one its spawn_agent names, and an unlisted model fails the call
 - subagent-answer: a subagent's answer reaches its idle parent as input that starts a run, so the parent acts on it

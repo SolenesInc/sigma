@@ -32,8 +32,8 @@ with what the last one had. A person sees the result in `/usage`, whose
   `fork_turns: "none"` subagents among them, gets a key of its own.
 - `cache-fork-subagent` sends a forked subagent's first request with its
   parent's `instructions` and `tools`: a subagent keeps its parent's tools,
-  `spawn_agent` among them, and its instructions are its parent's followed by
-  the line naming its task and its agent type's body. Those reach ChatGPT
+  `spawn_agent` among them, and its instructions are those its parent
+  inherited followed by the line naming its task and its agent type's body. Those reach ChatGPT
   after the inherited history, as an update of the `instructions` section.
   A `fork_turns: "none"` subagent is told the same in its `instructions`.
 - `cache-shown` shows cached input per model in `/usage`, as

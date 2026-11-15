@@ -103,17 +103,14 @@ const mailEntry = (kind: MailKind, task: string, sender: string) => ({
 
 /** The line in a subagent's instructions that names it; the `script` model reads it to pick the agent's steps. */
 export const taskNameLine = (task: string) => `Your task name is ${task}.`
-const TASK_NAME = /Your task name is (\/[^\s.]+)\./g
+const TASK_NAME = /Your task name is (\/[^\s.]+)\./
 
-/**
- * The task a request is for: the last task name in the instructions, or the root. A subagent's instructions follow
- * its parent's, which name the parent's task first.
- */
+/** The task a request is for: the last instructions that name one, or the root. */
 export const taskOfRequest = (messages: ReadonlyArray<{ readonly role: string }>): string => {
   for (const message of [...messages].reverse()) {
     if (message.role !== "system") continue
-    const named = [...JSON.stringify(message).matchAll(TASK_NAME)].at(-1)
-    if (named !== undefined) return named[1]!
+    const named = TASK_NAME.exec(JSON.stringify(message))
+    if (named !== null) return named[1]!
   }
   return ROOT_TASK
 }
@@ -389,10 +386,13 @@ const spawnAgent = (limits: AgentLimits, agentTypes: AgentTypes) =>
         const model =
           input.model ?? (parentModel !== undefined && listed(agentType?.model) ? agentType!.model : undefined)
         const task = `${own}/${name}`
-        // A subagent keeps its parent's instructions, so a fork's prompt matches its parent's up to its notice.
+        // A subagent keeps the instructions its parent inherited, so a fork's prompt matches its parent's up to its
+        // notice. A subagent parent's own notice and type start at the line naming its task, which sigma wrote.
         const notice = `${taskNameLine(task)} You are a subagent; your final answer goes to ${own}.`
+        const ownStart = own === ROOT_TASK ? -1 : (agent.instructions?.indexOf(taskNameLine(own)) ?? -1)
+        const inherited = ownStart === -1 ? agent.instructions : agent.instructions!.slice(0, ownStart).trimEnd()
         const instructions = [
-          agent.instructions,
+          inherited,
           notice,
           agentType === undefined ? undefined : `# You are a ${agentType.name} agent\n\n${agentType.instructions}`,
         ]

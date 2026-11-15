@@ -1485,7 +1485,7 @@ test("subagent-limits: with max_threads 0 in config.toml the root conversation i
   client.close()
 }, 30_000)
 
-test("subagent-limits, child-tools: under the default config a subagent starts a subagent of its own", async () => {
+test("subagent-limits, child-tools: under the default config a subagent starts a subagent of its own, told only its own task", async () => {
   await using server = await runningServer([
     call("spawn_agent", { task_name: "helper", message: "go", fork_turns: "none" }),
     call("wait_agent", { timeout_ms: 600_000 }),
@@ -1496,7 +1496,13 @@ test("subagent-limits, child-tools: under the default config a subagent starts a
     { text: "all done" },
   ])
   const client = await RawClient.connect(server.home.socket)
-  const conversation = await start(client, server.home.dir)
+  const conversation = (
+    await client.call("conversation/start", {
+      author: person("ada"),
+      cwd: server.home.dir,
+      instructions: "Report with attn when done.",
+    })
+  ).result.conversation as string
   const view = watchView(client, conversation)
   await submit(client, conversation, "send a helper")
   await view.until(settled(1), 20_000)
@@ -1504,6 +1510,10 @@ test("subagent-limits, child-tools: under the default config a subagent starts a
   await helper.until(settled(1), 20_000)
   const deeper = watchView(client, spawned(helper, "/root/helper/deeper"))
   await deeper.until(settled(1), 20_000)
+  // The deeper agent keeps what the helper inherited, not the helper's own notice.
+  expect((deeper.view().docs["pi.agent"] as { instructions?: string }).instructions).toBe(
+    "Report with attn when done.\n\nYour task name is /root/helper/deeper. You are a subagent; your final answer goes to /root/helper.",
+  )
   expect(mails(deeper)).toEqual([{ kind: "new_task", task: "/root/helper/deeper", sender: "/root/helper" }])
   expect(mails(helper)).toEqual([
     { kind: "new_task", task: "/root/helper", sender: "/root" },
