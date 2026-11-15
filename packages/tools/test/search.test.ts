@@ -2,7 +2,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
-import type { ExecutionEnv } from "@sigma/env"
 import { fauxAssistantMessage, fauxToolCall } from "@sigma/models/faux"
 import { Effect } from "effect"
 import { createGlobTool, createGrepTool } from "../src/index.ts"
@@ -119,7 +118,7 @@ test("tool-grep: grep and glob search a directory the model names through a syml
     }),
   ))
 
-test("tool-grep: grep through a target's environment searches a whole copy of sigma in one call, with the matches it finds here", () =>
+test("tool-grep: grep through a target's environment searches a whole copy of sigma in one call, finding what git grep finds", () =>
   run(
     Effect.gen(function* () {
       const runtime = runtimeDir()
@@ -130,24 +129,17 @@ test("tool-grep: grep through a target's environment searches a whole copy of si
           Effect.sync(() => rmSync(runtime, { recursive: true })),
         ),
       )
-      const grep = (env?: (env: ExecutionEnv) => ExecutionEnv) =>
-        Effect.gen(function* () {
-          const chat = yield* openChat({
-            tools: [createGrepTool()],
-            responses: calls(["grep", { pattern: "ProcessRegistry", glob: "*.ts" }]),
-            ...(env === undefined ? {} : { env }),
-          })
-          const cloned = Bun.spawnSync(["git", "clone", "-q", "--shared", REPOSITORY, chat.workspace])
-          if (cloned.exitCode !== 0) throw new Error(`git clone failed: ${cloned.stderr}`)
-          yield* chat.ask("search")
-          return resultText((yield* chat.toolResults())[0]!)
-        })
-      const here = yield* grep()
-      const before = remote.calls()
-      const there = yield* grep((local) => remote.pool.env("copy", local.cwd))
+      const chat = yield* openChat({
+        tools: [createGrepTool()],
+        responses: calls(["grep", { pattern: "ProcessRegistry", glob: "*.ts" }]),
+        env: (local) => remote.pool.env("copy", local.cwd),
+      })
+      const cloned = Bun.spawnSync(["git", "clone", "-q", "--shared", REPOSITORY, chat.workspace])
+      if (cloned.exitCode !== 0) throw new Error(`git clone failed: ${cloned.stderr}`)
+      const expected = Bun.spawnSync(["git", "grep", "-n", "ProcessRegistry", "--", "*.ts"], { cwd: chat.workspace })
+      yield* chat.ask("search")
       // Walking line by line made 192,922 calls for the whole repository; `search` makes one (F13).
-      expect(remote.calls() - before).toBe(1)
-      expect(there).toBe(here)
-      expect(here).toContain("packages/env/src/registry.ts:")
+      expect(remote.calls()).toBe(1)
+      expect(resultText((yield* chat.toolResults())[0]!)).toBe(expected.stdout.toString().trimEnd())
     }),
   ))
