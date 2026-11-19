@@ -93,7 +93,7 @@ Preconditions:
   type what the recording's user typed,
   `drive.ts r tui type 'Use the Task tool to start a general-purpose subagent that reads notes.txt with the Read tool and reports where the gnome lives. Do not read it yourself. Then reply with where the gnome lives, in three words.'`,
   and `drive.ts r tui key Enter`. Once `drive.ts r tui wait 'Read('` returns,
-  the card `Find gnome location in notes (general-purpose)` reads `working`:
+  the card `Locate gnome in notes.txt (general-purpose)` reads `working`:
   run `drive.ts r tui screen before-kill` and `drive.ts r kill-server`. Then
   `drive.ts r tui wait --timeout 30000 'resumed ok'`,
   `drive.ts r tui wait READY` and `drive.ts r tui screen recovered`: the card
@@ -106,14 +106,14 @@ Preconditions:
   ends with one `sigma.run_end` with `"outcome": "interrupted"`. In
   `evidence/fake-claude/log.ndjson` spawn 0 has `--session-id`, spawn 1 has
   `--resume-session-at` and received the user message `Your Agent call
-toolu_01DxmcUXKnbFWBQecJLTs1n3 was cut off: interrupted; it may or may not
+toolu_01FRRPpVEFf9Yhtae39dpsvM was cut off: interrupted; it may or may not
 have taken effect`.
 - **Claude answer already finished.** In a run started with
   `drive.ts r up --fake-claude crash_points`, run `drive.ts r serve`,
   `drive.ts r tui start --provider claude --auto`, `drive.ts r tui wait READY`,
   type the recording's prompt,
   `drive.ts r tui type 'First write one short sentence saying that you will read the notes. Then use the Read tool to read notes.txt. Then reply with where the gnome lives, in three words.'`,
-  `drive.ts r tui key Enter`, `drive.ts r tui wait 'Under the floor'`, and
+  `drive.ts r tui key Enter`, `drive.ts r tui wait 'The gnome lives under the floor'`, and
   `drive.ts r tui wait READY`. Run `drive.ts r kill-server`, and
   `drive.ts r doctor` shows a new server once the TUI has reconnected. The
   screen is unchanged and the log in `evidence/fake-claude/log.ndjson` has
@@ -143,7 +143,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 - Each server start begins the script from its first step, so the restarted
   server answers with the same scripted text, and calls the same tool again.
 - `crash_points` plays its whole journey the moment the prompt arrives (the
-  sentence, the `Read`, `Under the floor.`) and then waits, so no kill lands
+  sentence, the `Read`, `The gnome lives under the floor.`) and then waits, so no kill lands
   inside the run; only `subagent_working` stalls, at the subagent's call.
   Killing in the middle of a recorded Claude answer needs a helper that holds
   the fake `claude` at a frame.

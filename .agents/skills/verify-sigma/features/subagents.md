@@ -411,27 +411,28 @@ Preconditions:
 
 - **Claude subagent asks** (`--fake-claude subagent_asks`).
   `drive.ts r tui start --provider claude`, wait for `READY`, type
-  `Use the Task tool to start a general-purpose subagent that reads notes.txt with the Read tool and reports where the gnome lives. Do not read it yourself. Then reply with where the gnome lives, in three words.`
+  ``Use the Task tool to start a general-purpose subagent that runs the bash command `touch made.txt` with the Bash tool and reports when it is done. Do not run it yourself. Then reply with exactly: made``
   and `Enter`, then wait for `waiting on you`:
-  `⧉ Find gnome location in notes (general-purpose) waiting on you` over
+  `⧉ Create made.txt file (general-purpose) waiting on you` over
   `Bash(touch made.txt)` and `allow Bash(touch made.txt)?  ^Y  allow  ^N  deny`.
   Press `C-y` and wait for `READY`: the card reads `done` over
-  `Made made.txt.`, then `Under the floor.` `drive.ts r rpc conversation/list`
+  ``Done. `touch made.txt` ran in <checkout>``, then `made`. `drive.ts r rpc conversation/list`
   lists the subagent with `lineage` `parent`, `root`, `call`,
-  `"title": "Find gnome location in notes"` and
+  `"title": "Create made.txt file"` and
   `"agentType": "general-purpose"`, and no `task`. `drive.ts r tui stop`,
   then `drive.ts r tui start --conversation <subagent id>` and
   `drive.ts r tui wait 'INPUT GOES THROUGH ITS PARENT'`: its prompt, the call
-  `✓ allowed by ada`, and `Made made.txt.`
+  `✓ allowed by ada`, and its report ``Done. `touch made.txt` ran``.
   `drive.ts r rpc conversation/submit '{"conversation": "<subagent id>", "author": {"id": "ada", "name": "ada"}, "text": "hi", "requestId": "r1"}'`
   fails with `TakesNoInput`.
 
-- **Claude subagent, plain** (`--fake-claude subagent`). Send the same prompt
-  as `Claude subagent asks`, with `drive.ts r tui start --provider claude`, and wait for
-  `Under the floor.` and `READY`:
-  `⧉ Find gnome location in notes (general-purpose) done` over its last
+- **Claude subagent, plain** (`--fake-claude subagent`). Send
+  `Use the Task tool to start a general-purpose subagent that reads notes.txt with the Read tool and reports where the gnome lives. Do not read it yourself. Then reply with where the gnome lives, in three words.`
+  with `drive.ts r tui start --provider claude`, and wait for
+  `The gnome lives under the floor.` and `READY`:
+  `⧉ Locate gnome in notes.txt (general-purpose) done` over its last
   message, and the answer. No call waits on you. `conversation/list` lists
-  the subagent with `"title": "Find gnome location in notes"` and
+  the subagent with `"title": "Locate gnome in notes.txt"` and
   `"agentType": "general-purpose"`. `drive.ts r watch <subagent id> --save plain-sub`
   holds the prompt, a `Read` call that ran without a `sigma.approval`, its
   `pi.tool-result`, the answer and a `sigma.run_end` `answered`. `drive.ts r tui stop`, then
@@ -442,14 +443,16 @@ Preconditions:
   the fake does not read from your disk.
 
 - **Claude subagent stopped over the wire** (`--fake-claude subagent_stopped`).
-  Send the same prompt and wait for `(general-purpose) working`. Run
+  Send the prompt of `Claude subagent, plain` and wait for `(general-purpose) working`. Run
   `drive.ts r rpc conversation/interrupt '{"conversation": "<subagent id>", "author": {"id": "ada", "name": "ada"}}'`,
   then wait for `READY`: the card reads `interrupted`, and the parent goes on
-  to `The subagent was stopped.` `evidence/fake-claude/log.ndjson` holds a
+  to `The subagent call was interrupted before it started`, the recorded
+  model's own words. `evidence/fake-claude/log.ndjson` holds a
   `stop_task` request.
 
 - **Claude subagent stopped with `Esc` in its own pane**
-  (`--fake-claude subagent_stopped`). Send the same prompt and wait for
+  (`--fake-claude subagent_stopped`). Send the prompt of
+  `Claude subagent, plain` and wait for
   `(general-purpose) working`. `drive.ts r tui stop`; the parent's run goes
   on. `drive.ts r tui start --conversation <subagent id>`,
   `drive.ts r tui wait 'INPUT GOES THROUGH ITS PARENT'`,
@@ -457,7 +460,8 @@ Preconditions:
   `▸ Read(<checkout>/notes.txt)`. Press `Escape`, wait for `interrupted`,
   `drive.ts r tui screen sub-stopped`: `◆ interrupted`. The log holds one
   `stop_task` request, and `drive.ts r watch <parent id> --save parent` ends
-  with the answer `The subagent was stopped.` and a `sigma.run_end`
+  with the answer `The subagent call was interrupted before it started, ...`
+  and a `sigma.run_end`
   `answered`: only the subagent stopped.
 
 ## Contexts
