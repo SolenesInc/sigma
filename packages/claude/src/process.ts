@@ -19,7 +19,7 @@ import { Clock, Deferred, type Duration, Effect, Exit, Option, Semaphore } from 
 import { z } from "zod"
 import { claudeEnvironment, toolSearchSettings } from "./environment.ts"
 import { Inbox } from "./inbox.ts"
-import { ENDED_WITH_PROCESS, Job } from "./links.ts"
+import { ENDED_WITH_PROCESS, Job, type JobEnd, STOPPED_WITH_RUN } from "./links.ts"
 import type { Said } from "./retell.ts"
 import {
   type Ended,
@@ -243,8 +243,8 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     const exit = Deferred.makeUnsafe<void>()
 
     /** Ends the jobs left working: a subagent lives in its process, and ends with it (D6 of s-evw1pn). */
-    const endJobs = () => {
-      for (const job of jobs.values()) job.inbox.push({ end: ENDED_WITH_PROCESS })
+    const endJobs = (end: JobEnd) => {
+      for (const job of jobs.values()) job.inbox.push({ end })
       jobs.clear()
       jobsByCall.clear()
     }
@@ -255,7 +255,7 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
         Effect.sync(() => {
           inbox.close()
           controller.abort()
-          endJobs()
+          endJobs(ENDED_WITH_PROCESS)
         }),
     )
 
@@ -663,7 +663,8 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       }).pipe(
         Effect.timeoutOption(within),
         Effect.map(Option.getOrElse(() => false)),
-        Effect.tap(() => Effect.sync(endJobs)),
+        // A person stopped the run: its subagents are stopped with it.
+        Effect.tap(() => Effect.sync(() => endJobs(STOPPED_WITH_RUN))),
       )
 
     return {

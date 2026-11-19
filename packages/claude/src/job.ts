@@ -4,7 +4,7 @@
 // A background `claude.job-anchor` in the parent owns the subagent's conversation, so the parent's run can end while
 // the job works (F6). The job ends when Claude Code says the subagent did, or with its process.
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import { endRun, LiveDoc, TaskServices } from "@sigma/harness"
+import { endRun, LiveDoc, type TaskApi, TaskServices } from "@sigma/harness"
 import { type AnyTask, defineTask, type EntryId, type NextTaskState, type TaskRuntime } from "@sigma/kernel"
 import { Deferred, Effect, Semaphore } from "effect"
 import { ENDED_WITH_PROCESS, type Job, type JobEnd, type JobLinks } from "./links.ts"
@@ -73,6 +73,18 @@ const work = (job: Job, transcript: Transcript, serially: <A, E>(effect: Effect.
     }
   })
 
+/** Ends the job aborted: its questions are withdrawn and its run ends `aborted`. */
+const endAborted = (links: JobLinks, runtime: JobRuntime, api: TaskApi) =>
+  runtime.commit((tx) =>
+    Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, JobNext, never> {
+      links.forget(runtime.taskId)
+      const live = yield* tx.doc(LiveDoc, runtime.conversationId)
+      yield* expireApprovals(tx, runtime.conversationId, runtime.taskId)
+      yield* endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "aborted" }, api.runOwner)
+      return { status: "terminal", outcome: { status: "aborted" } }
+    }),
+  )
+
 /** The newest entry of the subagent's conversation: what it answered. */
 const latest = (runtime: JobRuntime) => Effect.map(runtime.entries({}, 1), (page) => page.items[0]?.id)
 
@@ -97,6 +109,7 @@ export const makeJobTask = (links: JobLinks) =>
           })
           yield* Deferred.succeed(job.callbacks, transcript.callbacks)
           const ended = yield* work(job, transcript, serially)
+          if (ended.status === "aborted") return yield* endAborted(links, runtime, api)
           const answer = yield* latest(runtime)
           yield* runtime.commit((tx) =>
             Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, JobNext, never> {
@@ -125,15 +138,7 @@ export const makeJobTask = (links: JobLinks) =>
           const { job } = yield* Deferred.await(link)
           yield* Effect.ignore(Effect.tryPromise(job.stop))
         }
-        links.forget(runtime.taskId)
-        yield* runtime.commit((tx) =>
-          Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, JobNext, never> {
-            const live = yield* tx.doc(LiveDoc, runtime.conversationId)
-            yield* expireApprovals(tx, runtime.conversationId, runtime.taskId)
-            yield* endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "aborted" }, api.runOwner)
-            return { status: "terminal", outcome: { status: "aborted" } }
-          }),
-        )
+        yield* endAborted(links, runtime, api)
       }),
   })
 
