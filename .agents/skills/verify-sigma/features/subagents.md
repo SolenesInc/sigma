@@ -52,7 +52,8 @@ subagent's requests keep of the prompt cache is in
   on the idle parent, stops every run under it, and the card shows
   `interrupted` (`interrupt-idle` in [Interrupt](./interrupt.md)). Stopping
   just a subagent, from its own conversation, stops its run, not its parent.
-  The same holds for the subagents Claude Code starts in the background.
+  The subagents Claude Code starts in the background differ: Claude Code
+  stops them with its parent's run.
 - `subagent-exec` makes `sigma exec` without `--auto` deny the calls its
   subagents would ask about, as it does its own; `exec` follows every
   conversation of its tree.
@@ -519,6 +520,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - subagent-claude: a call a Claude subagent wants to make waits for a person in the subagent's conversation
 - subagent-interrupt: stopping a Claude subagent stops only it, and its parent's run carries on
 - subagent-interrupt: stopping a run ends the Claude subagents working under it
+- subagent-interrupt: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, not cut off
 - claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run
 - subagent-spawn: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own
 - subagent-claude: a Claude subagent that hands back its report answers with the report, not Claude Code's placeholder

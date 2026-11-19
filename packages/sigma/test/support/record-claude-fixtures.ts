@@ -230,6 +230,18 @@ const journeys: Record<string, Journey> = {
       await s.quiet(1)
     },
   },
+  subagent_background_interrupted: {
+    play: async (s) => {
+      await s.submit(
+        "Use the Agent tool with run_in_background set to true to start a general-purpose subagent that runs the bash command `touch made.txt` with the Bash tool and reports when it is done. Do not wait for it, and do not run it yourself. Reply with exactly: started",
+      )
+      // The person stops the parent's run while its background subagent waits on them: Claude Code kills the subagent.
+      const child = await s.subagent()
+      await s.asked(child)
+      await s.interrupt()
+      await s.until(() => runEnds(s.seen()).length >= 1)
+    },
+  },
   bash_background_stopped: {
     ask: "auto",
     play: async (s) => {
