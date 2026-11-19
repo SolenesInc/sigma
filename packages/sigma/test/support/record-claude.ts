@@ -5,6 +5,8 @@
 // the fake binds them. What describes the recording machine's own setup, its skills, commands, plugins, MCP servers
 // and hooks, is left out, and its home directory becomes /home/person. Claude Code still loads the recording user's own
 // settings and CLAUDE.md, and what Claude writes may quote them: read a recording before committing it.
+// When sigma closes the process after a turn's `result`, the close waits for Claude Code's `idle`, so the recording
+// holds the frame that ends the turn.
 import { appendFileSync } from "node:fs"
 import { homedir } from "node:os"
 
@@ -66,6 +68,12 @@ const lines = async (stream: ReadableStream<Uint8Array>, each: (line: string) =>
   }
 }
 
+// The `idle` a turn's first `result` waits for; settled, and `ended`, while no result waits.
+let turnEnd = Promise.withResolvers<void>()
+turnEnd.resolve()
+let ended = true
+const idle = () => turnEnd.promise
+
 const outbound = lines(Bun.stdin.stream(), (line) => {
   const frame = JSON.parse(line)
   // The fake binds each control request's id and each user message's uuid as it receives them.
@@ -73,12 +81,24 @@ const outbound = lines(Bun.stdin.stream(), (line) => {
   if (typeof id === "string" && !chosen.has(id)) chosen.set(id, `<sigma:${chosen.size + 1}>`)
   record("expect_outbound", frame)
   child.stdin.write(`${line}\n`)
-}).then(() => child.stdin.end())
+})
+  .then(idle)
+  .then(() => child.stdin.end())
+process.on("SIGTERM", () => void idle().then(() => child.kill()))
 
 const inbound = lines(child.stdout, (line) => {
   const frame = JSON.parse(line)
   // `/clear` moves the session to a new id; later frames carry it.
   if (session === undefined && typeof frame.session_id === "string") session = frame.session_id
+  // A steered turn sends a result per message before its one idle: keep the first one's promise until then.
+  if (frame.type === "result" && ended) {
+    ended = false
+    turnEnd = Promise.withResolvers<void>()
+  }
+  if (frame.type === "system" && frame.subtype === "session_state_changed" && frame.state === "idle") {
+    ended = true
+    turnEnd.resolve()
+  }
   const kept = scrub(frame)
   if (kept !== undefined) record("emit_inbound", kept)
   process.stdout.write(`${line}\n`)

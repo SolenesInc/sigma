@@ -172,7 +172,7 @@ test("claude-resume, claude-live: a Claude Code process that exits while it wait
   const [first, second] = claude.spawns()
   expect(second).toMatchObject({
     "--resume": first!["--session-id"],
-    "--resume-session-at": "190a62a3-be35-438c-961e-f0de63b6ca5c",
+    "--resume-session-at": "8378282d-194c-4813-b9e4-a9bb4564f0c0",
   })
   expect(claude.userTexts(1)).toEqual([["Which word did I ask you to remember? Reply with that word only."]])
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: PLUM", "run_end: answered"])
@@ -201,7 +201,8 @@ test("claude-session-gone: when Claude Code lost the session, a fresh one is giv
       "Which word did I ask you to remember? Reply with that word only.",
     ],
   ])
-  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: PLUM", "run_end: answered"])
+  // What the model made of it: haiku answers the retold "Reply with exactly: noted" rather than the question.
+  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: noted", "run_end: answered"])
   expect(runEnds(session.view.seen()).map((end) => end.outcome)).toEqual(["answered", "answered"])
 })
 
@@ -215,14 +216,14 @@ test("claude-live, cache-claude-turns: the next run reaches the Claude Code proc
   // The third run went to the fresh process the second one started.
   expect(claude.spawns()).toHaveLength(3)
   expect(claude.userTexts(2).at(-1)).toEqual(["Now reply with that word in lowercase."])
-  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: plum", "run_end: answered"])
+  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: lowercase: plum", "run_end: answered"])
   // The first process's totals and the second's last ones: the second process's first result is inside its last.
   const usage = session.view.view().docs["pi.usage"] as { models: Record<string, Record<string, number>> }
   expect(usage.models["claude/claude-haiku-5-5"]).toMatchObject({
     input: 2 + 4,
-    output: 4 + 10,
-    cacheRead: 16_112 + 37_850,
-    cacheWrite: 9_309 + 13_157,
+    output: 4 + 13,
+    cacheRead: 16_063 + 32_246,
+    cacheWrite: 4_216 + 10_012,
   })
 })
 
@@ -484,7 +485,7 @@ test("claude-cut-off: a run cut off by a server stop resumes, and Claude Code is
   const view = watchView(client, first.conversation)
   await view.until(settled(1))
   const [call] = calls(view.seen())
-  expect(claude.spawns()[1]).toMatchObject({ "--resume-session-at": "b2a87c3c-db3b-4459-9666-b8c4c38bc556" })
+  expect(claude.spawns()[1]).toMatchObject({ "--resume-session-at": "38aaebcd-2134-4070-8c86-03e88a34ffa6" })
   expect(claude.userTexts(1)).toEqual([
     [`Your Bash call ${call!.id} was cut off: interrupted; it may or may not have taken effect`],
   ])
@@ -565,7 +566,7 @@ test("claude-resume: a run that answered before the server stopped is not run ag
     "user: First write one short sentence saying that you will read the notes. Then use the Read tool to read notes.txt. Then reply with where the gnome lives, in three words.",
     "assistant: I will read the notes.",
     "assistant: ",
-    "assistant: Under the floor.",
+    "assistant: The gnome lives under the floor.",
     "run_end: answered",
   ])
   expect(claude.spawns()).toHaveLength(1)
@@ -585,7 +586,7 @@ test("claude-read: a skill Claude Code runs shows as its call and result, and Cl
   ])
 })
 
-const AGENT_CALL = "toolu_01DxmcUXKnbFWBQecJLTs1n3"
+const AGENT_CALL = "toolu_01FRRPpVEFf9Yhtae39dpsvM"
 
 /** The conversation of the first subagent Claude started, from its entry in the parent. */
 const subagentOf = async (session: Awaited<ReturnType<typeof conversationWith>>) => {
@@ -619,20 +620,23 @@ test("subagent-claude: a Claude subagent works in a conversation of its own unde
   expect(child.data).toEqual({
     call: AGENT_CALL,
     conversation: Number(child.id),
-    title: "Find gnome location in notes",
+    title: "Locate gnome in notes.txt",
     agentType: "general-purpose",
   })
   const summary =
-    "The gnome lives under the floor.\n\nThe exact line from `" +
+    "The gnome lives under the floor. The file `" +
     session.server.home.dir +
-    "/notes.txt` (line 1) is: `the gnome lives under the floor`\n\nI did not modify any files."
+    '/notes.txt` has one relevant line, line 1: "the gnome lives under the floor". Line 2 is empty.'
   const told = transcript(child.view.seen())
-  expect(told[0]).toStartWith("user: Read the file notes.txt using the Read tool.")
+  expect(told[0]).toStartWith("user: Use the Read tool to read the file notes.txt")
   expect(told.slice(1)).toEqual(["assistant: ", `assistant: ${summary}`, "run_end: answered"])
   expect(results(child.view.seen())).toEqual([
     expect.objectContaining({ text: "1\tthe gnome lives under the floor\n2\t", isError: false }),
   ])
-  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: Under the floor.", "run_end: answered"])
+  expect(transcript(session.view.seen()).slice(-2)).toEqual([
+    "assistant: The gnome lives under the floor.",
+    "run_end: answered",
+  ])
 })
 
 test("subagent-claude: a call a Claude subagent wants to make waits for a person in the subagent's conversation", async () => {
@@ -650,8 +654,8 @@ test("subagent-claude: a call a Claude subagent wants to make waits for a person
   expect(claude.permissionAnswers()).toEqual([
     {
       behavior: "allow",
-      toolUseID: "toolu_014CZioACz8p6vaiRZxtSoto",
-      updatedInput: { command: "touch made.txt", description: "Create made.txt" },
+      toolUseID: "toolu_01Mg2nJTaeVoBSQLsEyGBgTo",
+      updatedInput: { command: "touch made.txt", description: "Create made.txt in the current working directory" },
     },
   ])
   expect(runEnds(child.view.seen())).toEqual([expect.objectContaining({ outcome: "answered" })])
@@ -699,7 +703,7 @@ test("subagent-interrupt: stopping a Claude subagent stops only it, and its pare
 
   expect(runEnds(child.view.seen())).toEqual([expect.objectContaining({ outcome: "interrupted" })])
   expect(transcript(session.view.seen()).slice(-2)).toEqual([
-    "assistant: The subagent was stopped.",
+    "assistant: The subagent call was interrupted before it started, so I don't have a location for the gnome yet. I haven't read notes.txt myself, as you asked. Do you want me to launch the subagent again?",
     "run_end: answered",
   ])
   expect(claude.log().some((entry) => entry.received?.request?.subtype === "stop_task")).toBe(true)
@@ -878,7 +882,7 @@ test("subagent-spawn: a Claude subagent is listed under its parent with the call
     parent: session.conversation,
     root: session.conversation,
     call: AGENT_CALL,
-    title: "Find gnome location in notes",
+    title: "Locate gnome in notes.txt",
     agentType: "general-purpose",
   })
   const refused = await submit(session.client, child.id, "hello?")

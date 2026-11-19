@@ -156,18 +156,18 @@ Preconditions:
 - **Read without asking** (`read`). Run
   `drive.ts r tui start --provider claude`, `drive.ts r tui wait READY`,
   `drive.ts r tui type 'Use the Read tool to read notes.txt, then reply with where the gnome lives, in three words.'`,
-  `drive.ts r tui key Enter`, `drive.ts r tui wait 'Under the floor.'`,
+  `drive.ts r tui key Enter`, `drive.ts r tui wait 'The gnome lives under the floor.'`,
   `drive.ts r tui wait READY`, `drive.ts r tui screen read`:
   `▸ Read(<checkout>/notes.txt)` over the recorded lines
-  `1  the gnome lives under the floor`, then `Under the floor.`, and no
+  `1  the gnome lives under the floor`, then `The gnome lives under the floor.`, and no
   `allow this call?` was ever shown. The log has no `"answered": "can_use_tool"`
   line. `drive.ts r watch <id> --save read` holds `sigma.user`, a `pi.assistant`
-  calling `Read`, its `pi.tool-result`, the answer `Under the floor.` and a
+  calling `Read`, its `pi.tool-result`, the answer `The gnome lives under the floor.` and a
   `sigma.run_end` `answered`; `docs` holds `pi.usage` with the run's spend.
   A second `watch <id> --save reopen` shows the same entries. In a fresh run,
   `drive.ts r sigma exec --provider claude 'Use the Read tool to read notes.txt, then reply with where the gnome lives, in three words.'`
   exits 0 with stderr `› Read(<checkout>/notes.txt)` and no denial, stdout
-  `Under the floor.`
+  `The gnome lives under the floor.`
 - **Exec denies** (`bash_declined`). Run
   ``drive.ts r sigma exec --provider claude 'Run the bash command `touch declined.txt` with the Bash tool. If it is not allowed, reply with exactly: declined'``:
   exit 0, stderr `› Bash(touch declined.txt)` and
@@ -193,7 +193,8 @@ Preconditions:
   its process with `kill -9 <pid>`, the `"pid"` on the log's `"spawn": 0`
   line, which a live process survives as a cold start. Then
   `drive.ts r sigma exec --conversation <id> 'Which word did I ask you to remember? Reply with that word only.'`:
-  exit 0, stdout `PLUM`. In the log, `"spawn": 1` has
+  exit 0, stdout `noted`: the recorded model answers the retold
+  `Reply with exactly: noted` rather than the question. In the log, `"spawn": 1` has
   `--resume=<spawn 0's --session-id>`, which the recording answers
   `No conversation found with session ID`; `"spawn": 2` has a new
   `--session-id` and received one user message of four texts:
@@ -201,7 +202,7 @@ Preconditions:
   `Remember the word PLUM. Reply with exactly: noted`, `You answered: noted`,
   and the question. Then
   `drive.ts r sigma exec --conversation <id> 'Now reply with that word in lowercase.'`:
-  stdout `plum`, no `"spawn": 3`, and `"spawn": 2` received one more user
+  stdout `lowercase: plum`, no `"spawn": 3`, and `"spawn": 2` received one more user
   message holding only that prompt: the live process served the run.
   `drive.ts r watch <id> --save live` shows three runs, each ending
   `answered`, and `docs` `pi.usage` counts the third run's spend once.
@@ -390,9 +391,16 @@ Package, `packages/claude/test/claude.test.ts`:
 - A new recording comes from a real Claude Code through
   `packages/sigma/test/support/record-claude`: give it to a server as the
   Claude executable with `RECORD_CLAUDE_TO=fixtures/claude/<name>.ndjson`.
-  It leaves out the machine's own skills, commands and hooks, but what Claude
-  writes may quote your settings or CLAUDE.md: read the file before
-  committing it.
+  It holds the process open until Claude Code's `idle`, so every turn ends
+  with `result` then `idle`. It leaves out the machine's own skills, commands
+  and hooks, but what Claude writes may quote your settings or CLAUDE.md:
+  read the file before committing it.
+- `packages/sigma/test/support/record-claude-fixtures.ts <journey>` records
+  the provider tests' journeys on claude-haiku-5-5 with your sign-in, and
+  `derive-claude-fixtures.ts` then rebuilds `subagent_working` from them.
+  Claude Code sometimes starts a subagent in the background: a `subagent`
+  recording with `background_tasks_changed` is not the foreground journey its
+  tests describe, so record it again.
 - The fake does not run Claude Code's tools: no `made.txt` appears, and a
   call's result is the recorded one. Prove sigma's side by the screen, the
   commits and the log.
@@ -410,10 +418,6 @@ Package, `packages/claude/test/claude.test.ts`:
   50,000 filler words of start instructions, cut from the recordings: the fake
   does not compare what sigma sends. Their compaction comes 58 and 3 minutes
   after the last run, by the time of the request.
-- The `resume_after_kill` recording expected
-  `...was cut off: interrupted: sigma stopped while this ran; it may or may not have taken effect`;
-  sigma now sends `...was cut off: interrupted; it may or may not have taken effect`.
-  The log shows today's wording, which is right.
 - `tui wait` matches the prompt too: wait on text the prompt does not hold,
   such as `may or may not` or `READY`, not on the reply the prompt asks for.
 - A conversation's directory is the checkout for the TUI and `exec`; the
