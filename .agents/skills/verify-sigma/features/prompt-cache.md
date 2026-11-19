@@ -185,7 +185,8 @@ Preconditions:
   `--session-id` of its own.
 - **A Claude fork subagent** (`cache-claude-subagent`). `drive.ts r up --fake-claude fork_wake`,
   `drive.ts r sigma exec --provider claude --auto 'Use the Agent tool with subagent_type "fork" to have a forked subagent reply with exactly: forked. Then reply with exactly what it said.'`:
-  stdout `forked`, stderr `› Agent`.
+  stdout `The forked agent is still running, ...` then `forked`, Claude's
+  turn after the fork's report, stderr `› Agent`.
   `drive.ts r rpc conversation/list` holds a second conversation whose
   `lineage` is `{"parent": "<id>", "title": "Fork reply test", "agentType": "fork", ...}`.
   It ends `answered`, as Gotchas says.
