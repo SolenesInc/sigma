@@ -233,6 +233,11 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     /** The subagents Claude Code started and has not said ended, by task id, and by the Agent call that started each. */
     const jobs = new Map<string, Job>()
     const jobsByCall = new Map<string, Job>()
+    /**
+     * The job each subagent's start made, by the Agent call that started it, until the conversation that hosts it
+     * takes it: a subagent can end before it is hosted, as one a subagent started, or one started while no run served.
+     */
+    const starts = new Map<string, Job>()
     /** The calls of own tools by id, once read: the job whose subagent made one, or `undefined` for the run's. */
     const ownCalls = new Map<string, Deferred.Deferred<Job | undefined>>()
     /** What takes the frames that are not a job's: the run served, or a stop. While none does, they wait in `held`. */
@@ -435,7 +440,11 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       send,
       serially: (effect) => serial.withPermits(1)(effect),
       spent,
-      jobOf,
+      started: (call) => {
+        const job = starts.get(call)!
+        starts.delete(call)
+        return job
+      },
     }
 
     const iterator = messages[Symbol.asyncIterator]()
@@ -521,7 +530,9 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     const route = (message: SDKMessage): Job | undefined => {
       if (message.type === "system") {
         if (message.subtype === "task_started" && message.task_type === "local_agent" && message.tool_use_id) {
-          jobsByCall.set(message.tool_use_id, jobOf(message.task_id))
+          const job = jobOf(message.task_id)
+          jobsByCall.set(message.tool_use_id, job)
+          starts.set(message.tool_use_id, job)
           return message.parent_task_id === undefined ? undefined : jobs.get(message.parent_task_id)
         }
         if (message.subtype === "task_notification" && message.tool_use_id) {

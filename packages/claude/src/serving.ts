@@ -69,8 +69,8 @@ export interface ServingProcess {
   readonly serially: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>
   /** What each model spent since the process's previous result, from its running totals (F11). */
   readonly spent: (modelUsage: ModelUsage) => ReadonlyArray<readonly [model: string, usage: Usage]>
-  /** The process's job for a subagent Claude Code started, by its task id. */
-  readonly jobOf: (task: string) => Job
+  /** The job the process made for a subagent Claude Code started, by the Agent call that started it; once. */
+  readonly started: (call: string) => Job
 }
 
 export type ModelUsage = Record<
@@ -140,7 +140,7 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
     provider,
     modelId,
     hosting: ctx.hosting,
-    jobOf: process.jobOf,
+    started: process.started,
     position,
   })
 

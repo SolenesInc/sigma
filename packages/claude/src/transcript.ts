@@ -163,8 +163,8 @@ export type TranscriptScope = {
   readonly provider: string
   readonly modelId: string
   readonly hosting: Hosting
-  /** The process's job for a subagent Claude Code started, by its task id. */
-  readonly jobOf: (task: string) => Job
+  /** The job the process made for a subagent Claude Code started, by the Agent call that started it; once. */
+  readonly started: (call: string) => Job
   /** The run's own conversation: its entries move its position. A job's has none. */
   readonly position?: Position
 }
@@ -599,10 +599,10 @@ export const makeTranscript = (scope: TranscriptScope) => {
           return undefined
         }),
       )
-      const { hosting, jobOf } = scope
+      const { hosting, started } = scope
       yield* Deferred.succeed(hosting.links.link(hosted!), {
-        job: jobOf(frame.task_id),
-        from: { agent, own, provider, modelId, hosting, jobOf },
+        job: started(frame.tool_use_id),
+        from: { agent, own, provider, modelId, hosting, started },
       })
     })
 
