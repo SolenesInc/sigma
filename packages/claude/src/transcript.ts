@@ -283,7 +283,8 @@ export const makeTranscript = (scope: TranscriptScope) => {
     }
     return run(
       Effect.map(
-        Effect.flatMap(sighted(asked), (seen) => record(seen)),
+        // Claude Code runs the call with these arguments, which it may have normalized, such as a path made absolute.
+        Effect.flatMap(sighted(asked), (seen) => record(seen, asked.arguments)),
         () => ({}),
       ),
       signal,

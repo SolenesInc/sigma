@@ -197,9 +197,14 @@ test("claude-read: parallel calls of one response are each committed with the re
         "In a single message, call the Read tool twice in parallel: once on a.txt and once on b.txt. Then reply with both contents, separated by a comma.",
       )
       const context = yield* conversation.context()
-      return { entries: yield* entries(conversation), context: context.messages.map((message) => message.role) }
+      return { cwd, entries: yield* entries(conversation), context: context.messages.map((message) => message.role) }
     }),
   )
+  // Each call is committed with the arguments Claude Code ran it with, which it made absolute, not as the model wrote it.
+  expect(said(all.entries).filter((line) => line.startsWith("call"))).toEqual([
+    `call Read ${JSON.stringify({ file_path: join(all.cwd, "a.txt") })}`,
+    `call Read ${JSON.stringify({ file_path: join(all.cwd, "b.txt") })}`,
+  ])
   expect(said(all.entries).filter((line) => line.startsWith("result"))).toEqual([
     "result Read: 1\tapple\n2\t",
     "result Read: 1\tbanana\n2\t",
