@@ -109,7 +109,11 @@ export const makeJobTask = (links: JobLinks) =>
           })
           yield* Deferred.succeed(job.callbacks, transcript.callbacks)
           const ended = yield* work(job, transcript, serially)
-          if (ended.status === "aborted") return yield* endAborted(links, runtime, api)
+          if (ended.status === "aborted") {
+            // Its parent's run was stopped: Claude Code is told to stop the subagent, as its abort tells it.
+            yield* Effect.ignore(Effect.tryPromise(job.stop))
+            return yield* endAborted(links, runtime, api)
+          }
           const answer = yield* latest(runtime)
           yield* runtime.commit((tx) =>
             Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, JobNext, never> {

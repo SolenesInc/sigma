@@ -18,7 +18,7 @@ export type JobItem = { readonly frame: SDKMessage } | { readonly end: JobEnd }
 /** What a job ends with when its process ends before Claude Code said the subagent did (D6 of s-evw1pn). */
 export const ENDED_WITH_PROCESS: JobEnd = { status: "stopped", summary: "Claude Code ended before the subagent did" }
 
-/** What a job ends with when a person stops the run its process served: as if they had stopped the job itself. */
+/** What a job ends with when a person stops the run its process served: as if they had stopped the job itself, at once. */
 export const STOPPED_WITH_RUN: JobEnd = { status: "aborted" }
 
 /** One subagent Claude Code started, as its process routes to it. */

@@ -15,7 +15,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk"
 import type { Agent } from "@sigma/harness"
 import type { Usage } from "@sigma/models"
-import { Clock, Deferred, type Duration, Effect, Exit, Option, Semaphore } from "effect"
+import { Cause, Clock, Deferred, type Duration, Effect, Exit, Option, Semaphore } from "effect"
 import { z } from "zod"
 import { claudeEnvironment, toolSearchSettings } from "./environment.ts"
 import { Inbox } from "./inbox.ts"
@@ -598,7 +598,19 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
         if (next.done) return yield* Deferred.succeed(exit, undefined)
       }
     })
-    yield* Effect.forkScoped(reader)
+    /** However the reader ends, the process has: a reader that died ends the run it served instead of stalling it. */
+    const readerEnded = (done: Exit.Exit<void>) =>
+      Effect.andThen(
+        Effect.sync(() => {
+          if (ended !== undefined) return
+          ended = { error: Exit.isFailure(done) ? Cause.squash(done.cause) : undefined }
+          const now = taker
+          taker = undefined
+          now?.exit(ended.error)
+        }),
+        Deferred.succeed(exit, undefined),
+      )
+    yield* Effect.forkScoped(Effect.onExit(reader, readerEnded))
 
     const serve = (run: RunContext, opening: ReadonlyArray<Said>) =>
       Effect.scoped(
@@ -648,6 +660,9 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
 
     const stop = (within: Duration.Input) =>
       Effect.gen(function* () {
+        // A person stopped the run: its subagents are stopped with it, as an abort of each would, before Claude Code
+        // reports how its interrupt ended them.
+        yield* serial.withPermits(1)(Effect.sync(() => endJobs(STOPPED_WITH_RUN)))
         yield* Effect.promise(() => messages.interrupt().catch(() => undefined))
         const done = Deferred.makeUnsafe<boolean>()
         const stopping: Taker = {
@@ -660,12 +675,7 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
           exit: () => Deferred.doneUnsafe(done, Exit.succeed(false)),
         }
         return yield* Effect.andThen(attach(stopping), Deferred.await(done)).pipe(Effect.ensuring(detach(stopping)))
-      }).pipe(
-        Effect.timeoutOption(within),
-        Effect.map(Option.getOrElse(() => false)),
-        // A person stopped the run: its subagents are stopped with it.
-        Effect.tap(() => Effect.sync(() => endJobs(STOPPED_WITH_RUN))),
-      )
+      }).pipe(Effect.timeoutOption(within), Effect.map(Option.getOrElse(() => false)))
 
     return {
       serve,
