@@ -55,8 +55,8 @@ Preconditions:
   `script` and `script-code-mode` ("Script in code mode"); `claude` has
   no `defaultModel` and Claude Code's models, `sonnet`, `fable`, `opus` and
   `haiku`, each with `"efforts": ["low", "medium", "high", "xhigh", "max"]`;
-  `openai` has `"defaultModel": "gpt-5.5"` and the list sigma ships, from
-  `gpt-6.1-sol` to `gpt-5.5`, with `efforts` and a `defaultEffort`.
+  `openai` has `"defaultModel": "gpt-6.1-sol"`, the first of the list sigma
+  ships, from `gpt-6.1-sol` to `gpt-5.5`, with `efforts` and a `defaultEffort`.
 - **Pick.** Run `drive.ts r tui start`, `drive.ts r tui wait READY`: the
   status bar ends `script · script  sigma <version>`. Type `/model`, press `Enter`,
   `drive.ts r tui wait ' MODEL '`, `drive.ts r tui screen models`: the
@@ -202,7 +202,7 @@ shows `none running`, run `drive.ts r serve` again.
   First check: `drive.ts r serve` and `drive.ts r rpc providers/list '{}'`
   list `openai` as `"status": "ready"` with your account; otherwise stop and
   report what it shows. Run the same first `exec` and question, switching to
-  `{"provider": "openai", "model": "gpt-5.5"}` instead: stdout `pelican`.
+  `{"provider": "openai"}` instead, its default model: stdout `pelican`.
   `drive.ts r rpc models/list '{}'` lists `openai`'s models as ChatGPT
   serves them today, the same slugs as
   `/tmp/sigma-verify/r/home/cache/openai-models.json`; copy that file into

@@ -4,6 +4,7 @@ import { claudeAccount, type ClaudeProcessSettings } from "@sigma/claude"
 import { type Agent, type AgentLimits, DEFAULT_AGENT_LIMITS } from "@sigma/harness"
 import { defineDoc } from "@sigma/kernel"
 import {
+  defaultModelOf,
   type ProviderInstance,
   type ProviderKind,
   ScriptStep,
@@ -131,9 +132,10 @@ export const agentModel = (selection: ModelSelection, instance: ProviderInstance
     if (selection.effort !== undefined && !isThinkingLevel(selection.effort)) {
       return yield* new UnknownEffort({ effort: selection.effort, efforts: [...THINKING_LEVELS] })
     }
+    // An empty id is the provider's own choice, as Claude Code makes it.
+    const modelId = selection.model ?? (yield* defaultModelOf(instance)) ?? ""
     return {
-      // An empty id is the provider's own choice, as Claude Code makes it.
-      model: { provider: selection.provider, modelId: selection.model ?? instance.defaultModel ?? "" },
+      model: { provider: selection.provider, modelId },
       ...(selection.effort === undefined ? {} : { thinkingLevel: selection.effort }),
     }
   })

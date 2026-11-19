@@ -20,8 +20,6 @@ export type { Catalog, Credentials }
 
 export const BASE_URL = "https://chatgpt.com/backend-api"
 export const AUTH_BASE = "https://auth.openai.com"
-/** The model a conversation that names none gets. */
-export const DEFAULT_MODEL = "gpt-5.5"
 /** Who ChatGPT is told sent each request and sign-in. */
 export const ORIGINATOR = "sigma"
 
@@ -125,7 +123,6 @@ export const openChatGpt = Effect.fnUntraced(function* (options: Omit<ChatGptOpt
 
   const account: ProviderAccount = {
     kind: "openai",
-    defaultModel: DEFAULT_MODEL,
     health: () => health,
     models: (refresh) =>
       Effect.gen(function* () {

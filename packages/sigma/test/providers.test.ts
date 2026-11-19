@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
 import { EMAIL, FakeOpenAi, signIn } from "./support/openai.ts"
 import { errorTag, RawClient } from "./support/raw.ts"
-import { person, runningServer, watchView, tempHome } from "./support/server.ts"
+import { person, runningServer, settled, submit, watchView, tempHome } from "./support/server.ts"
 
 const startWith = async (client: RawClient, ask: Record<string, string> = {}) => {
   const reply = await client.call("conversation/start", { author: person("ada"), cwd: "/work", ...ask })
@@ -63,8 +63,9 @@ test("provider-config, signin-status, model-list: two instances of one provider 
   expect(models.map((list) => [list.provider, list.defaultModel])).toEqual([
     ["script", "script"],
     ["claude", undefined],
-    ["openai", "gpt-5.5"],
-    ["openai-work", "gpt-5.5"],
+    // ChatGPT can't be reached here, so the default is the first of the list sigma ships.
+    ["openai", "gpt-6.1-sol"],
+    ["openai-work", "gpt-6.1-sol"],
     ["claude-alt", undefined],
   ])
   const modelIds = (provider: string) => models.find((list) => list.provider === provider)!.models.map((m) => m.id)
@@ -323,7 +324,7 @@ test("openai-models: OpenAI's models come from ChatGPT, and the saved list answe
       client.close()
       expect(models).toEqual({
         provider: "openai",
-        defaultModel: "gpt-5.5",
+        defaultModel: "gpt-test",
         models: [
           {
             id: "gpt-test",
@@ -343,6 +344,31 @@ test("openai-models: OpenAI's models come from ChatGPT, and the saved list answe
   } finally {
     rmSync(home.dir, { recursive: true, force: true })
   }
+})
+
+test("openai-default-model: a conversation that names no model starts on the first model the account lists, and ChatGPT is asked for it", async () => {
+  await using fake = new FakeOpenAi()
+  fake.play("text_answer")
+  // As ChatGPT sent it on 2026-11-19, trimmed: hidden models among the listed ones, best first by priority.
+  fake.modelList = {
+    models: [
+      { slug: "gpt-6.1-sol", visibility: "list", priority: 3, tool_mode: "code_mode_only" },
+      { slug: "gpt-reserve", visibility: "hide", priority: 0, tool_mode: "code_mode_only" },
+      { slug: "gpt-6.1-terra", visibility: "list", priority: 1, tool_mode: "code_mode_only" },
+      { slug: "codex-auto-review", visibility: "hide", priority: 10, tool_mode: "code_mode_only" },
+    ],
+  }
+  await using server = await runningServer([], { openai: fake.options() })
+  await signIn(server.home)
+  const client = await RawClient.connect(server.home.socket)
+  const started = await startWith(client, { provider: "openai" })
+  expect(started.model).toEqual({ provider: "openai", model: "gpt-6.1-terra" })
+  expect((await openAiModels(client)).defaultModel).toBe("gpt-6.1-terra")
+  const view = watchView(client, started.conversation)
+  await submit(client, started.conversation, "hello")
+  await view.until(settled(1))
+  expect(JSON.parse(fake.responses()[0]!.body).model).toBe("gpt-6.1-terra")
+  client.close()
 })
 
 test("signin-refused: an answer for another sign-in is turned away, and a sign-in the browser refused fails saying why", async () => {

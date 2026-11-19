@@ -59,8 +59,8 @@ Preconditions:
   `drive.ts r rpc conversation/start '{"author": {"id": "ada", "name": "ada"}, "cwd": "/tmp"}'`:
   `"model": {"provider": "script", "model": "script"}`. Then
   `drive.ts r rpc conversation/start '{"author": {"id": "ada", "name": "ada"}, "cwd": "/tmp", "provider": "openai"}'`:
-  `"model": {"provider": "openai", "model": "gpt-5.5"}`, the provider's
-  default model filled in. Run the first again: it now starts with `openai`,
+  `"model": {"provider": "openai", "model": "gpt-6.1-sol"}`, the provider's
+  default model filled in: the first of the list sigma ships, with no sign-in. Run the first again: it now starts with `openai`,
   the provider chosen last.
 - **Unknown over the wire.** Run
   `drive.ts r rpc conversation/start '{"author": {"id": "ada", "name": "ada"}, "cwd": "/tmp", "provider": "nope"}'`.
@@ -76,7 +76,7 @@ Preconditions:
   Exit 1, empty stdout, stderr
   `not signed in to ChatGPT: could not read /tmp/sigma-verify/r/home/auth/openai.json: ...`.
   `rpc conversation/list` shows the conversation with
-  `"model": {"provider": "openai", "model": "gpt-5.5"}`.
+  `"model": {"provider": "openai", "model": "gpt-6.1-sol"}`.
 - **Signed out, TUI.** Run `drive.ts r tui start --provider openai`,
   `drive.ts r tui wait READY`, `drive.ts r tui type hi`,
   `drive.ts r tui key Enter`, `drive.ts r tui wait 'not signed in to ChatGPT'`,
