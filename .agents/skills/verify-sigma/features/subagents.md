@@ -45,10 +45,12 @@ subagent's requests keep of the prompt cache is in
   input that starts a run.
 - `subagent-followup` wakes an idle subagent with `followup_task`, and each of
   its answers reaches the parent.
-- `subagent-interrupt` stops the parent's run and every run under it with
-  `Esc` or `conversation/interrupt`; the card shows `interrupted`. Stopping
-  just a subagent, from its own conversation, stops it and the subagents
-  under it, not its parent.
+- `subagent-interrupt` stops the parent's run with `Esc` or
+  `conversation/interrupt`, and leaves its subagents working; a second `Esc`,
+  on the idle parent, stops every run under it, and the card shows
+  `interrupted` (`interrupt-idle` in [Interrupt](./interrupt.md)). Stopping
+  just a subagent, from its own conversation, stops its run, not its parent.
+  The same holds for the subagents Claude Code starts in the background.
 - `subagent-exec` makes `sigma exec` without `--auto` deny the calls its
   subagents would ask about, as it does its own; `exec` follows every
   conversation of its tree.

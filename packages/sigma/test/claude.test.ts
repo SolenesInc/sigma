@@ -852,11 +852,11 @@ test("cache-claude-subagent: Claude Code's fork subagent stays available, and si
   const child = await subagentOf(session)
   await child.view.until(childEnded)
   expect(calls(session.view.seen())).toMatchObject([{ name: "Agent", arguments: { subagent_type: "fork" } }])
-  expect(child.data).toMatchObject({ title: "Fork reply with exact word", agentType: "fork" })
-  expect(transcript(child.view.seen())[0]).toBe("user: Reply with exactly the single word: forked. Nothing else.")
+  expect(child.data).toMatchObject({ title: "Fork reply test", agentType: "fork" })
+  expect(transcript(child.view.seen())[0]).toBe("user: Reply with exactly the single word: forked")
 })
 
-test("claude-job-report, claude-wake: a background subagent that ends during the run reports in it, and Claude's turn after the report is that run's answer", async () => {
+test("claude-job-report, claude-wake: a background subagent that ends during the run reports in it, Claude's turn after the report is that run's answer, and the next prompt gets its own", async () => {
   using claude = new FakeClaude("fork_wake")
   await using session = await conversationWith(claude, { approvals: "auto" })
   await session.submit(FORK_PROMPT)
@@ -864,16 +864,30 @@ test("claude-job-report, claude-wake: a background subagent that ends during the
   const child = await subagentOf(session)
   await child.view.until(childEnded)
 
-  expect(transcript(child.view.seen()).slice(-2)).toEqual(["assistant: forked", "run_end: answered"])
+  const forked = 'Task: reply with the single word "forked".\n\nforked'
+  expect(transcript(child.view.seen()).slice(-2)).toEqual([`assistant: ${forked}`, "run_end: answered"])
   // Claude Code ran a second turn for the fork's end before it went idle: it belongs to this run (F3).
   expect(transcript(session.view.seen())).toEqual([
     `user: ${FORK_PROMPT}`,
     "assistant: ",
-    'report: The background agent "Fork reply with exact word" completed: forked',
-    "assistant: The forked agent is still running, so I don't have its reply yet. I'll relay its exact output once the completion notification arrives.",
+    `report: The background agent "Fork reply test" completed: ${forked}`,
+    "assistant: The forked agent is still running, so I don't have its reply yet. I'll relay exactly what it returns once the completion notification arrives.",
     "assistant: forked",
     "run_end: answered",
   ])
+  expect(Object.values((session.view.view().docs["claude.jobs"] as { jobs: object }).jobs)).toEqual([
+    expect.objectContaining({ kind: "agent", title: "Fork reply test", state: "done", conversation: Number(child.id) }),
+  ])
+
+  await session.submit("Reply with exactly: second")
+  await session.view.until(settled(2))
+  expect(transcript(session.view.seen()).slice(-3)).toEqual([
+    "user: Reply with exactly: second",
+    "assistant: second",
+    "run_end: answered",
+  ])
+  // The live process was told the prompt alone, never the report it read itself (D4).
+  expect(claude.userTexts()).toEqual([[FORK_PROMPT], ["Reply with exactly: second"]])
 })
 
 test("claude-wake, claude-command-job: a background command that ends after its run wakes the conversation, which shows its report and Claude's follow-up in a run nobody prompted", async () => {
@@ -903,6 +917,78 @@ test("claude-wake, claude-command-job: a background command that ends after its 
   expect(claude.log().filter((entry) => entry.received?.type === "user")).toHaveLength(1)
   expect(Object.values((session.view.view().docs["claude.jobs"] as { jobs: object }).jobs)).toEqual([
     expect.objectContaining({ task: "bxvwu23df", kind: "command", state: "done" }),
+  ])
+})
+
+const jobsOf = (watch: ViewWatch) =>
+  Object.values(
+    (watch.view().docs["claude.jobs"] as { jobs: Record<string, { state: string; kind: string }> } | undefined)?.jobs ??
+      {},
+  )
+
+test("claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run", async () => {
+  using claude = new FakeClaude("subagent_background_asks")
+  await using session = await conversationWith(claude)
+  await session.submit(
+    "Use the Agent tool with run_in_background set to true to start a general-purpose subagent that runs the bash command `touch made.txt` with the Bash tool and reports when it is done. Do not wait for it, and do not run it yourself. Reply with exactly: started",
+  )
+  const child = await subagentOf(session)
+  const approval = await waitingApproval(child.view)
+  // Claude's turn ended with its answer, but Claude Code holds the run open while its subagent works.
+  await session.view.until((watch) => transcript(watch.seen()).includes("assistant: started"))
+  expect(Object.keys(approvalsOf(session.view)?.requests ?? {})).toEqual([])
+  expect(approvalsOf(child.view)!.requests[approval]).toMatchObject({ tool: "Bash" })
+  expect(jobsOf(session.view)).toEqual([expect.objectContaining({ kind: "agent", state: "working" })])
+
+  await session.answer(true, child.view, child.id)
+  await session.view.until(settled(1))
+  await child.view.until(childEnded)
+  const answer =
+    "The `touch made.txt` command succeeded. It ran in `" + session.server.home.dir + "` and returned no error."
+  expect(transcript(child.view.seen()).slice(-2)).toEqual([`assistant: ${answer}`, "run_end: answered"])
+  expect(transcript(session.view.seen()).slice(-4)).toEqual([
+    "assistant: started",
+    `report: The background agent "Create made.txt file" completed: ${answer}`,
+    "assistant: The background agent finished. It ran `touch made.txt` in `" +
+      session.server.home.dir +
+      "` and reported success with no error.",
+    "run_end: answered",
+  ])
+  expect(jobsOf(session.view)).toEqual([expect.objectContaining({ state: "done" })])
+})
+
+const stopTasks = (claude: FakeClaude) =>
+  claude.log().filter((entry) => entry.received?.request?.subtype === "stop_task")
+
+test("interrupt-idle, claude-job-report: stopping a Claude run leaves its background command working, and stopping the idle conversation stops the command through Claude Code", async () => {
+  using claude = new FakeClaude("bash_background_stopped")
+  await using session = await conversationWith(claude, { approvals: "auto" })
+  await session.submit(
+    "Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started",
+  )
+  await session.view.until(settled(1))
+  await session.submit("Use the Bash tool to run: sleep 30. Then reply with exactly: slept")
+  await session.view.until((watch) => results(watch.seen()).length >= 2)
+
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  await session.view.until(settled(2))
+  expect(runEnds(session.view.seen()).map((end) => end.outcome)).toEqual(["answered", "interrupted"])
+  expect(jobsOf(session.view)).toEqual([expect.objectContaining({ kind: "command", state: "working" })])
+  expect(stopTasks(claude)).toEqual([])
+
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  await session.view.until((watch) => jobsOf(watch).every((job) => job.state === "stopped"))
+  await claude.logged((fake) => stopTasks(fake).length === 1)
+  expect(runEnds(session.view.seen())).toHaveLength(2)
+
+  // Claude Code did not wake for the stop: the report waits for the next run, which commits it first.
+  await session.submit("Reply with exactly: done")
+  await session.view.until(settled(3))
+  expect(transcript(session.view.seen()).slice(-4)).toEqual([
+    "user: Reply with exactly: done",
+    'report: The background command "Sleep 600 seconds in background" was stopped.',
+    "assistant: done",
+    "run_end: answered",
   ])
 })
 

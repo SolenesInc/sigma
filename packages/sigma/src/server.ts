@@ -5,6 +5,7 @@ import {
   claudeRunTasks,
   ClaudeJobsDoc,
   CONTINUED_ON_ITS_OWN,
+  JOB_KINDS,
   type JobReport,
   makeClaudeProcesses,
 } from "@sigma/claude"
@@ -103,7 +104,7 @@ import { endRun, LastRunEndDoc, switchModel, writeRunEnd } from "./run-end.ts"
 import { committedSignIns } from "./sign-ins.ts"
 import { codeModeTools, sigmaTools } from "./tools/index.ts"
 import { attachedImages } from "./images.ts"
-import { agentTools, type AgentTypes, interruptTree } from "./agents.ts"
+import { agentTools, type AgentTypes, interrupt } from "./agents.ts"
 import { followTreeStatus, type TreeStatuses } from "./status.ts"
 import { skillsOf, userInput, workspaceInstructions } from "./workspace.ts"
 import { lineageOf, listConversations, titleOf, wireId } from "./conversations.ts"
@@ -318,11 +319,14 @@ const Handlers = SigmaRpcs.toLayer(
     // The hold is taken before `admit` and handed to an idle wait that starts after it, so the work `admit` admits
     // is never unheld: an idle wait started earlier can return before the work exists.
     // The harness's idle leaves out work under background tasks, such as a subagent and its reporter, so the hold also
-    // waits for every task left; a blocked task waits for a person, not for the server.
+    // waits for every task left; a blocked task waits for a person, not for the server. A Claude Code job lives as long
+    // as its process, whose own hold keeps the server up, and which a stop closes, cutting the job off (D5).
     const quiet = Effect.gen(function* () {
       for (;;) {
         yield* harness.waitForIdle
-        const live = (yield* harness.inspect).tasks.filter((task) => task.state.kind !== "blocked")
+        const live = (yield* harness.inspect).tasks.filter(
+          (task) => task.state.kind !== "blocked" && !JOB_KINDS.has(task.record.kind),
+        )
         if (live.length === 0) return
         yield* Effect.forEach(live, (task) => harness.waitForTask(task.record.id), {
           concurrency: "unbounded",
@@ -748,7 +752,7 @@ const Handlers = SigmaRpcs.toLayer(
           yield* Effect.orDie(
             conversation.commit((tx) => tx.appendEntry(conversation.id, { kind: INTERRUPTED_KIND, data: { author } })),
           )
-          yield* Effect.orDie(interruptTree(harness, conversation.id))
+          yield* Effect.orDie(interrupt(harness, conversation.id))
         }),
       ),
       "approval/resolve": writing(({ conversation: id, approval, author, allow }) =>

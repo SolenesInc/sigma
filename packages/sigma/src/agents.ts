@@ -30,7 +30,9 @@ import {
   idFromNumber,
   type JsonObject,
   type NextTaskState,
+  type TaskId,
 } from "@sigma/kernel"
+import { ClaudeJobsDoc } from "@sigma/claude"
 import type { AssistantMessage } from "@sigma/models"
 import { int, obj, oneOf, opt, str } from "@sigma/schema"
 import { rootConversation } from "@sigma/tools"
@@ -631,24 +633,35 @@ const interruptAgent = defineTool({
 const AGENTS_EXTENSION = "sigma-agents"
 
 /**
- * Stops a conversation's runs and every subagent's under it, as `conversation/interrupt` promises. Each conversation of
- * the tree is aborted on its own, all at once, so the reporters that relay answers carry on as they do when one
- * subagent is stopped, and background work such as compaction is left alone. A subagent its parent started before the
- * parent stopped is found by the next pass.
+ * What `conversation/interrupt` stops (D7 of s-cjk9k6). A conversation with a run stops that run only: its subagents
+ * and the jobs Claude Code started keep working. An idle one stops the work under it: the run of every subagent in its
+ * tree, and the jobs Claude Code started in any of them, each told to stop. Each conversation of the tree is aborted on
+ * its own, all at once, so the reporters that relay answers carry on as they do when one subagent is stopped, and
+ * background work such as compaction is left alone. A subagent its parent started before the parent stopped is found
+ * by the next pass.
  */
-export const interruptTree = (harness: Harness, root: ConversationId) =>
+export const interrupt = (harness: Harness, root: ConversationId) =>
   Effect.gen(function* () {
+    const abort = (id: ConversationId) =>
+      Effect.flatMap(harness.conversation(id), (conversation) => conversation?.abort() ?? Effect.void)
+    if ((yield* harness.session.snapshot(LiveDoc, root))?.run !== undefined) return yield* abort(root)
     const stopped = new Set<ConversationId>()
     for (;;) {
       const fresh = (yield* treeOf(harness, root)).filter((id) => !stopped.has(id))
       if (fresh.length === 0) return
       for (const id of fresh) stopped.add(id)
-      yield* Effect.forEach(
-        fresh,
-        (id) => Effect.flatMap(harness.conversation(id), (conversation) => conversation?.abort() ?? Effect.void),
-        { concurrency: "unbounded", discard: true },
-      )
+      yield* Effect.forEach(fresh, (id) => Effect.andThen(abort(id), stopJobs(harness, id)), {
+        concurrency: "unbounded",
+        discard: true,
+      })
     }
+  })
+
+/** Aborts the tasks of the jobs Claude Code started in the conversation that still work. */
+const stopJobs = (harness: Harness, id: ConversationId) =>
+  Effect.gen(function* () {
+    const jobs = Object.values((yield* harness.session.snapshot(ClaudeJobsDoc, id))?.jobs ?? {})
+    for (const job of jobs) if (job.state === "working") yield* harness.abortTask(idFromNumber<TaskId>(job.taskId))
   })
 
 /** The conversation and its subagents', each parent before its subagents. */

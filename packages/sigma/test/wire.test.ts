@@ -976,7 +976,10 @@ test("status-subagent, status-snapshot: a subagent waiting on a person shows as 
     trees: [{ _tag: "tree", conversation, status: "waiting" }],
   })
   expect(treesOf(watch.items, conversation).map((tree) => tree.status)).toEqual(["working", "waiting"])
-  // One interrupt of the root stops its subagent too, so the whole tree goes idle.
+  // An interrupt of the root's run leaves its subagent waiting; a second, on the idle root, stops the subagent too.
+  await client.call("conversation/interrupt", { author: person("ada"), conversation })
+  await watch.until((items) => treesOf(items, conversation).some((tree) => tree.ended), 20_000)
+  expect(treesOf(watch.items, conversation).at(-1)?.status).toBe("waiting")
   await client.call("conversation/interrupt", { author: person("ada"), conversation })
   await watch.until((items) => treesOf(items, conversation).at(-1)?.status === "idle", 20_000)
   const ended = treesOf(watch.items, conversation).filter((tree) => tree.ended)
@@ -1081,7 +1084,7 @@ test("subagent-limits, child-tools: under the default config a subagent starts a
 
 const idle = (watch: ViewWatch) => (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run === undefined
 
-test("subagent-interrupt: interrupting a conversation stops the runs of its subagents too, and the tree goes idle", async () => {
+test("subagent-interrupt, interrupt-idle: interrupting a conversation's run leaves its subagents working, and interrupting it again, idle, stops them, so the tree goes idle", async () => {
   await using server = await runningServer([
     call("spawn_agent", { task_name: "slow", message: "make it", fork_turns: "none" }),
     call("wait_agent", { timeout_ms: 600_000 }),
@@ -1103,8 +1106,13 @@ test("subagent-interrupt: interrupting a conversation stops the runs of its suba
 
   await client.call("conversation/interrupt", { author: person("ada"), conversation })
   await view.until(settled(1), 10_000)
-  await slow.until(settled(1), 10_000)
+  expect(runEnds(view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
+  // The subagent still waits on the person.
+  expect(Object.keys(approvalsOf(slow)!.requests)).toHaveLength(1)
+  expect(runEnds(slow.seen())).toEqual([])
 
+  await client.call("conversation/interrupt", { author: person("ada"), conversation })
+  await slow.until(settled(1), 10_000)
   expect(runEnds(view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   expect(runEnds(slow.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   expect(approvalsOf(slow)!.requests).toEqual({})

@@ -346,6 +346,59 @@ test("crash-claude-settled: a Claude Code answer committed before the server was
   client.close()
 }, 30_000)
 
+const BACKGROUND_SLEEP =
+  "Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started"
+
+type Jobs = { jobs: Record<string, { state: string; title: string }> }
+const jobsOf = (watch: ViewWatch) => Object.values((watch.view().docs["claude.jobs"] as Jobs | undefined)?.jobs ?? {})
+
+for (const [how, end] of [
+  ["killed", (server: Awaited<ReturnType<typeof serving>>) => server.kill("SIGKILL")],
+  [
+    "stopped with server/stop",
+    (_server: Awaited<ReturnType<typeof serving>>, sigmaHome: ReturnType<typeof home>) => stopServer(sigmaHome),
+  ],
+] as const) {
+  test(`claude-job-cut-off: a Claude job working when the server is ${how} is cut off, its parent says so once, and the next run tells Claude Code`, async () => {
+    using claude = new FakeClaude("bash_background_cut_off")
+    const sigmaHome = home()
+    const env = { ...(await scriptEnv(sigmaHome)), ...claude.options.env }
+    const first = await serving(env)
+    let client = await RawClient.connect(sigmaHome.socket)
+    const conversation = (
+      await client.call("conversation/start", {
+        author: person("ada"),
+        cwd: sigmaHome.dir,
+        provider: "claude",
+        approvals: "auto",
+      })
+    ).result.conversation as string
+    const before = watchView(client, conversation)
+    await submit(client, conversation, BACKGROUND_SLEEP)
+    await before.until(settled(1), 20_000)
+    expect(jobsOf(before)).toEqual([expect.objectContaining({ state: "working" })])
+    await end(first, sigmaHome)
+    await first.exited
+    client.close()
+
+    await serving(env)
+    client = await RawClient.connect(sigmaHome.socket)
+    const after = watchView(client, conversation)
+    await after.until((watch) => jobsOf(watch).every((job) => job.state === "cut off"), 20_000)
+    const [job] = jobsOf(after)
+    const told = `The background command "${job!.title}" was cut off: Claude Code ended before it did.`
+    expect(transcript(after.view().entries).filter((line) => line.startsWith("report: "))).toEqual([`report: ${told}`])
+
+    await submit(client, conversation, "Is the background command still running? Reply in one short sentence.")
+    await after.until(settled(2), 20_000)
+    expect(claude.userTexts(1)).toEqual([
+      [told, "Is the background command still running? Reply in one short sentence."],
+    ])
+    expect(transcript(after.view().entries).filter((line) => line.startsWith("report: "))).toHaveLength(1)
+    client.close()
+  }, 30_000)
+}
+
 /** What a `sigma` command printed and how it exited. */
 const finished = async (process: ReturnType<typeof sigma>) => {
   const [code, stdout, stderr] = await deadline(
