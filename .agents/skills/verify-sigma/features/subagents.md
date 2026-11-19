@@ -73,8 +73,10 @@ subagent's requests keep of the prompt cache is in
 - `subagent-claude` gives each subagent Claude Code starts a conversation of
   its own: the parent shows a `⧉ <description> (<agent type>)` card in place
   of the `Agent` call, the subagent's conversation holds its prompt, calls, results and last
-  message, and its `lineage` has no `task`. Its calls wait on a person there
-  and on its card. Input to it is refused with `TakesNoInput`, and its TUI
+  message, and its `lineage` has no `task`. Its own `claude.job` task writes
+  that conversation after the prompt, not its parent's run: those entries'
+  `byTaskId` is the job's, and its approvals are keyed `<job task>/<call>`.
+  Its calls wait on a person there and on its card. Input to it is refused with `TakesNoInput`, and its TUI
   prompt reads `INPUT GOES THROUGH ITS PARENT`. `Esc` there stops only it;
   stopping the parent ends it `interrupted`, and so does a server crash.
 
@@ -510,6 +512,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - subagent-interrupt: stopping a run ends the Claude subagents working under it
 - subagent-spawn: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own
 - subagent-claude: a Claude subagent that hands back its report answers with the report, not Claude Code's placeholder
+- subagent-claude: a Claude subagent's approval waits and is answered in its own job, which writes its conversation instead of its parent's run
 
 ## Gotchas
 

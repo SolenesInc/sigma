@@ -1,10 +1,8 @@
 // The `claude.run` task: one run of a conversation whose model Claude Code serves, from its inputs to its run_end. It
 // starts or resumes Claude Code's session where the conversation's position says, tells it what the session missed, and
 // lets `converse` commit what it does. A host restart leaves calls without results; the next invocation records them
-// as interrupted and goes on from the position. The `claude.subagent` task holds the run of a hosted subagent's
-// conversation until Claude Code says the subagent ended.
+// as interrupted and goes on from the position. Each subagent Claude Code starts is a `claude.job` (`job.ts`).
 import {
-  ApprovalsDoc,
   applyBoundary,
   appendToolResult,
   convertPartial,
@@ -34,13 +32,13 @@ import {
   type NextTaskState,
   type RunningTask,
   type Task,
-  type TaskId,
   type TaskRuntime,
   type Tx,
 } from "@sigma/kernel"
 import type { Message } from "@sigma/models"
-import { Deferred, Effect } from "effect"
-import { SubagentLinks } from "./links.ts"
+import { Effect } from "effect"
+import { CLAUDE_JOB_KIND, JobAnchor, makeJobTask } from "./job.ts"
+import { JobLinks } from "./links.ts"
 import {
   type ClaudeProcessSettings,
   openProcess,
@@ -53,9 +51,9 @@ import type { ClaudeProcesses, Openings } from "./processes.ts"
 import { history, INTERRUPTED, JOINING, textOf, unseen } from "./retell.ts"
 import type { ClaudeRunCheckpoint, Ended, RunContext } from "./serving.ts"
 import { ClaudeSessionDoc } from "./session.ts"
+import { expireApprovals, type Hosting } from "./transcript.ts"
 
 export const CLAUDE_RUN_KIND = "claude.run"
-export const CLAUDE_SUBAGENT_KIND = "claude.subagent"
 
 /** What a resumed session is sent when nothing happened since its position, as after a restart that lost nothing. */
 export const CONTINUE = "Continue."
@@ -82,12 +80,6 @@ const failed = (message: string, reason: string): Next => ({
   status: "terminal",
   outcome: { status: "failed", error: { message, detail: { reason } } },
 })
-
-/** Removes every approval request the task `task` keyed in the conversation: `<task>/<call>`. */
-const expireApprovals = (tx: Tx, conversationId: Runtime["conversationId"], task: TaskId) =>
-  Effect.map(tx.doc(ApprovalsDoc, conversationId), (doc) => {
-    for (const key of Object.keys(doc.requests)) if (key.startsWith(`${task}/`)) delete doc.requests[key]
-  })
 
 /** The calls of the run that have no result: the process that ran them is gone, so each gets `INTERRUPTED`. */
 const interruptCalls = (tx: Tx, runtime: Runtime) =>
@@ -292,7 +284,7 @@ const endCutOff = (ctx: RunCtx & { readonly runtime: Runtime }, task: Running) =
 
 type Title = NonNullable<ClaudeRunOptions["title"]>
 
-type Shared = { readonly options: ClaudeRunOptions; readonly links: SubagentLinks; subagent?: AnyTask<TaskServices> }
+type Shared = { readonly options: ClaudeRunOptions; readonly hosting: Hosting }
 
 const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheckpoint, ClaudeRunResult, TaskServices> =>
   defineTask<Record<string, never>, ClaudeRunCheckpoint, ClaudeRunResult, TaskServices>({
@@ -324,7 +316,7 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
             withheldTools: shared.options.withheldTools?.() ?? [],
             rootConversation: String(runtime.conversationId),
           }
-          const run: RunContext = { runtime, api, agent, links: shared.links, subagentTask: shared.subagent! }
+          const run: RunContext = { runtime, api, agent, hosting: shared.hosting }
           const title: Title = shared.options.title ?? (() => Effect.succeed(undefined))
           const cold = () => opening(runtime, api, provider, title)
           let { ended, live } = yield* converse(shared, config, run, {
@@ -362,81 +354,22 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
       }),
   })
 
-type SubagentInput = { call: string; title: string }
-type SubagentCheckpoint = { phase: "wait" }
-type SubagentRuntime = TaskRuntime<SubagentInput, SubagentCheckpoint, ClaudeRunResult>
-type SubagentNext = NextTaskState<SubagentCheckpoint, ClaudeRunResult>
-
-/** The newest entry of the subagent's conversation: what it answered. */
-const latest = (runtime: SubagentRuntime) => Effect.map(runtime.entries({}, 1), (page) => page.items[0]?.id)
-
-const makeSubagentTask = (shared: Shared) =>
-  defineTask<SubagentInput, SubagentCheckpoint, ClaudeRunResult, TaskServices>({
-    name: CLAUDE_SUBAGENT_KIND,
-    version: 1,
-    initial: () => ({ phase: "wait" }),
-    phases: {
-      wait: (_task, runtime) =>
-        Effect.gen(function* () {
-          const api = yield* TaskServices
-          const link = shared.links.link(runtime.taskId)
-          yield* Deferred.succeed(link.hookApi, api.hookApi)
-          const ended = yield* Deferred.await(link.ended)
-          const answer = yield* latest(runtime)
-          yield* runtime.commit((tx) =>
-            Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, SubagentNext, never> {
-              const live = yield* tx.doc(LiveDoc, runtime.conversationId)
-              shared.links.forget(runtime.taskId)
-              if (ended.status === "completed" && answer !== undefined) {
-                yield* endRun(tx, live, runtime.taskId, { status: "done", answer }, api.runOwner)
-                return { status: "terminal", outcome: { status: "completed", result: { entryId: answer } } }
-              }
-              const detail = ended.summary ?? `The subagent ${ended.status === "stopped" ? "was stopped" : "failed"}`
-              const reason = ended.status === "stopped" ? "aborted" : "model_error"
-              yield* endRun(tx, live, runtime.taskId, { status: "unanswered", reason, detail }, api.runOwner)
-              return {
-                status: "terminal",
-                outcome: { status: "failed", error: { message: detail, detail: { reason } } },
-              }
-            }),
-          )
-        }),
-    },
-    abort: (_task, runtime) =>
-      Effect.gen(function* () {
-        const api = yield* TaskServices
-        const stop = shared.links.link(runtime.taskId).stop
-        if (stop !== undefined) yield* Effect.ignore(Effect.tryPromise(stop))
-        shared.links.forget(runtime.taskId)
-        yield* runtime.commit((tx) =>
-          Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, SubagentNext, never> {
-            const live = yield* tx.doc(LiveDoc, runtime.conversationId)
-            yield* expireApprovals(tx, runtime.conversationId, runtime.taskId)
-            yield* endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "aborted" }, api.runOwner)
-            return { status: "terminal", outcome: { status: "aborted" } }
-          }),
-        )
-      }),
-  })
-
 /**
- * The run tasks of conversations whose model Claude Code serves: `claude.run`, and `claude.subagent` for the
- * conversations of its hosted subagents. `runTasks` is what the harness is opened with.
+ * The run tasks of conversations whose model Claude Code serves: `claude.run`, and `claude.job` for the conversations
+ * of the subagents it starts, each owned by a background `claude.job-anchor`. `runTasks` is what the harness is
+ * opened with; `tasks` are what the registry installs.
  */
 export function claudeRunTasks(options: ClaudeRunOptions): {
-  readonly run: AnyTask<TaskServices>
-  readonly subagent: AnyTask<TaskServices>
+  readonly tasks: ReadonlyArray<AnyTask<TaskServices>>
   readonly runTasks: RunTasks
 } {
-  const shared: Shared = { options, links: new SubagentLinks() }
-  const run = makeRunTask(shared)
-  const subagent = makeSubagentTask(shared)
-  shared.subagent = subagent
+  const links = new JobLinks()
+  const job = makeJobTask(links)
+  const run = makeRunTask({ options, hosting: { job, anchor: JobAnchor, links } })
   return {
-    run,
-    subagent,
+    tasks: [run, job, JobAnchor],
     runTasks: {
-      kinds: new Set([CLAUDE_RUN_KIND, CLAUDE_SUBAGENT_KIND]),
+      kinds: new Set([CLAUDE_RUN_KIND, CLAUDE_JOB_KIND]),
       choose: (model: ModelRef | undefined) =>
         model !== undefined && options.settings(model.provider) !== undefined ? run : undefined,
     },

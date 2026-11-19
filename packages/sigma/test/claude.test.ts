@@ -657,6 +657,35 @@ test("subagent-claude: a call a Claude subagent wants to make waits for a person
   expect(runEnds(child.view.seen())).toEqual([expect.objectContaining({ outcome: "answered" })])
 })
 
+test("subagent-claude: a Claude subagent's approval waits and is answered in its own job, which writes its conversation instead of its parent's run", async () => {
+  using claude = new FakeClaude("subagent_asks")
+  await using session = await conversationWith(claude)
+  await session.submit("go")
+  const child = await subagentOf(session)
+  const approval = await waitingApproval(child.view)
+  // An approval is keyed by the task that waits on it: the subagent's job.
+  const job = Number(approval.split("/")[0])
+
+  await session.answer(true, child.view, child.id)
+  await session.view.until(settled(1))
+  await child.view.until(childEnded)
+  const run = session.view.seen().find((entry) => entry.kind === "pi.assistant")!.byTaskId
+  expect(job).not.toBe(run)
+  // The run hosts the subagent with its prompt. After it, the person answers, and the job writes the rest: the call,
+  // its result, the answer and the run's end.
+  const [prompt, ...worked] = child.view.seen().filter((entry) => entry.kind !== "sigma.started")
+  expect(prompt).toMatchObject({ kind: "pi.user", byTaskId: run })
+  expect(worked.map((entry) => entry.kind)).toEqual([
+    "pi.assistant",
+    "sigma.approval",
+    "pi.tool-result",
+    "pi.assistant",
+    "sigma.run_end",
+  ])
+  const written = worked.filter((entry) => entry.kind !== "sigma.approval")
+  expect(written.map((entry) => entry.byTaskId)).toEqual([job, job, job, job])
+})
+
 test("subagent-interrupt: stopping a Claude subagent stops only it, and its parent's run carries on", async () => {
   using claude = new FakeClaude("subagent_stopped")
   await using session = await conversationWith(claude)

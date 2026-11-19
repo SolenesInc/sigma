@@ -1,6 +1,7 @@
 // One Claude Code process, started through the Claude Agent SDK: its query, the inbox it reads its messages from, the
-// pump that hands each frame it sends to the run it serves, and the callbacks Claude Code makes, which reach that run
-// (F3). What a run does with the frames is `serving.ts`.
+// reader that observes each frame it sends as it arrives and routes it, and the callbacks Claude Code makes. A
+// subagent's frames and callbacks go to its job (D1, F7); the rest go to the run it serves, or wait for the next run
+// while it serves none. What a run does with its frames is `serving.ts`, what a job does is `job.ts`.
 import {
   createSdkMcpServer,
   type EffortLevel,
@@ -14,22 +15,22 @@ import {
 } from "@anthropic-ai/claude-agent-sdk"
 import type { Agent } from "@sigma/harness"
 import type { Usage } from "@sigma/models"
-import { Clock, type Duration, Effect, Option, Semaphore } from "effect"
+import { Cause, Clock, Deferred, type Duration, Effect, Exit, Option, Semaphore } from "effect"
 import { z } from "zod"
 import { claudeEnvironment, toolSearchSettings } from "./environment.ts"
 import { Inbox } from "./inbox.ts"
+import { ENDED_WITH_PROCESS, Job, type JobEnd, STOPPED_WITH_RUN } from "./links.ts"
 import type { Said } from "./retell.ts"
 import {
   type Ended,
   failure,
   makeServing,
   type ModelUsage,
-  type OwnTool,
   type RunContext,
   type Serving,
   type ServingProcess,
-  toolHooksOf,
 } from "./serving.ts"
+import { type Callbacks, OWN_TOOL, type OwnTool, toolHooksOf } from "./transcript.ts"
 
 /** How a Claude Code instance is started: its executable, environment and extra arguments. */
 export interface ClaudeProcessSettings {
@@ -82,14 +83,14 @@ export interface ClaudeProcess {
    */
   readonly canSelect: (selection: Selection) => boolean
   /**
-   * Stops the turn of the run it served (D5): interrupts Claude Code and reads its frames, handing them to no run, until
-   * the turn's result. Succeeds with whether the process can serve another run: it ended the turn within `within`, with
-   * nothing left queued and no background work. A stopped run's subagents end with the turn.
+   * Stops the turn of the run it served (D5): interrupts Claude Code and takes the run's frames, handing them to no run,
+   * until the turn's result. Succeeds with whether the process can serve another run: it ended the turn within
+   * `within`, with nothing left queued and no background work. A stopped run's subagents end with the turn.
    */
   readonly stop: (within: Duration.Input) => Effect.Effect<boolean>
   /** Background work Claude Code started and has not said ended: a background command or subagent (D6). */
   readonly busy: boolean
-  /** Reads ahead while no run is served, and completes once the process has exited. */
+  /** Completes once the process has exited. */
   readonly exited: Effect.Effect<void>
   /** The cache facts of the newest main-loop request, once one was made (F13). */
   readonly lastRequest: LastRequest | undefined
@@ -103,6 +104,12 @@ export interface LastRequest {
   readonly context: number
   /** How long the cache it wrote lives, from the newest request that wrote one; `undefined` while none has. */
   readonly ttl: "5m" | "1h" | undefined
+}
+
+/** What takes the frames that are not a job's: whether a frame was its last, and what the process's end does to it. */
+type Taker = {
+  readonly frame: (message: SDKMessage) => Effect.Effect<boolean>
+  readonly exit: (error: unknown) => void
 }
 
 /** One model's running totals in one Claude Code process, as it reports them (`modelUsage`). */
@@ -219,22 +226,41 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     // `modelUsage` at this process's previous result: a process reports its own running totals, which a resumed
     // session does not carry over (died_while_idle's second process reports a first turn's cache read again).
     let totals: Record<string, UsageTotals> | undefined
-    /** The run the process serves now, which its callbacks reach. */
+    /** The run the process serves now, which the callbacks of its own conversation reach. */
     let serving: Serving | undefined
-    /** The last run it served, whose subagents end with the process. */
-    let served: Serving | undefined
     /** The tasks Claude Code started and has not said ended. */
     const tasks = new Set<string>()
-    /** Frames read while no run was served, or reads still waiting, in order: the next run gets them first. */
-    const ahead: Array<Promise<IteratorResult<SDKMessage, unknown>>> = []
+    /** The subagents Claude Code started and has not said ended, by task id, and by the Agent call that started each. */
+    const jobs = new Map<string, Job>()
+    const jobsByCall = new Map<string, Job>()
+    /**
+     * The job each subagent's start made, by the Agent call that started it, until the conversation that hosts it
+     * takes it: a subagent can end before it is hosted, as one a subagent started, or one started while no run served.
+     */
+    const starts = new Map<string, Job>()
+    /** The calls of own tools by id, once read: the job whose subagent made one, or `undefined` for the run's. */
+    const ownCalls = new Map<string, Deferred.Deferred<Job | undefined>>()
+    /** What takes the frames that are not a job's: the run served, or a stop. While none does, they wait in `held`. */
+    let taker: Taker | undefined
+    const held: SDKMessage[] = []
+    /** How the process ended, once the reader read its end: the error its end raised, if it raised one. */
+    let ended: { readonly error: unknown } | undefined
+    const exit = Deferred.makeUnsafe<void>()
+
+    /** Ends the jobs left working: a subagent lives in its process, and ends with it (D6 of s-evw1pn). */
+    const endJobs = (end: JobEnd) => {
+      for (const job of jobs.values()) job.inbox.push({ end })
+      jobs.clear()
+      jobsByCall.clear()
+    }
 
     const controller = yield* Effect.acquireRelease(
       Effect.sync(() => new AbortController()),
       (controller) =>
-        Effect.gen(function* () {
+        Effect.sync(() => {
           inbox.close()
           controller.abort()
-          if (served !== undefined) yield* served.end
+          endJobs(ENDED_WITH_PROCESS)
         }),
     )
 
@@ -243,14 +269,60 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       return serving
     }
 
+    const jobOf = (task: string) => {
+      let job = jobs.get(task)
+      if (job === undefined) jobs.set(task, (job = new Job(task, () => messages.stopTask(task))))
+      return job
+    }
+    const ownCall = (id: string) => {
+      let call = ownCalls.get(id)
+      if (call === undefined) ownCalls.set(id, (call = Deferred.makeUnsafe<Job | undefined>()))
+      return call
+    }
+    const until = <A>(effect: Effect.Effect<A>, signal: AbortSignal | undefined) =>
+      Effect.runPromise(effect, signal === undefined ? undefined : { signal })
+    /** The callbacks of a job's task, once it runs. */
+    const jobCallbacks = (job: Job, signal: AbortSignal | undefined): Promise<Callbacks> =>
+      until(Deferred.await(job.callbacks), signal)
+    /** The callbacks for a call the agent `agentId` makes: a subagent's go to its job, the main loop's to the run. */
+    const callbacksOf = async (agentId: string | undefined, signal: AbortSignal | undefined): Promise<Callbacks> =>
+      agentId === undefined ? current() : jobCallbacks(jobOf(agentId), signal)
+
     const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {
-      PreToolUse: [{ hooks: [async (...args) => current().preToolUse(...args)] }],
+      PreToolUse: [
+        {
+          hooks: [
+            async (input, id, options) =>
+              (await callbacksOf(input.agent_id, options.signal)).preToolUse(input, id, options),
+          ],
+        },
+      ],
       PostCompact: [{ hooks: [async (...args) => current().postCompact(...args)] }],
       ...(toolHooksOf(agent).after.length === 0
         ? {}
-        : { PostToolUse: [{ hooks: [async (...args) => current().postToolUse(...args)] }] }),
+        : {
+            PostToolUse: [
+              {
+                hooks: [
+                  async (input, id, options) =>
+                    (await callbacksOf(input.agent_id, options.signal)).postToolUse(input, id, options),
+                ],
+              },
+            ],
+          }),
     }
-    const canUseTool: NonNullable<Options["canUseTool"]> = async (...args) => current().canUseTool(...args)
+    const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, options) =>
+      (await callbacksOf(options.agentID, options.signal)).canUseTool(tool, input, options)
+    /** An own tool's call, run by the conversation it is in: MCP names only the call, which the reader placed. */
+    const runOwn = (name: string) => async (input: unknown, extra: unknown) => {
+      const id = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta?.["claudecode/toolUseId"]
+      const signal = (extra as { signal?: AbortSignal } | undefined)?.signal
+      if (typeof id !== "string") return current().runOwn(name)(input, extra)
+      const job = await until(Deferred.await(ownCall(id)), signal)
+      ownCalls.delete(id)
+      const callbacks = job === undefined ? current() : await jobCallbacks(job, signal)
+      return callbacks.runOwn(name)(input, extra)
+    }
     const mcpServers =
       own.size === 0
         ? {}
@@ -261,7 +333,7 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
                 name: tool.name,
                 description: tool.description,
                 inputSchema: z.fromJSONSchema(tool.parameters as z.core.JSONSchema.JSONSchema),
-                handler: async (input: unknown, extra: unknown) => current().runOwn(tool.name)(input, extra),
+                handler: runOwn(tool.name),
               })),
             }),
           }
@@ -366,9 +438,13 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       },
       own,
       send,
-      stopTask: (taskId) => messages.stopTask(taskId),
       serially: (effect) => serial.withPermits(1)(effect),
       spent,
+      started: (call) => {
+        const job = starts.get(call)!
+        starts.delete(call)
+        return job
+      },
     }
 
     const iterator = messages[Symbol.asyncIterator]()
@@ -378,21 +454,6 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
         (result) => result,
         (error: unknown) => ({ done: true as const, value: error }),
       )
-    /** The next frame, which stays first in `ahead` until it arrived, so a reader interrupted while it waits loses none. */
-    const pull = Effect.gen(function* () {
-      if (ahead.length === 0) ahead.push(read())
-      const next = yield* Effect.promise(() => ahead[0]!)
-      ahead.shift()
-      return next
-    })
-    const exited = Effect.gen(function* () {
-      for (;;) {
-        const next = read()
-        ahead.push(next)
-        if ((yield* Effect.promise(() => next)).done) return
-      }
-    })
-
     /** Tracks Claude Code's tasks, which end the process when its run ends with one still working (D6). */
     const track = (message: SDKMessage) => {
       if (message.type === "stream_event") return observeRequest(message)
@@ -461,15 +522,138 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       }
     }
 
+    /**
+     * The job a frame is for: a subagent's own frames and its end go to its job, and a subagent a subagent started is
+     * hosted by its parent's. Every other frame, and every `task_started` of a subagent, is the run's: a subagent's
+     * job is made as its start is read, so none of its frames arrive before it.
+     */
+    const route = (message: SDKMessage): Job | undefined => {
+      if (message.type === "system") {
+        if (message.subtype === "task_started" && message.task_type === "local_agent" && message.tool_use_id) {
+          const job = jobOf(message.task_id)
+          jobsByCall.set(message.tool_use_id, job)
+          starts.set(message.tool_use_id, job)
+          return message.parent_task_id === undefined ? undefined : jobs.get(message.parent_task_id)
+        }
+        if (message.subtype === "task_notification" && message.tool_use_id) {
+          const job = jobsByCall.get(message.tool_use_id)
+          if (job !== undefined) {
+            jobsByCall.delete(message.tool_use_id)
+            jobs.delete(job.task)
+          }
+          return job
+        }
+        return undefined
+      }
+      if (!("parent_tool_use_id" in message) || message.parent_tool_use_id === null) return undefined
+      return jobsByCall.get(message.parent_tool_use_id)
+    }
+
+    /** Hands a frame to the taker, or holds it for the next one. */
+    const take = (message: SDKMessage) => {
+      const now = taker
+      if (now === undefined) {
+        held.push(message)
+        return Effect.void
+      }
+      return Effect.map(now.frame(message), (done) => {
+        if (done && taker === now) taker = undefined
+      })
+    }
+
+    /** Makes `next` the taker: it takes the held frames first, then the end, if the process has ended. */
+    const attach = (next: Taker) =>
+      serial.withPermits(1)(
+        Effect.gen(function* () {
+          taker = next
+          while (taker === next && held.length > 0) yield* take(held.shift()!)
+          if (taker === next && ended !== undefined) {
+            taker = undefined
+            next.exit(ended.error)
+          }
+        }),
+      )
+    const detach = (gone: Taker) =>
+      Effect.sync(() => {
+        if (taker === gone) taker = undefined
+      })
+
+    /** Reads every frame as it arrives, observes it, and routes it (F7), until the process ends. */
+    const reader = Effect.gen(function* () {
+      for (;;) {
+        const next = yield* Effect.promise(read)
+        yield* serial.withPermits(1)(
+          Effect.suspend(() => {
+            if (next.done) {
+              ended = { error: next.value }
+              const now = taker
+              taker = undefined
+              now?.exit(next.value)
+              return Effect.void
+            }
+            const message = next.value
+            if (!observe(message)) return Effect.void
+            const job = route(message)
+            if (message.type === "assistant") {
+              for (const block of message.message.content) {
+                if (block.type === "tool_use" && block.name.startsWith(OWN_TOOL)) {
+                  Deferred.doneUnsafe(ownCall(block.id), Exit.succeed(job))
+                }
+              }
+            }
+            if (job === undefined) return take(message)
+            job.inbox.push({ frame: message })
+            return Effect.void
+          }),
+        )
+        if (next.done) return yield* Deferred.succeed(exit, undefined)
+      }
+    })
+    /** However the reader ends, the process has: a reader that died ends the run it served instead of stalling it. */
+    const readerEnded = (done: Exit.Exit<void>) =>
+      Effect.andThen(
+        Effect.sync(() => {
+          if (ended !== undefined) return
+          ended = { error: Exit.isFailure(done) ? Cause.squash(done.cause) : undefined }
+          const now = taker
+          taker = undefined
+          now?.exit(ended.error)
+        }),
+        Deferred.succeed(exit, undefined),
+      )
+    yield* Effect.forkScoped(Effect.onExit(reader, readerEnded))
+
     const serve = (run: RunContext, opening: ReadonlyArray<Said>) =>
       Effect.scoped(
         Effect.gen(function* () {
           const now = makeServing(run, view)
-          serving = served = now
+          const done = Deferred.makeUnsafe<Ended, unknown>()
+          let opened: string | undefined
+          const served: Taker = {
+            frame: (message) =>
+              Effect.map(Effect.exit(now.handle(message)), (handled) => {
+                if (Exit.isSuccess(handled) && handled.value === undefined) return false
+                Deferred.doneUnsafe(done, handled as Exit.Exit<Ended, unknown>)
+                return true
+              }),
+            exit: (error) => {
+              const message =
+                error === undefined
+                  ? "Claude Code exited before the turn finished"
+                  : `Claude Code stopped: ${error instanceof Error ? error.message : String(error)}`
+              // Claude Code never took the opening, so nothing of the run reached it.
+              const lost = opened !== undefined && awaitingReplay.has(opened)
+              Deferred.doneUnsafe(done, Exit.succeed(lost ? ({ _tag: "exited", message } as const) : failure(message)))
+            },
+          }
+          serving = now
           yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              serving = undefined
-            }),
+            Effect.andThen(
+              detach(served),
+              Effect.sync(() => {
+                serving = undefined
+              }),
+            ),
           )
           const switched = yield* Effect.result(select(selectionOf(run.agent)))
           // Nothing of the run reached Claude Code yet, so a process that cannot switch costs a cold start.
@@ -479,41 +663,30 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
               message: `Claude Code did not switch its model or effort: ${String(switched.failure)}`,
             } as const
           }
-          const opened = send(opening)
-          for (;;) {
-            const next = yield* pull
-            if (next.done) {
-              const error = next.value
-              const message =
-                error === undefined
-                  ? "Claude Code exited before the turn finished"
-                  : `Claude Code stopped: ${error instanceof Error ? error.message : String(error)}`
-              // Claude Code never took the opening, so nothing of the run reached it.
-              return awaitingReplay.has(opened) ? ({ _tag: "exited", message } as const) : failure(message)
-            }
-            const message = next.value
-            const ended = yield* serial.withPermits(1)(
-              Effect.suspend(() => (observe(message) ? now.handle(message) : Effect.succeed(undefined))),
-            )
-            if (ended !== undefined) return ended
-          }
+          opened = send(opening)
+          yield* attach(served)
+          return yield* Deferred.await(done)
         }),
       )
 
     const stop = (within: Duration.Input) =>
       Effect.gen(function* () {
+        // A person stopped the run: its subagents are stopped with it, as an abort of each would, before Claude Code
+        // reports how its interrupt ended them.
+        yield* serial.withPermits(1)(Effect.sync(() => endJobs(STOPPED_WITH_RUN)))
         yield* Effect.promise(() => messages.interrupt().catch(() => undefined))
-        for (;;) {
-          const next = yield* pull
-          if (next.done) return false
-          observe(next.value)
-          if (next.value.type === "result") return awaitingReplay.size === 0 && tasks.size === 0
+        const done = Deferred.makeUnsafe<boolean>()
+        const stopping: Taker = {
+          frame: (message) =>
+            Effect.sync(() => {
+              if (message.type !== "result") return false
+              Deferred.doneUnsafe(done, Exit.succeed(awaitingReplay.size === 0 && tasks.size === 0))
+              return true
+            }),
+          exit: () => Deferred.doneUnsafe(done, Exit.succeed(false)),
         }
-      }).pipe(
-        Effect.timeoutOption(within),
-        Effect.map(Option.getOrElse(() => false)),
-        Effect.tap(() => served?.end ?? Effect.void),
-      )
+        return yield* Effect.andThen(attach(stopping), Deferred.await(done)).pipe(Effect.ensuring(detach(stopping)))
+      }).pipe(Effect.timeoutOption(within), Effect.map(Option.getOrElse(() => false)))
 
     return {
       serve,
@@ -522,7 +695,7 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       get busy() {
         return tasks.size > 0
       },
-      exited,
+      exited: Deferred.await(exit),
       get lastRequest() {
         return lastRequest
       },
