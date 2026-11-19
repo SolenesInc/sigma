@@ -1,31 +1,50 @@
-// What a `claude.run` invocation and the `claude.subagent` tasks under it share in memory: how each hosted subagent
-// ended, and how to stop it. Neither survives a restart, which abandons the subagent tasks with the process.
-import type { HookApi } from "@sigma/harness"
+// What a Claude Code process and the `claude.job` tasks of its subagents share in memory: each job's frames, in the
+// order the process read them, and the callbacks Claude Code makes for it. Neither survives a restart, which abandons
+// the job tasks with the process.
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { TaskId } from "@sigma/kernel"
 import { Deferred } from "effect"
+import { Inbox } from "./inbox.ts"
+import type { Callbacks, TranscriptScope } from "./transcript.ts"
 
-/** How Claude Code said a subagent ended. */
-export type SubagentEnd = { readonly status: "completed" | "failed" | "stopped"; readonly summary?: string }
+/** How a job ended: as Claude Code said, or cut off with its process. */
+export type JobEnd = { readonly status: "completed" | "failed" | "stopped"; readonly summary?: string }
 
-export type SubagentLink = {
-  readonly ended: Deferred.Deferred<SubagentEnd>
-  /** The hook API of the subagent's conversation, which its calls' hooks are given; set once its task runs. */
-  readonly hookApi: Deferred.Deferred<HookApi>
-  /** Asks Claude Code to stop the subagent; set once its process is known. */
-  stop?: () => Promise<void>
+/** What a job's task takes in turn: a frame of its subagent, or its end when the process ends first. */
+export type JobItem = { readonly frame: SDKMessage } | { readonly end: JobEnd }
+
+/** What a job ends with when its process ends before Claude Code said the subagent did (D6 of s-evw1pn). */
+export const ENDED_WITH_PROCESS: JobEnd = { status: "stopped", summary: "Claude Code ended before the subagent did" }
+
+/** One subagent Claude Code started, as its process routes to it. */
+export class Job {
+  /** Its frames, then its end; its task reads them once it runs. */
+  readonly inbox = new Inbox<JobItem>()
+  /** The callbacks of its task, which Claude Code's callbacks for the subagent wait for. */
+  readonly callbacks = Deferred.makeUnsafe<Callbacks>()
+
+  constructor(
+    /** Claude Code's id of the subagent's task, which its callbacks name as their agent. */
+    readonly task: string,
+    /** Asks Claude Code to stop the subagent. */
+    readonly stop: () => Promise<void>,
+  ) {}
 }
 
-export class SubagentLinks {
-  readonly #links = new Map<TaskId, SubagentLink>()
+/** What the conversation that hosts a job hands its task: the job, and what its subagent works with (the host's). */
+export type Hosted = {
+  readonly job: Job
+  readonly from: Pick<TranscriptScope, "agent" | "own" | "provider" | "modelId" | "hosting" | "jobOf">
+}
 
-  /** The link of the subagent task `id`, made by whichever side asks first. */
-  link(id: TaskId): SubagentLink {
+/** The job each `claude.job` task holds, by the task's id. */
+export class JobLinks {
+  readonly #links = new Map<TaskId, Deferred.Deferred<Hosted>>()
+
+  /** The job of the task `id`, given by whichever side comes first: the conversation that hosts it, or the task. */
+  link(id: TaskId): Deferred.Deferred<Hosted> {
     let link = this.#links.get(id)
-    if (link === undefined)
-      this.#links.set(
-        id,
-        (link = { ended: Deferred.makeUnsafe<SubagentEnd>(), hookApi: Deferred.makeUnsafe<HookApi>() }),
-      )
+    if (link === undefined) this.#links.set(id, (link = Deferred.makeUnsafe<Hosted>()))
     return link
   }
 

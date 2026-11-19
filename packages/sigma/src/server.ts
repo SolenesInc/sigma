@@ -170,7 +170,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           title: (conversation) => titleOf(harness, conversation),
           processes,
         })
-        registry.install({ name: "claude", tasks: [claudeRuns.run, claudeRuns.subagent] })
+        registry.install({ name: "claude", tasks: claudeRuns.tasks })
         // A run ended for the limit was aborted; its run_end says why.
         const runEnded = (tx: Tx, run: EndedRun) => {
           // The first run to end after the abort is the one the limit stopped, however it ended.

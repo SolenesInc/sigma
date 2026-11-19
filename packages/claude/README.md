@@ -6,7 +6,8 @@ process stays live after a run for the conversation's next one, and closes after
 keeps its own session and runs its own tools; sigma's transcript stays the truth, and every frame Claude Code sends
 becomes a commit.
 
-`claudeRunTasks(options)` returns the two task definitions, to install in the registry, and the `RunTasks` to open the
+`claudeRunTasks(options)` returns the task definitions (`claude.run`, `claude.job` and `claude.job-anchor`), to install
+in the registry, and the `RunTasks` to open the
 harness with, which choose `claude.run` for a model whose provider `options.settings` knows. `options.processes` is the
 server's `makeClaudeProcesses`, opened with the idle period and the hold that keeps the server up while a process is
 live.
@@ -23,8 +24,7 @@ live.
   one that fails, hits the turn limit or leaves Claude Code background work closes it. A stopped run interrupts Claude
   Code's turn and leaves the process live once Claude Code ends that turn, within `STOP_TIMEOUT` (5 s), with nothing
   left queued or running; otherwise it closes it. The live process's session holds the stop, so the next run on it is
-  not told what the stop recorded. The `claude.subagent` task holds the run of a hosted subagent's conversation until
-  Claude Code says the subagent ended.
+  not told what the stop recorded.
 - `src/processes.ts`: the server's live processes, at most one per conversation: the lease, the idle release after
   `IDLE_RELEASE` (30 minutes), the release of a process that exited while it waited, and closing them all when the
   server stops. Each process holds the server's lifetime from its start to its close. Nothing about them is durable: a
@@ -32,17 +32,24 @@ live.
 - `src/process.ts`: one Claude Code process, started through the Claude Agent SDK at a resume, a fork or a fresh
   session. It owns the query, the inbox its messages go through, the frame pump, the callbacks Claude Code makes, its
   session id across `/clear`, its usage (`modelUsage` reports running totals of the process's own, so a second run
-  counts only what came after the first), and the tasks Claude Code started and has not ended. `serve` hands its
-  frames and callbacks to one run until the run ends; while it serves none, a callback fails, and the process reads
-  ahead so that its exit is seen. `processKey` names what a process is spawned with and cannot change: the provider,
+  counts only what came after the first), and the tasks Claude Code started and has not ended. Its reader observes
+  every frame as it arrives and routes it: a subagent's frames, by `parent_tool_use_id`, and its end go to its job,
+  and its callbacks, by `agent_id`, to its job's task; the rest go to the run `serve` serves, or wait for the next
+  run while it serves none, when a main-loop callback fails. Its jobs end with it. `processKey` names what a process is spawned with and cannot change: the provider,
   executable, environment, arguments, directory, own and withheld tools, turn limit, model and effort.
-- `src/serving.ts`: what one run does with its process's frames. A call Claude Code makes is committed as an assistant
-  entry and a live slot before its PreToolUse hook is answered, with the extensions' `beforeTool` applied; a call it
-  would ask about waits on `sigma.approvals`, keyed `<task>/<call>`, where the first answer counts. An extension's tool
-  reaches Claude Code over sigma's in-process MCP server and runs as a `pi.tool` task. `afterTool` runs through
-  PostToolUse: Claude Code takes a changed result only for `Read`, so another tool's change is reported. Steers placed
-  at a round of results are sent with priority `next`. Claude Code's compaction is kept as a compaction entry holding
-  its summary, `/clear` as a reset. The subagents a run hosts end with the process.
+- `src/serving.ts`: what one run does with the frames of its own conversation. Steers placed at a round of results are
+  sent with priority `next`. Claude Code's compaction is kept as a compaction entry holding its summary, `/clear` as a
+  reset.
+- `src/transcript.ts`: how a conversation the process writes to is committed, through its own task: the run's, or a
+  job's. A call Claude Code makes is committed as an assistant entry and a live slot before its PreToolUse hook is
+  answered, with the extensions' `beforeTool` applied; a call it would ask about waits on `sigma.approvals`, keyed
+  `<task>/<call>`, where the first answer counts. An extension's tool reaches Claude Code over sigma's in-process MCP
+  server and runs as a `pi.tool` task. `afterTool` runs through PostToolUse: Claude Code takes a changed result only
+  for `Read`, so another tool's change is reported. Each subagent Claude Code starts is hosted as a conversation of
+  its own, owned by a background `claude.job-anchor` in the conversation that started it.
+- `src/job.ts`: `claude.job`, the run of a hosted subagent's conversation. It commits its subagent's frames and
+  answers its callbacks through itself, not through the run that started it, until Claude Code says the subagent
+  ended or its process ends.
 - `src/environment.ts`: how every Claude Code process starts, a run's, the account probe's and `claude auth`'s: the
   server's environment without the variables a host Claude Code session sets, then the provider instance's `env`. A
   run's settings also turn tool search on where the person's Claude Code settings leave it at `auto`.
@@ -50,7 +57,8 @@ live.
   message sigma committed, and the newest entry Claude Code was shown. Rewindable, so a fork sees it as of its fork.
 - `src/retell.ts`: what a session is told of the conversation: the entries a resumed one missed, or, for a fresh one,
   the conversation so far within about 64,000 characters.
-- `src/links.ts`: how a hosted subagent ended and how to stop it, shared in memory by the run and its subagent tasks.
+- `src/links.ts`: a job as its process and its task share it in memory: its frames in order, its callbacks, how it
+  ended and how to stop it.
 
 The tests in `test/` drive `claude.run` through a Harness with sigma's fake `claude` replaying `fixtures/claude`;
 `packages/sigma/test/claude.test.ts` drives it over the wire.

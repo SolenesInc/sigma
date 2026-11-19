@@ -83,7 +83,7 @@ const open = (
       settings: (provider) => (provider === "claude" ? claude.settings : undefined),
       processes: yield* makeClaudeProcesses(processes),
     })
-    registry.install(defineExtension({ name: "claude", tasks: [tasks.run, tasks.subagent] }))
+    registry.install(defineExtension({ name: "claude", tasks: tasks.tasks }))
     for (const extension of extensions) registry.install(extension)
     const harness = yield* Effect.acquireRelease(
       Effect.flatMap(openSqliteStorage(join(dir, "kernel.sqlite")), (storage) =>
