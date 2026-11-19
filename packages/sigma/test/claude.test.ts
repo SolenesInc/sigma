@@ -11,11 +11,8 @@ import {
   type EntryRecord,
   type ProviderModels,
   type ProviderSnapshot,
-  STATUS_LINES_KIND,
-  TOAST_KIND,
   USER_KIND,
 } from "@sigma/protocol"
-import { homeWithExtensions } from "./support/extensions.ts"
 import { deadline, RawClient } from "./support/raw.ts"
 import {
   person,
@@ -954,178 +951,9 @@ test("claude-switch: retelling a long conversation to Claude keeps its first pro
   expect(told.slice(1)).toEqual([long("first"), "(5 entries left out here)", asked])
 }, 20_000)
 
-const clock = `import { Extension, Tool } from "@sigma/extension"
-import { Effect, Schema } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.transform((tools) => {
-    tools.add(
-      Tool.make({
-        name: "Clock",
-        description: "The time in a zone",
-        input: Schema.Struct({ zone: Schema.String }),
-        readOnly: true,
-        run: ({ zone }) => Effect.succeed(Tool.ok("noon in " + zone)),
-      }),
-    )
-  }),
-)`
-
-/** Refuses `touch`, rewrites `echo original`, and reads one line of every file. */
-const guard = `import { Extension, Tool } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.hook("execute.before", (call) =>
-    Effect.gen(function* () {
-      const input = call.input as { command?: string; file_path?: string }
-      if (input.command?.startsWith("touch")) return yield* Tool.refuse("no touching")
-      if (input.command === "echo original") call.input = { ...input, command: "echo rewritten" }
-      if (input.file_path !== undefined) call.input = { ...input, limit: 1 }
-    }),
-  ),
-)`
-
-test("claude-extensions: an extension's tool reaches Claude through sigma's own MCP server, without asking", async () => {
-  using claude = new FakeClaude("own_tool")
-  await using session = await conversationWith(claude, {}, { home: homeWithExtensions({ "clock.ts": clock }) })
-  await session.submit("what time is it")
-  await session.view.until(settled(1))
-  const entries = session.view.seen()
-  expect(calls(entries)).toMatchObject([{ name: "Clock", arguments: { zone: "CET" } }])
-  expect(results(entries)).toEqual([expect.objectContaining({ text: "noon in CET", isError: false })])
-  expect(transcript(entries).slice(-2)).toEqual(["assistant: It is noon in CET.", "run_end: answered"])
-  // Claude Code is offered the tool once, over MCP, not also as one of its own.
-  expect(claude.spawns()[0]!["--disallowedTools"]).toBe("Clock")
-  expect(claude.log().find((entry) => entry.initialize)?.initialize.sdkMcpServers).toEqual(["sigma"])
-  expect(claude.mcpAnswers()).toEqual([
-    expect.objectContaining({ result: { content: [{ type: "text", text: "noon in CET" }], isError: false } }),
-  ])
-  expect(entries.some((entry) => entry.kind === "sigma.approval")).toBe(false)
-})
-
-test("claude-extensions: an extension refuses a call Claude wants, in sigma's words, and Claude Code hears why", async () => {
-  using claude = new FakeClaude("bash_hook_denied")
-  await using session = await conversationWith(claude, {}, { home: homeWithExtensions({ "guard.ts": guard }) })
-  await session.submit("touch it")
-  await session.view.until(settled(1))
-  const why = "Tool call blocked: guard refused this call: no touching"
-  expect(results(session.view.seen())).toEqual([expect.objectContaining({ text: why, isError: true })])
-  expect(claude.hookAnswers()).toEqual([
-    { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why },
-  ])
-})
-
-test("claude-extensions: an extension's rewrite of a call is what Claude Code runs and what the transcript shows", async () => {
-  using claude = new FakeClaude("bash_hook_rewritten")
-  await using session = await conversationWith(claude, {}, { home: homeWithExtensions({ "guard.ts": guard }) })
-  await session.submit("echo it")
-  await session.view.until(settled(1))
-  const entries = session.view.seen()
-  expect(calls(entries)).toMatchObject([
-    { name: "Bash", arguments: { command: "echo rewritten", description: "Print the word original" } },
-  ])
-  expect(results(entries)).toEqual([expect.objectContaining({ text: "rewritten", isError: false })])
-  expect(claude.hookAnswers()).toEqual([
-    {
-      hookEventName: "PreToolUse",
-      updatedInput: { command: "echo rewritten", description: "Print the word original" },
-    },
-  ])
-})
-
-/** Sets a status line and toasts after each call. */
-const tell = `import { Extension } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.hook("execute.after", (call) =>
-    Effect.gen(function* () {
-      yield* call.conversation.status(\`last ran \${call.tool}\`)
-      yield* call.conversation.toast(\`\${call.tool} finished\`)
-    }),
-  ),
-)`
-
-/** Puts every result in capitals. */
-const shout = `import { Extension } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.hook("execute.after", (call) =>
-    Effect.sync(() => {
-      call.outcome.output = call.outcome.output.toUpperCase()
-    }),
-  ),
-)`
-
-const toasts = (entries: ReadonlyArray<EntryRecord>) =>
-  entries.filter((entry) => entry.kind === TOAST_KIND).map((entry) => entry.data as { extension: string; text: string })
-
-test("claude-extensions: an extension's execute.after runs after Claude's calls, and its status line and toast show", async () => {
-  using claude = new FakeClaude("bash_hook_rewritten")
-  await using session = await conversationWith(
-    claude,
-    {},
-    { home: homeWithExtensions({ "guard.ts": guard, "tell.ts": tell }) },
-  )
-  await session.submit("echo it")
-  await session.view.until(settled(1))
-  expect(toasts(session.view.seen())).toEqual([{ extension: "tell", text: "Bash finished" }])
-  expect(session.view.view().docs[STATUS_LINES_KIND]).toEqual({ lines: { tell: "last ran Bash" } })
-})
-
-test("claude-extensions: execute.after changes what Claude reads, and a change Claude Code drops is toasted", async () => {
-  using claude = new FakeClaude("read_after_hooked")
-  await using session = await conversationWith(claude, {}, { home: homeWithExtensions({ "shout.ts": shout }) })
-  await session.submit("read it, then echo")
-  await session.view.until(settled(1))
-  const entries = session.view.seen()
-  expect(results(entries).map((result) => result.text)).toEqual(["1\tTHE GNOME LIVES UNDER THE FLOOR\n2\t", "quiet"])
-  // The fake replays its recorded results, so what reached Claude Code is sigma's answer to the Read's hook.
-  const after = claude.hookAnswers().filter((output) => output.hookEventName === "PostToolUse")
-  expect(after).toEqual([
-    {
-      hookEventName: "PostToolUse",
-      updatedToolOutput: expect.objectContaining({
-        file: expect.objectContaining({ content: "THE GNOME LIVES UNDER THE FLOOR\n" }),
-      }),
-    },
-  ])
-  // Claude Code keeps Bash's own result, so the extension hears its change did not reach Claude.
-  expect(toasts(entries)).toEqual([
-    { extension: "shout", text: "execute.after changed Bash's result, but the model gets Bash's own result" },
-  ])
-})
-
-test("claude-extensions: an extension's hooks reach the calls of Claude's subagents, in the subagent's conversation", async () => {
-  using claude = new FakeClaude("subagent_hooked")
-  await using session = await conversationWith(claude, {}, { home: homeWithExtensions({ "guard.ts": guard }) })
-  await session.submit("find the gnome")
-  const child = await subagentOf(session)
-  await session.view.until(settled(1))
-  await child.view.until(childEnded)
-  const notes = `${session.server.home.dir}/notes.txt`
-  expect(calls(child.view.seen())).toMatchObject([{ name: "Read", arguments: { file_path: notes, limit: 1 } }])
-  expect(calls(session.view.seen()).map((call) => call.name)).not.toContain("Read")
-  expect(claude.hookAnswers()).toEqual([{ hookEventName: "PreToolUse", updatedInput: { file_path: notes, limit: 1 } }])
-})
-
-test("claude-extensions: an extension's tool runs for Claude's subagents, in the subagent's conversation", async () => {
-  using claude = new FakeClaude("subagent_own_tool")
-  await using session = await conversationWith(claude, {}, { home: homeWithExtensions({ "clock.ts": clock }) })
-  await session.submit("ask a subagent the time in CET")
-  const child = await subagentOf(session)
-  await session.view.until(settled(1))
-  await child.view.until(childEnded)
-  const clocks = calls(child.view.seen()).filter((call) => call.name === "Clock")
-  expect(clocks).toMatchObject([{ arguments: { zone: "CET" } }])
-  expect(results(child.view.seen()).filter((result) => result.call === clocks[0]!.id)).toEqual([
-    expect.objectContaining({ text: "noon in CET", isError: false }),
-  ])
-  expect(calls(session.view.seen()).map((call) => call.name)).not.toContain("Clock")
-  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: noon in CET", "run_end: answered"])
-})
-
 test("subagent-claude: a Claude subagent that hands back its report answers with the report, not Claude Code's placeholder", async () => {
   using claude = new FakeClaude("subagent_own_tool")
-  await using session = await conversationWith(claude, {}, { home: homeWithExtensions({ "clock.ts": clock }) })
+  await using session = await conversationWith(claude, {})
   await session.submit("ask a subagent the time in CET")
   const child = await subagentOf(session)
   await session.view.until(settled(1))
@@ -1136,58 +964,11 @@ test("subagent-claude: a Claude subagent that hands back its report answers with
   expect(results(session.view.seen())).toEqual([expect.objectContaining({ text: "noon in CET", isError: false })])
 })
 
-/** Adds a read-only `Clock` tool, and removes Claude Code's `WebFetch` and sigma's `bash`. */
-const clockWithoutWeb = `import { Extension, Tool } from "@sigma/extension"
-import { Effect, Schema } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.transform((tools) => {
-    tools.add(
-      Tool.make({
-        name: "Clock",
-        description: "The time in a zone",
-        input: Schema.Struct({ zone: Schema.String }),
-        readOnly: true,
-        run: ({ zone }) => Effect.succeed(Tool.ok("noon in " + zone)),
-      }),
-    )
-    tools.remove("WebFetch")
-    tools.remove("bash")
-  }),
-)`
-
-test("claude-extensions: a tool an extension removes is withheld from Claude Code, by Claude Code's name for sigma's own", async () => {
-  using claude = new FakeClaude("own_tool")
-  const home = homeWithExtensions({ "clock.ts": clockWithoutWeb })
-  await using session = await conversationWith(claude, {}, { home })
-  await session.submit("what time is it")
-  await session.view.until(settled(1))
-  expect(results(session.view.seen())).toEqual([expect.objectContaining({ text: "noon in CET", isError: false })])
-  expect(claude.spawns()[0]!["--disallowedTools"]).toBe("WebFetch,Bash,Clock")
-})
-
-/** Adds two read-only tools, `Clock` then `Moon`, and removes Claude Code's `WebFetch`. */
-const clockAndMoon = `import { Extension, Tool } from "@sigma/extension"
-import { Effect, Schema } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.transform((tools) => {
-    for (const [name, answer] of [["Clock", "noon"], ["Moon", "full"]]) {
-      tools.add(
-        Tool.make({
-          name,
-          description: "Says " + answer,
-          input: Schema.Struct({ zone: Schema.String }),
-          readOnly: true,
-          run: () => Effect.succeed(Tool.ok(answer)),
-        }),
-      )
-    }
-    tools.remove("WebFetch")
-  }),
-)`
-
 /**
  * What Claude Code puts at the front of its requests that sigma chose for a spawn: the appended instructions, sigma's
- * MCP tools in order, and the withheld tools. Two spawns that agree on it can read each other's prompt cache.
+ * MCP tools in order, and the withheld tools. Two spawns that agree on it can read each other's prompt cache. With
+ * extensions switched off sigma offers Claude Code no tools of its own and withholds none, so only the instructions
+ * tell two fronts apart.
  */
 const cacheFront = (claude: FakeClaude, spawn: number) => {
   const initialize = claude.log().find((entry) => entry.spawn === spawn && entry.initialize)?.initialize
@@ -1200,15 +981,13 @@ const cacheFront = (claude: FakeClaude, spawn: number) => {
 
 const expectSameFront = (claude: FakeClaude, spawns: readonly [number, number]) => {
   const [first, second] = spawns.map((spawn) => cacheFront(claude, spawn))
-  expect(first).toMatchObject({ append: "Report with attn when done.", withheld: expect.stringContaining("WebFetch") })
-  expect(first!.tools.map((tool: { name: string }) => tool.name)).toEqual(["Clock", "Moon"])
+  expect(first).toMatchObject({ append: "Report with attn when done." })
   expect(second).toEqual(first!)
 }
 
-test("cache-claude-resume: a Claude Code process reopened for a conversation starts with the instructions, sigma tools and withheld tools of the one before", async () => {
+test("cache-claude-resume: a Claude Code process reopened for a conversation starts with the instructions of the one before", async () => {
   using claude = new FakeClaude("died_while_idle")
-  const home = homeWithExtensions({ "clock.ts": clockAndMoon })
-  await using session = await conversationWith(claude, { instructions: "Report with attn when done." }, { home })
+  await using session = await conversationWith(claude, { instructions: "Report with attn when done." })
   await session.submit("Remember the word PLUM. Reply with exactly: noted")
   await session.view.until(settled(1))
   process.kill(claude.pids()[0]!, "SIGKILL")
@@ -1218,10 +997,9 @@ test("cache-claude-resume: a Claude Code process reopened for a conversation sta
   expectSameFront(claude, [0, 1])
 })
 
-test("cache-claude-fork: a fork of a Claude conversation forks Claude Code's session, started with its parent's instructions, sigma tools and withheld tools", async () => {
+test("cache-claude-fork: a fork of a Claude conversation forks Claude Code's session, started with its parent's instructions", async () => {
   using claude = new FakeClaude("died_while_idle")
-  const home = homeWithExtensions({ "clock.ts": clockAndMoon })
-  await using session = await conversationWith(claude, { instructions: "Report with attn when done." }, { home })
+  await using session = await conversationWith(claude, { instructions: "Report with attn when done." })
   await session.submit("Remember the word PLUM. Reply with exactly: noted")
   await session.view.until(settled(1))
   const at = session.view.seen().at(-1)!.id

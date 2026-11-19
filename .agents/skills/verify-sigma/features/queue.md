@@ -86,7 +86,6 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - queue-idempotent: submitting again with the same request id is answered once
 - queue-run: prompts sent while sigma is working wait and run in order, each to its own end
 - queue-run: a prompt sent while sigma works runs after the run fails, instead of waiting for another prompt
-- queue-run, interrupt-withdraw: a prompt sent after an interrupt, while the run still stops, runs once it stopped
 - submit-author, queue-shared: every client sees who wrote each prompt, while it waits and once it runs
 
 Screen, `packages/sigma/test/screen.test.ts`:

@@ -26,8 +26,7 @@ conversation was started with `--auto`, which runs every call without asking.
 - `approval-interrupt` expires a waiting approval when the run is
   interrupted.
 - `approval-restart` keeps a call waiting for approval across a restart, and
-  asks again, with the new arguments, when its extensions' hooks change them
-  on the rerun: an answer holds only for the arguments it was given.
+  asks again after it; an answer then runs the call.
 - `tool-output-live` shows a command's output as it prints, under its call
   while the status reads `WORKING`, then commits it whole with the result.
 - `tool-root-env` runs every command with `SIGMA_ROOT_CONVERSATION` set to the
@@ -154,8 +153,8 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - approval-wire: a denied call is reported to the model as denied and does not run, and an unknown approval is refused by name
 - tool-read-only, approval-auto: reading calls and conversations started with auto approvals run without asking
 - child-tools, approval-auto: a subagent of a conversation that runs calls without asking does not ask either
-- subagent-root-env, tool-root-env: an extension's tool run by a subagent knows the conversation people started
-- approval-restart, status-snapshot: a call waiting for approval across a restart, whose hook computes other arguments on the rerun, asks again with them
+- subagent-root-env, tool-root-env: a subagent's command knows the conversation people started
+- approval-restart, status-snapshot: a call waiting for approval across a restart asks again after it, and runs once allowed
 - approval-ask: a call that changes things waits for a person, and every client sees what it asks and that the tree waits
 - tool-output-live: a running command's output streams live and ends as its result
 - tool-output-live: a command's output keeps characters split across reads and between streams whole

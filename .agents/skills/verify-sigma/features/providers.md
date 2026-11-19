@@ -167,6 +167,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 - provider-choose, model-flags: sigma exec starts on the provider, model and effort it names
 - provider-unknown, model-flags: sigma exec refuses a provider or an effort sigma does not have
 - provider-config-invalid: sigma exec says why the server it started refused the home's config.toml
+- provider-config-invalid: a server refuses to start on a config.toml that does not read, and says why
 - provider-binary: sigma exec runs a Claude provider's binary from config.toml, with its env and args
 
 Provider, `packages/sigma/test/openai.test.ts`:

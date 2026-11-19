@@ -476,7 +476,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - subagent-limits, child-tools: a follow-up task does not wake an idle subagent while maxThreads subagents work
 - child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks
 - child-tools, subagent-agents: interrupting a subagent stops its turn and reports what it was doing
-- subagent-root-env, tool-root-env: an extension's tool run by a subagent knows the conversation people started
+- subagent-root-env, tool-root-env: a subagent's command knows the conversation people started
 - subagent-limits: a tree runs at most as many subagents at once as config.toml allows
 - subagent-limits: with max_threads 0 in config.toml the root conversation is not offered spawn_agent
 - subagent-limits, child-tools: under the default config a subagent starts a subagent of its own, told only its own task

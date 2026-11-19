@@ -84,7 +84,7 @@ import {
 import * as RpcServer from "effect/rpc/RpcServer"
 import type { ModelAsk } from "./config.ts"
 import type { ProviderOptions } from "./providers.ts"
-import type { Home } from "./home.ts"
+import { extensionsOff, type Home } from "./home.ts"
 import { Lifetime } from "./lifetime.ts"
 import { homeSocketServer } from "./socket.ts"
 import { Setup } from "./setup.ts"
@@ -97,7 +97,6 @@ import { committedSignIns } from "./sign-ins.ts"
 import { codeModeTools, sigmaTools } from "./tools/index.ts"
 import { attachedImages } from "./images.ts"
 import { agentTools, type AgentTypes, interruptTree } from "./agents.ts"
-import { type Extensions, openExtensions, StatusLinesDoc } from "./extensions/index.ts"
 import { followTreeStatus, type TreeStatuses } from "./status.ts"
 import { skillsOf, userInput, workspaceInstructions } from "./workspace.ts"
 import { lineageOf, listConversations, titleOf, wireId } from "./conversations.ts"
@@ -121,7 +120,6 @@ export type KernelHarnessService = {
   readonly home: Home
   readonly harness: Harness
   readonly stoppedTooOften: Map<ConversationId, number>
-  readonly extensions: Extensions
   readonly status: TreeStatuses
   /** Prepares the images `read` returns and people attach. */
   readonly images: ImageProcessor
@@ -165,13 +163,10 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         const base = [sigmaTools(images), agentTools(agents, typesOf), codeModeTools(sandbox)]
         for (const extension of base) registry.install(extension)
         registry.install(workspaceInstructions(home, instances, typesOf))
-        // Claude Code has its own tools and subagents, so sigma's built-in ones are not offered to it. The tools the
-        // extensions remove are known once they load, below; Claude Code is told not to use its own of them.
-        let removedTools: () => ReadonlyArray<string> = () => []
+        // Claude Code has its own tools and subagents, so sigma's built-in ones are not offered to it.
         const claudeRuns = claudeRunTasks({
           settings: (provider) => claude.get(provider),
           builtinExtensions: new Set(base.map((extension) => extension.name)),
-          withheldTools: () => removedTools(),
           title: (conversation) => titleOf(harness, conversation),
           processes,
         })
@@ -204,7 +199,6 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
               env: ({ cwd }) => Effect.succeed(new LocalExecutionEnv({ cwd: cwd ?? home.dir })),
               runEnded,
               inputWithdrawn,
-              viewDocs: [StatusLinesDoc],
               runTasks: claudeRuns.runTasks,
               // A prompt queued behind a run that fails runs next, as one queued behind an answer does.
               settings: { afterFailedRun: "continue" },
@@ -221,10 +215,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         // Read-only, nothing runs, so no run counts a stop.
         if (!readOnly) for (const [id, stops] of yield* countStops(harness)) stoppedTooOften.set(id, stops)
         const status = yield* followTreeStatus(harness)
-        // Loaded before anything runs, so the extensions guard the calls a restart resumes.
-        const extensions = yield* openExtensions(home, registry, base, () => harness)
-        removedTools = extensions.removed
-        return { home, harness, stoppedTooOften, extensions, status, images, models, readOnly }
+        return { home, harness, stoppedTooOften, status, images, models, readOnly }
       }).pipe(Effect.orDie),
     )
 }
@@ -284,7 +275,7 @@ const toWindow = (window: Window | undefined): ConversationWindow | undefined =>
 
 const Handlers = SigmaRpcs.toLayer(
   Effect.gen(function* () {
-    const { home, harness, stoppedTooOften, extensions, status, images, models, readOnly } = yield* KernelHarness
+    const { home, harness, stoppedTooOften, status, images, models, readOnly } = yield* KernelHarness
     const connectionQueue = yield* ConnectionQueue
     const providers = yield* Providers
     const setup = yield* Setup.make(providers.instances, yield* committedSignIns(harness, readOnly))
@@ -740,8 +731,6 @@ const Handlers = SigmaRpcs.toLayer(
         }),
       ),
       "status/watch": () => Stream.unwrap(Effect.as(lifetime.hold, status.watch(connectionQueue))),
-      "extensions/list": () => extensions.list,
-      "extensions/reload": () => extensions.reload,
       // Stops once the runs in flight settle; a run is never cut off by a stop.
       "server/stop": () => Effect.andThen(Effect.ignore(quiet), afterReply(lifetime.stop)),
       "providers/list": ({ refresh }) => setup.providers(refresh ?? false),
@@ -823,5 +812,7 @@ export const serve = (home: Home, options: ServerOptions) =>
   Effect.gen(function* () {
     const lifetime = yield* Lifetime
     yield* Console.error(`sigma ${VERSION} serving ${home.dir}`)
+    const off = extensionsOff(home)
+    if (off !== undefined) yield* Console.error(off)
     yield* lifetime.ended
   }).pipe(Effect.provide(serverLayer(home, options)), Effect.scoped)

@@ -746,7 +746,7 @@
     "area": "J",
     "feature": "Extension shape with tools, hooks, sections, tasks, entries, documents (R224-243, \u00a77.1)",
     "verdict": "bring",
-    "useCases": ["extension-shape", "extensions-load"]
+    "useCases": ["extension-shape"]
   },
   {
     "id": "J2",
@@ -774,14 +774,14 @@
     "area": "J",
     "feature": "Reload semantics: running work finishes on old code, boundaries switch (R465-475, \u00a77.5)",
     "verdict": "bring",
-    "useCases": ["extension-reload", "reload"]
+    "useCases": ["extension-reload"]
   },
   {
     "id": "J6",
     "area": "J",
     "feature": "Same-name tool override (R245-305)",
     "verdict": "bring",
-    "useCases": ["extension-tool-override", "tools-transform"]
+    "useCases": ["extension-tool-override"]
   },
   {
     "id": "J7",
@@ -816,7 +816,7 @@
     "area": "K",
     "feature": "`beforeRequest` (\u00a77.2)",
     "verdict": "bring",
-    "useCases": ["hook-before-request", "request-hook"]
+    "useCases": ["hook-before-request"]
   },
   {
     "id": "K2",
@@ -858,14 +858,14 @@
     "area": "K",
     "feature": "`beforeTool`: block or rewrite (\u00a77.2)",
     "verdict": "bring",
-    "useCases": ["hook-before-tool", "execute-before"]
+    "useCases": ["hook-before-tool"]
   },
   {
     "id": "K8",
     "area": "K",
     "feature": "`afterTool` (\u00a77.2)",
     "verdict": "bring",
-    "useCases": ["hook-after-tool", "execute-after"]
+    "useCases": ["hook-after-tool"]
   },
   {
     "id": "K9",

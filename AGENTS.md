@@ -28,7 +28,7 @@ home                    one directory of state, SIGMA_HOME; like a tenant
 ├─ server (at most 1)   the process that owns the home's state and runs its work
 ├─ conversation (0..n)
 ├─ provider (1..n)      a way to reach models: Claude Code or a ChatGPT sign-in
-└─ extension (0..n)     TypeScript the server loads to add tools and hooks
+└─ extension (0..n)     TypeScript that adds tools and hooks; switched off for now
 ```
 
 ```text

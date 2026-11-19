@@ -28,8 +28,6 @@ import {
   RESET_KIND,
   RUN_END_KIND,
   type RunEnd,
-  STATUS_LINES_KIND,
-  TOAST_KIND,
   USER_KIND,
   MODEL_KIND,
   type View,
@@ -52,6 +50,7 @@ import { launchAuthor } from "../author.ts"
 import { VERSION } from "../version.ts"
 import { mailPayload } from "../agents.ts"
 import { Client, serverRefusal, type StartOptions } from "../client.ts"
+import { defaultHome, extensionsOff } from "../home.ts"
 import { attachmentsIn, imagesIn } from "../attach.ts"
 import { describeCall } from "./calls.ts"
 import {
@@ -125,7 +124,6 @@ type Docs = {
   readonly "pi.agent"?: Agent & { readonly thinkingLevel?: string }
   readonly "sigma.approvals"?: Approvals
   readonly "pi.usage"?: UsageLedger
-  readonly [STATUS_LINES_KIND]?: { readonly lines?: Readonly<Record<string, string>> }
 }
 
 const messageOf = (entry: EntryRecord): Message | undefined => entry.model?.[0] as Message | undefined
@@ -320,7 +318,6 @@ const DRAWN = new Set([
   "pi.assistant",
   RUN_END_KIND,
   MODEL_KIND,
-  TOAST_KIND,
   RESET_KIND,
   COMPACTION_KIND,
   CONFIGURED_KIND,
@@ -719,14 +716,6 @@ const EntryView = (props: {
         </text>
       )
     }
-    case TOAST_KIND: {
-      const data = dataOf<{ extension: string; text: string }>(entry)
-      return (
-        <text fg={color.dim} marginLeft={2}>
-          {`◆ ${data.extension}: ${data.text}`}
-        </text>
-      )
-    }
     default:
       return null
   }
@@ -913,7 +902,9 @@ export const tui = Effect.fnUntraced(function* (
   options: StartOptions,
   prompt: string | undefined,
 ) {
-  let next = yield* Effect.scoped(conversationScreen(id, options, prompt))
+  // Said once, when the TUI opens, as the notice the person's next action replaces.
+  const off = extensionsOff(defaultHome())
+  let next = yield* Effect.scoped(conversationScreen(id, options, prompt, off))
   while (next !== undefined) next = yield* Effect.scoped(conversationScreen(next, options, undefined))
 })
 
@@ -927,6 +918,7 @@ const conversationScreen = Effect.fnUntraced(function* (
   id: string | undefined,
   options: StartOptions,
   prompt: string | undefined,
+  opening?: string,
 ) {
   const client = yield* Client
   const author = launchAuthor()
@@ -1041,7 +1033,9 @@ const conversationScreen = Effect.fnUntraced(function* (
   let renderer: CliRenderer | undefined
   const setup = yield* setupOf(client, scope, () => renderer)
   const [workingSince, setWorkingSince] = createSignal<number | undefined>(undefined)
-  const [notice, setNotice] = createSignal<Notice | undefined>(undefined)
+  const [notice, setNotice] = createSignal<Notice | undefined>(
+    opening === undefined ? undefined : { text: opening, warning: false },
+  )
   const [panel, setPanel] = createSignal<Panel | undefined>(undefined)
   const [contextWindows, setContextWindows] = createSignal<ReadonlyMap<string, number>>(new Map())
   Effect.runFork(
@@ -1105,9 +1099,6 @@ const conversationScreen = Effect.fnUntraced(function* (
     hosted: info?.lineage !== undefined && info.lineage.task === undefined,
     get readOnly() {
       return readOnly()
-    },
-    get statusLines() {
-      return root.docs()[STATUS_LINES_KIND]?.lines ?? {}
     },
     // A conversation that holds only who started it shows the splash until something happens in it.
     get empty() {

@@ -71,7 +71,6 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 - interrupt-wire: interrupting keeps what sigma already said and marks the run interrupted
 - interrupt-withdraw: interrupting withdraws the prompts that wait, and the transcript names each by its requestId
-- queue-run, interrupt-withdraw: a prompt sent after an interrupt, while the run still stops, runs once it stopped
 
 Screen, `packages/sigma/test/screen.test.ts`:
 

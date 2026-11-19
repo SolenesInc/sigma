@@ -1,4 +1,4 @@
-import type { AuthState, ExtensionInfo, ModelSelection, ProviderModels, ProviderSnapshot } from "@sigma/protocol"
+import type { AuthState, ModelSelection, ProviderModels, ProviderSnapshot } from "@sigma/protocol"
 import { useTerminalDimensions } from "@opentui/solid"
 import { For, Show } from "solid-js"
 import { color, KeyCap } from "./theme.tsx"
@@ -18,14 +18,12 @@ export interface Picker {
 
 export interface SetupView {
   providers: Array<ProviderSnapshot>
-  brokenExtensions: Array<ExtensionInfo>
   signIn: AuthState | undefined
   picker: Picker | undefined
 }
 
 export const emptySetup = (): SetupView => ({
   providers: [],
-  brokenExtensions: [],
   signIn: undefined,
   picker: undefined,
 })

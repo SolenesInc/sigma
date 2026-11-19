@@ -460,32 +460,6 @@ test("subagent-card: a Claude subagent shows as a card in place of its call's re
   await quit(own)
 }, 40_000)
 
-test("status-line, toast, extensions-failed: a person sees what extensions say in the footer and the transcript, and which failed to load", async () => {
-  const sigmaHome = home()
-  await Bun.write(join(sigmaHome.extensions, "broken.ts"), "export default 42")
-  await Bun.write(
-    join(sigmaHome.extensions, "watch.ts"),
-    `import { Extension } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.hook("execute.after", (call) =>
-    Effect.andThen(call.conversation.status("tests green"), call.conversation.toast("suite ran")),
-  ),
-)`,
-  )
-  const session = await open(
-    [call("read", { path: join(sigmaHome.dir, "config.toml") }), { text: "read it" }],
-    [],
-    sigmaHome,
-  )
-  await session.waitFor((screen) => screen.includes("extension broken failed to load") && screen.includes("READY"))
-  session.type("read the config\r")
-  const screen = await session.waitFor((screen) => screen.includes("read it") && screen.includes("READY"))
-  expect(screen).toContain("◆ watch: suite ran")
-  expect(screen.split("\n").at(-1)).toContain("watch: tests green")
-  await quit(session)
-})
-
 test("skills-tui: a message that names a skill shows which skills came with it, also after a reopen", async () => {
   await using fake = new FakeOpenAi()
   fake.play("text_answer")
@@ -549,6 +523,18 @@ test("image-attach: an image the server cannot decode is refused on screen by na
   await quit(session)
 })
 
+test("extensions-off: a person whose home still holds extensions is told once that they are switched off", async () => {
+  const sigmaHome = home()
+  await Bun.write(join(sigmaHome.extensions, "guard.ts"), "export default 42")
+  const session = await open([{ text: "hello ada" }], [], sigmaHome)
+  const off = `extensions are switched off for now; sigma loads nothing in ${sigmaHome.extensions}`
+  await session.waitFor((screen) => screen.includes(off) && screen.includes("READY"))
+  session.type("hi\r")
+  const answered = await session.waitFor((screen) => screen.includes("hello ada") && screen.includes("READY"))
+  expect(answered).not.toContain("extensions are switched off")
+  await quit(session)
+})
+
 test("crash-tui: the open TUI finishes the answer after the server is killed mid-answer", async () => {
   const sigmaHome = home()
   const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight nine ten", delayMs: 100 }])
@@ -575,7 +561,7 @@ test("crash-tui: quitting while the server cannot come back ends sigma, though a
   const session = screenSession([], env)
   await session.waitFor((screen) => screen.includes("READY"))
   // Every server the TUI starts now refuses this config, so the prompt is sent again and again while the TUI waits.
-  await Bun.write(join(sigmaHome.dir, "config.toml"), "[extensions.guard\n")
+  await Bun.write(join(sigmaHome.dir, "config.toml"), "[providers.claude\n")
   server.kill("SIGKILL")
   await server.exited
   session.type("never sent\r")
@@ -589,7 +575,7 @@ test("server-cannot-start: an open TUI whose server cannot start shows why, star
   const session = screenSession([], env)
   await session.waitFor((screen) => screen.includes("READY"))
   const config = join(sigmaHome.dir, "config.toml")
-  await Bun.write(config, "[extensions.guard\n")
+  await Bun.write(config, "[providers.claude\n")
   server.kill("SIGKILL")
   await server.exited
   // A server that refuses takes 0.6 s to start and exit on a quiet machine, and up to 4.7 s on one under load (100
@@ -618,10 +604,22 @@ test("server-cannot-start: an open TUI whose server cannot start shows why, star
   ).finally(() => watcher.close())
   expect(seen.map(({ count }) => count - seen[0]!.count)).toEqual([0, 1, 2])
   expect(seen[2]!.at - seen[1]!.at).toBeGreaterThan(900)
-  // A prompt typed now clears the notice, which comes back while the server still refuses; the prompt waits.
+  // A prompt typed now is taken and waits, and the notice says why while the server still refuses: a refusal after the
+  // prompt shows it again. The prompt clears the notice, but a refusal the TUI hears in the same frame shows it at once,
+  // and the test types just as one arrives, so whether a frame without it is drawn is timing, not a promise.
+  const before = refusals()
   session.type("hi\r")
-  await session.waitFor((screen) => !screen.includes("cannot start"))
-  await session.waitFor((screen) => screen.includes("cannot start"), 20_000)
+  const after = watch(sigmaHome.dir)
+  await deadline(
+    new Promise<void>((resolve) => {
+      const check = () => refusals() > before && resolve()
+      after.on("change", check)
+      check()
+    }),
+    20_000,
+    "a refusal after the prompt",
+  ).finally(() => after.close())
+  await session.waitFor((screen) => screen.includes("type a message") && screen.includes("cannot start"), 20_000)
   // The config fixed, the next server starts, the notice goes and the prompt is answered.
   rmSync(config)
   await session.waitFor(

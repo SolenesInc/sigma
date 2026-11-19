@@ -78,7 +78,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 - start-with-id: starting a conversation with an id it already has answers with that conversation, and an all-digit id is refused by name
 - start-with-id: a chosen id that names an object property, such as toString, opens its own conversation
-- approval-restart, status-snapshot: a call waiting for approval across a restart, whose hook computes other arguments on the rerun, asks again with them
+- approval-restart, status-snapshot: a call waiting for approval across a restart asks again after it, and runs once allowed
 - status-follow, status-ended: watching status follows each run of a tree and says how it ended
 - status-subagent, status-snapshot: a subagent waiting on a person shows as its whole tree waiting, to watchers then and later
 - conversation-ended: conversation/list tells a client that was not watching how a conversation's last run ended, also after a restart
