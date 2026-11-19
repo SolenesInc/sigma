@@ -497,8 +497,8 @@ test("steer-claude: a steer sent between the results of parallel calls reaches C
   expect(lines.slice(-4)).toEqual([
     "result Read: 1\tbanana\n2\t",
     "user: Also end your reply with the word BANANA.",
-    "assistant: a.txt was off limits; b.txt holds banana.",
-    "assistant: b.txt holds banana. BANANA",
+    "assistant: I couldn't read `a.txt`: a PreToolUse guard hook blocked the call with \"a.txt is off limits.\" I didn't try another route to its contents, since the hook is a deliberate restriction.\n\n`b.txt` contains:\n\n```\nbanana\n```\n\nSo the reply can't be \"a contents, b contents\" as requested. If you want `a.txt` included, you'll need to lift the restriction on that file.",
+    "assistant: I still can't include `a.txt`, because the guard hook blocks it. `b.txt` contains `banana`.\n\nBANANA",
   ])
   const steers = claude.log().filter((entry) => entry.received?.type === "user" && entry.received.priority === "next")
   expect(steers).toHaveLength(1)
@@ -537,13 +537,13 @@ test("claude-resume: what each run spent is added to the conversation's usage, o
   )
   // Each process reports its own totals at its result: the two recorded results, added up.
   expect(usage["claude/claude-haiku-5-5"]).toMatchObject({
-    input: 4,
-    output: 10,
-    cacheRead: 38_052,
-    cacheWrite: 12_626,
-    totalTokens: 50_692,
+    input: 6,
+    output: 14,
+    cacheRead: 47_041,
+    cacheWrite: 13_846,
+    totalTokens: 60_907,
   })
-  expect(usage["claude/claude-haiku-5-5"]!.cost.total).toBeCloseTo(0.00291112, 10)
+  expect(usage["claude/claude-haiku-5-5"]!.cost.total).toBeCloseTo(0.00324721, 10)
 })
 
 /** Commits a turn another provider answered: the prompt, and its echo. */

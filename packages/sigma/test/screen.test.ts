@@ -441,8 +441,8 @@ test("subagent-card: a Claude subagent shows as a card in place of its call's re
   parent.type("go\r")
   const screen = await parent.waitFor(
     (screen) =>
-      /⧉ Find gnome location in notes \(general-purpose\) +done/.test(screen) &&
-      screen.includes("Under the floor.") &&
+      /⧉ Locate gnome in notes\.txt \(general-purpose\) +done/.test(screen) &&
+      screen.includes("The gnome lives under the floor.") &&
       screen.includes("READY"),
     20_000,
   )

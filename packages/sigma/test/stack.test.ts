@@ -354,7 +354,10 @@ test("crash-claude-settled: a Claude Code answer committed before the server was
   const after = watchView(client, conversation)
   await after.until(() => true)
   expect(transcript(after.view().entries)).toEqual(transcript(before.view().entries))
-  expect(transcript(after.view().entries).slice(-2)).toEqual(["assistant: Under the floor.", "run_end: answered"])
+  expect(transcript(after.view().entries).slice(-2)).toEqual([
+    "assistant: The gnome lives under the floor.",
+    "run_end: answered",
+  ])
   expect(claude.spawns()).toHaveLength(1)
   client.close()
 }, 30_000)
@@ -1201,7 +1204,7 @@ test("crash-claude: a Claude subagent cut off by a crashed server ends interrupt
   expect(runEnds(after.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   // Claude Code is resumed and told its Agent call was cut off; it is not started again for the subagent.
   expect(claude.userTexts(1)).toEqual([
-    ["Your Agent call toolu_01DxmcUXKnbFWBQecJLTs1n3 was cut off: interrupted; it may or may not have taken effect"],
+    ["Your Agent call toolu_01FRRPpVEFf9Yhtae39dpsvM was cut off: interrupted; it may or may not have taken effect"],
   ])
   expect(claude.spawns()).toHaveLength(2)
   expect(transcript(resumed.seen()).slice(-2)).toEqual(["assistant: resumed ok", "run_end: answered"])

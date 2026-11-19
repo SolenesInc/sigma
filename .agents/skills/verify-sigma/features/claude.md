@@ -390,9 +390,16 @@ Package, `packages/claude/test/claude.test.ts`:
 - A new recording comes from a real Claude Code through
   `packages/sigma/test/support/record-claude`: give it to a server as the
   Claude executable with `RECORD_CLAUDE_TO=fixtures/claude/<name>.ndjson`.
-  It leaves out the machine's own skills, commands and hooks, but what Claude
-  writes may quote your settings or CLAUDE.md: read the file before
-  committing it.
+  It holds the process open until Claude Code's `idle`, so every turn ends
+  with `result` then `idle`. It leaves out the machine's own skills, commands
+  and hooks, but what Claude writes may quote your settings or CLAUDE.md:
+  read the file before committing it.
+- `packages/sigma/test/support/record-claude-fixtures.ts <journey>` records
+  the provider tests' journeys on claude-haiku-5-5 with your sign-in, and
+  `derive-claude-fixtures.ts` then rebuilds `subagent_working` from them.
+  Claude Code sometimes starts a subagent in the background: a `subagent`
+  recording with `background_tasks_changed` is not the foreground journey its
+  tests describe, so record it again.
 - The fake does not run Claude Code's tools: no `made.txt` appears, and a
   call's result is the recorded one. Prove sigma's side by the screen, the
   commits and the log.
@@ -410,10 +417,6 @@ Package, `packages/claude/test/claude.test.ts`:
   50,000 filler words of start instructions, cut from the recordings: the fake
   does not compare what sigma sends. Their compaction comes 58 and 3 minutes
   after the last run, by the time of the request.
-- The `resume_after_kill` recording expected
-  `...was cut off: interrupted: sigma stopped while this ran; it may or may not have taken effect`;
-  sigma now sends `...was cut off: interrupted; it may or may not have taken effect`.
-  The log shows today's wording, which is right.
 - `tui wait` matches the prompt too: wait on text the prompt does not hold,
   such as `may or may not` or `READY`, not on the reply the prompt asks for.
 - A conversation's directory is the checkout for the TUI and `exec`; the
