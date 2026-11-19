@@ -39,7 +39,7 @@ export class Job {
 /** What the conversation that hosts a job hands its task: the job, and what its subagent works with (the host's). */
 export type Hosted = {
   readonly job: Job
-  readonly from: Pick<TranscriptScope, "agent" | "own" | "provider" | "modelId" | "hosting" | "started">
+  readonly from: Pick<TranscriptScope, "agent" | "provider" | "modelId" | "hosting" | "started">
 }
 
 /** The job each `claude.job` task holds, by the task's id. */

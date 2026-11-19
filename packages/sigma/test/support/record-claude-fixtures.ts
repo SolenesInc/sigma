@@ -5,10 +5,6 @@
 //
 //   bun packages/sigma/test/support/record-claude-fixtures.ts [journey...]   (no journey: all of them)
 //
-// bash_hook_denied and steer_mid_message were recorded by this script at 8ee5805 through a server that loaded a guard
-// extension. Sigma's extensions are switched off since #131, so recording them again needs their journeys driven
-// through packages/claude's harness, as its tests do.
-//
 // Then derive the fixtures made from these (`derive-claude-fixtures.ts`) and read every recording before committing it.
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, watch } from "node:fs"
 import { homedir, userInfo } from "node:os"

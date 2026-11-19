@@ -27,8 +27,7 @@ tests, docs and conversation.
 home                    one directory of state, SIGMA_HOME; like a tenant
 ├─ server (at most 1)   the process that owns the home's state and runs its work
 ├─ conversation (0..n)
-├─ provider (1..n)      a way to reach models: Claude Code or a ChatGPT sign-in
-└─ extension (0..n)     TypeScript that adds tools and hooks; switched off for now
+└─ provider (1..n)      a way to reach models: Claude Code or a ChatGPT sign-in
 ```
 
 ```text
@@ -106,7 +105,7 @@ The skills are in `.agents/skills`.
 
 ## Testing
 
-Every test defends one promise that a person, a client, an extension or a later
+Every test defends one promise that a person, a client or a later
 version relies on, and its name says what they would see if it broke. Tests
 enter where those consumers enter:
 

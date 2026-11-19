@@ -1,6 +1,5 @@
 // What a client reads of a kernel conversation beside its view: the id it names it by, where a subagent came from,
-// and how its last run ended. `conversation/list` answers these for every conversation, and extension hooks see the
-// lineage of the conversation they run in.
+// and how its last run ended. `conversation/list` answers these for every conversation.
 import { ApprovalsDoc, type Harness, SubagentOriginDoc } from "@sigma/harness"
 import { type ConversationId, type ConversationRecord, type Cursor, type EntryId } from "@sigma/kernel"
 import { type ConversationInfo, type Lineage, type RunEnd, type TreeStatus, USER_KIND } from "@sigma/protocol"

@@ -998,24 +998,16 @@ test("subagent-claude: a Claude subagent that hands back its report answers with
 })
 
 /**
- * What Claude Code puts at the front of its requests that sigma chose for a spawn: the appended instructions, sigma's
- * MCP tools in order, and the withheld tools. Two spawns that agree on it can read each other's prompt cache. With
- * extensions switched off sigma offers Claude Code no tools of its own and withholds none, so only the instructions
- * tell two fronts apart.
+ * What Claude Code puts at the front of its requests that sigma chose for a spawn: the appended instructions. Two spawns
+ * that agree on it can read each other's prompt cache.
  */
-const cacheFront = (claude: FakeClaude, spawn: number) => {
-  const initialize = claude.log().find((entry) => entry.spawn === spawn && entry.initialize)?.initialize
-  return {
-    append: initialize?.appendSystemPrompt,
-    tools: initialize?.sdkMcpServerManifests?.sigma?.toolsListResult?.tools,
-    withheld: claude.spawns()[spawn]?.["--disallowedTools"],
-  }
-}
+const cacheFront = (claude: FakeClaude, spawn: number) =>
+  claude.log().find((entry) => entry.spawn === spawn && entry.initialize)?.initialize?.appendSystemPrompt
 
 const expectSameFront = (claude: FakeClaude, spawns: readonly [number, number]) => {
   const [first, second] = spawns.map((spawn) => cacheFront(claude, spawn))
-  expect(first).toMatchObject({ append: "Report with attn when done." })
-  expect(second).toEqual(first!)
+  expect(first).toBe("Report with attn when done.")
+  expect(second).toBe(first)
 }
 
 test("cache-claude-resume: a Claude Code process reopened for a conversation starts with the instructions of the one before", async () => {

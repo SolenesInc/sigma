@@ -3,7 +3,6 @@
 // subagent's frames and callbacks go to its job (D1, F7); the rest go to the run it serves, or wait for the next run
 // while it serves none. What a run does with its frames is `serving.ts`, what a job does is `job.ts`.
 import {
-  createSdkMcpServer,
   type EffortLevel,
   type HookCallbackMatcher,
   type HookEvent,
@@ -16,7 +15,6 @@ import {
 import type { Agent } from "@sigma/harness"
 import type { Usage } from "@sigma/models"
 import { Cause, Clock, Deferred, type Duration, Effect, Exit, Option, Semaphore } from "effect"
-import { z } from "zod"
 import { claudeEnvironment, toolSearchSettings } from "./environment.ts"
 import { Inbox } from "./inbox.ts"
 import { ENDED_WITH_PROCESS, Job, type JobEnd, STOPPED_WITH_RUN } from "./links.ts"
@@ -30,7 +28,7 @@ import {
   type Serving,
   type ServingProcess,
 } from "./serving.ts"
-import { type Callbacks, OWN_TOOL, type OwnTool, toolHooksOf } from "./transcript.ts"
+import type { Callbacks } from "./transcript.ts"
 
 /** How a Claude Code instance is started: its executable, environment and extra arguments. */
 export interface ClaudeProcessSettings {
@@ -52,10 +50,6 @@ export type Start =
 export type ProcessConfig = {
   readonly agent: Agent
   readonly settings: ClaudeProcessSettings
-  /** Extensions whose tools Claude Code has its own of; the rest reach it through sigma's MCP server. */
-  readonly builtinExtensions: ReadonlySet<string>
-  /** Tool names extensions removed: sigma's own, which stand for Claude Code's, and Claude Code's by its names. */
-  readonly withheldTools: ReadonlyArray<string>
   /** The id of the conversation people started, for the `SIGMA_ROOT_CONVERSATION` its commands see. */
   readonly rootConversation: string
 }
@@ -115,16 +109,6 @@ type Taker = {
 /** One model's running totals in one Claude Code process, as it reports them (`modelUsage`). */
 type UsageTotals = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }
 
-/** Claude Code's tool for each of sigma's built-in tools, which Claude Code is never offered. */
-const CLAUDE_TOOL: Readonly<Record<string, string>> = {
-  read: "Read",
-  grep: "Grep",
-  glob: "Glob",
-  write: "Write",
-  edit: "Edit",
-  bash: "Bash",
-}
-
 export const bundledExecutable = () => {
   for (const variant of ["", "-musl"]) {
     try {
@@ -171,40 +155,16 @@ const userMessage = (parts: ReadonlyArray<Said>, priority?: "next"): SDKUserMess
   ...(priority ? { priority } : {}),
 })
 
-/** What a process is started with that it cannot change once it runs. */
-const spawnedWith = (config: ProcessConfig) => {
-  const { agent } = config
-  // Own tools: those of extensions other than sigma's built-in ones, offered to Claude Code over MCP.
-  const builtin = new Set(
-    agent.extensions
-      .filter((extension) => config.builtinExtensions.has(extension.name))
-      .flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name)),
-  )
-  const own = new Map<string, OwnTool>(
-    agent.tools.filter((tool) => !builtin.has(tool.name)).map((tool) => [tool.name, tool]),
-  )
-  return {
-    ...selectionOf(agent),
-    own,
-    // Claude Code's own tools an extension removed, and the own tools, which it reaches only over MCP.
-    withheld: [...new Set([...config.withheldTools.map((name) => CLAUDE_TOOL[name] ?? name), ...own.keys()])],
-  }
-}
-
 /**
  * The process key: what a process of `config` is spawned with, which a live one cannot change. A run whose key
  * differs from its live process's gets a new process. The model and effort are not in it: `serve` switches them.
  */
 export const processKey = (config: ProcessConfig) => {
-  const { own, withheld } = spawnedWith(config)
   return JSON.stringify({
     provider: config.agent.model?.provider,
     settings: config.settings,
     cwd: config.agent.cwd,
     maxTurns: config.agent.maxTurns,
-    own: [...own.values()].map(({ name, description, parameters }) => ({ name, description, parameters })),
-    withheld,
-    afterHooks: toolHooksOf(config.agent).after.length > 0,
     rootConversation: config.rootConversation,
   })
 }
@@ -213,7 +173,7 @@ export const processKey = (config: ProcessConfig) => {
 export const openProcess = (config: ProcessConfig, start: Start) =>
   Effect.gen(function* () {
     const { agent, settings } = config
-    const { modelId, effort, own, withheld } = spawnedWith(config)
+    const { modelId, effort } = selectionOf(agent)
     const serial = yield* Semaphore.make(1)
     const clock = yield* Clock.Clock
     let lastRequest: LastRequest | undefined
@@ -238,8 +198,6 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
      * takes it: a subagent can end before it is hosted, as one a subagent started, or one started while no run served.
      */
     const starts = new Map<string, Job>()
-    /** The calls of own tools by id, once read: the job whose subagent made one, or `undefined` for the run's. */
-    const ownCalls = new Map<string, Deferred.Deferred<Job | undefined>>()
     /** What takes the frames that are not a job's: the run served, or a stop. While none does, they wait in `held`. */
     let taker: Taker | undefined
     const held: SDKMessage[] = []
@@ -274,11 +232,6 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       if (job === undefined) jobs.set(task, (job = new Job(task, () => messages.stopTask(task))))
       return job
     }
-    const ownCall = (id: string) => {
-      let call = ownCalls.get(id)
-      if (call === undefined) ownCalls.set(id, (call = Deferred.makeUnsafe<Job | undefined>()))
-      return call
-    }
     const until = <A>(effect: Effect.Effect<A>, signal: AbortSignal | undefined) =>
       Effect.runPromise(effect, signal === undefined ? undefined : { signal })
     /** The callbacks of a job's task, once it runs. */
@@ -298,45 +251,9 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
         },
       ],
       PostCompact: [{ hooks: [async (...args) => current().postCompact(...args)] }],
-      ...(toolHooksOf(agent).after.length === 0
-        ? {}
-        : {
-            PostToolUse: [
-              {
-                hooks: [
-                  async (input, id, options) =>
-                    (await callbacksOf(input.agent_id, options.signal)).postToolUse(input, id, options),
-                ],
-              },
-            ],
-          }),
     }
     const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, options) =>
       (await callbacksOf(options.agentID, options.signal)).canUseTool(tool, input, options)
-    /** An own tool's call, run by the conversation it is in: MCP names only the call, which the reader placed. */
-    const runOwn = (name: string) => async (input: unknown, extra: unknown) => {
-      const id = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta?.["claudecode/toolUseId"]
-      const signal = (extra as { signal?: AbortSignal } | undefined)?.signal
-      if (typeof id !== "string") return current().runOwn(name)(input, extra)
-      const job = await until(Deferred.await(ownCall(id)), signal)
-      ownCalls.delete(id)
-      const callbacks = job === undefined ? current() : await jobCallbacks(job, signal)
-      return callbacks.runOwn(name)(input, extra)
-    }
-    const mcpServers =
-      own.size === 0
-        ? {}
-        : {
-            sigma: createSdkMcpServer({
-              name: "sigma",
-              tools: [...own.values()].map((tool) => ({
-                name: tool.name,
-                description: tool.description,
-                inputSchema: z.fromJSONSchema(tool.parameters as z.core.JSONSchema.JSONSchema),
-                handler: runOwn(tool.name),
-              })),
-            }),
-          }
     const settingSources: SettingSource[] = ["user", "project", "local"]
     const env = {
       ...claudeEnvironment(settings.env),
@@ -352,8 +269,6 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
         includePartialMessages: true,
         canUseTool,
         hooks,
-        mcpServers,
-        ...(withheld.length === 0 ? {} : { disallowedTools: withheld }),
         settingSources,
         // Claude Code's own idle compaction would compact with no run to commit its summary; sigma's does it (D7).
         settings: { ...toolSearch, idleCompaction: false },
@@ -436,7 +351,6 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       get awaitingReplay() {
         return awaitingReplay.size > 0
       },
-      own,
       send,
       serially: (effect) => serial.withPermits(1)(effect),
       spent,
@@ -594,13 +508,6 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
             const message = next.value
             if (!observe(message)) return Effect.void
             const job = route(message)
-            if (message.type === "assistant") {
-              for (const block of message.message.content) {
-                if (block.type === "tool_use" && block.name.startsWith(OWN_TOOL)) {
-                  Deferred.doneUnsafe(ownCall(block.id), Exit.succeed(job))
-                }
-              }
-            }
             if (job === undefined) return take(message)
             job.inbox.push({ frame: message })
             return Effect.void

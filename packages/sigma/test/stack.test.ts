@@ -191,22 +191,6 @@ test("start-with-id: a conversation opened on a client's id survives a restart, 
   client.close()
 }, 30_000)
 
-test("extensions-off: a server whose home still holds extensions says they are switched off", async () => {
-  const sigmaHome = home()
-  await Bun.write(join(sigmaHome.extensions, "guard", "index.ts"), "export default 42")
-  const server = sigma(["serve"], await scriptEnv(sigmaHome))
-  const log = server.stderr.getReader()
-  let printed = ""
-  const off = `extensions are switched off for now; sigma loads nothing in ${sigmaHome.extensions}\n`
-  while (!printed.includes(off)) {
-    const { value, done } = await deadline(log.read(), 10_000, "the server saying extensions are off")
-    if (done) throw new Error(`sigma serve exited: ${printed}`)
-    printed += new TextDecoder().decode(value)
-  }
-  await stopServer(sigmaHome)
-  expect(await deadline(server.exited, 5000, "server exit")).toBe(0)
-}, 30_000)
-
 test("provider-config-invalid: a server refuses to start on a config.toml that does not read, and says why", async () => {
   const sigmaHome = home()
   await Bun.write(`${sigmaHome.dir}/config.toml`, "[providers.claude\n")

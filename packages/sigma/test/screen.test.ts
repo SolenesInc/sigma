@@ -523,18 +523,6 @@ test("image-attach: an image the server cannot decode is refused on screen by na
   await quit(session)
 })
 
-test("extensions-off: a person whose home still holds extensions is told once that they are switched off", async () => {
-  const sigmaHome = home()
-  await Bun.write(join(sigmaHome.extensions, "guard.ts"), "export default 42")
-  const session = await open([{ text: "hello ada" }], [], sigmaHome)
-  const off = `extensions are switched off for now; sigma loads nothing in ${sigmaHome.extensions}`
-  await session.waitFor((screen) => screen.includes(off) && screen.includes("READY"))
-  session.type("hi\r")
-  const answered = await session.waitFor((screen) => screen.includes("hello ada") && screen.includes("READY"))
-  expect(answered).not.toContain("extensions are switched off")
-  await quit(session)
-})
-
 test("crash-tui: the open TUI finishes the answer after the server is killed mid-answer", async () => {
   const sigmaHome = home()
   const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight nine ten", delayMs: 100 }])

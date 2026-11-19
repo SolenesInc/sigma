@@ -19,14 +19,7 @@ import { Effect } from "effect"
 import type { Job } from "./links.ts"
 import { promptOf, type Said } from "./retell.ts"
 import { ClaudeSessionDoc } from "./session.ts"
-import {
-  assistantMessage,
-  type Callbacks,
-  type Hosting,
-  makeTranscript,
-  type OwnTool,
-  type Position,
-} from "./transcript.ts"
+import { assistantMessage, type Callbacks, type Hosting, makeTranscript, type Position } from "./transcript.ts"
 
 /** How a run ended: it answered, the session is gone, Claude Code failed, or its process exited. */
 export type Ended =
@@ -62,8 +55,6 @@ export interface ServingProcess {
   readonly resetting: boolean
   /** A message the process was sent has not come back as a replay yet. */
   readonly awaitingReplay: boolean
-  /** Tools offered to Claude Code over sigma's MCP server, by name. */
-  readonly own: ReadonlyMap<string, OwnTool>
   readonly send: (parts: ReadonlyArray<Said>, priority?: "next") => void
   /** Runs `effect` alone among the process's frames and the run's callbacks. */
   readonly serially: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>
@@ -136,7 +127,6 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
     agent,
     commit,
     serially: process.serially,
-    own: process.own,
     provider,
     modelId,
     hosting: ctx.hosting,

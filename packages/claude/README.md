@@ -36,16 +36,14 @@ live.
   every frame as it arrives and routes it: a subagent's frames, by `parent_tool_use_id`, and its end go to its job,
   and its callbacks, by `agent_id`, to its job's task; the rest go to the run `serve` serves, or wait for the next
   run while it serves none, when a main-loop callback fails. Its jobs end with it. `processKey` names what a process is spawned with and cannot change: the provider,
-  executable, environment, arguments, directory, own and withheld tools, turn limit, model and effort.
+  executable, environment, arguments, directory, turn limit and root conversation.
 - `src/serving.ts`: what one run does with the frames of its own conversation. Steers placed at a round of results are
   sent with priority `next`. Claude Code's compaction is kept as a compaction entry holding its summary, `/clear` as a
   reset.
 - `src/transcript.ts`: how a conversation the process writes to is committed, through its own task: the run's, or a
   job's. A call Claude Code makes is committed as an assistant entry and a live slot before its PreToolUse hook is
-  answered, with the extensions' `beforeTool` applied; a call it would ask about waits on `sigma.approvals`, keyed
-  `<task>/<call>`, where the first answer counts. An extension's tool reaches Claude Code over sigma's in-process MCP
-  server and runs as a `pi.tool` task. `afterTool` runs through PostToolUse: Claude Code takes a changed result only
-  for `Read`, so another tool's change is reported. Each subagent Claude Code starts is hosted as a conversation of
+  answered; a call it would ask about waits on `sigma.approvals`, keyed `<task>/<call>`, where the first answer
+  counts. Each subagent Claude Code starts is hosted as a conversation of
   its own: a run's are owned by a background `claude.job-anchor` in its conversation, so the run can end while they
   work, and a subagent's own by its job, so stopping it stops them too.
 - `src/job.ts`: `claude.job`, the run of a hosted subagent's conversation. It commits its subagent's frames and

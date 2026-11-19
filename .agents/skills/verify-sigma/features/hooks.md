@@ -15,7 +15,6 @@ Hooks let an extension shape requests, react to responses and tools, keep a run 
 - `hook-api` [kernel] Hook API: read state, write entries, memos (§7.2): A hook makes durable, replay-safe decisions
 - `hook-replay` [kernel] Hooks replay safely after a crash through memos (§5, §7.2): A hook with a side effect doesn't run twice
 - `hook-reads` [kernel] A hook reads raw history and single entries.
-- `hook-claude` [kernel] On Claude, an installed extension's tools reach Claude Code through sigma's MCP server `sigma`, `beforeTool` runs as Claude Code's `PreToolUse` hook and `afterTool` as its `PostToolUse` hook, for subagents' calls too; with no client path while [extensions](./extensions.md) are switched off.
 
 ## How to get to it
 
