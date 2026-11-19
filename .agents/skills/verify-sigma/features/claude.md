@@ -371,6 +371,8 @@ Stack, `packages/sigma/test/stack.test.ts`:
 
 - claude-exec-deny: sigma exec refuses Claude's calls that would ask
 - claude-exec-deny, claude-auto: sigma exec --auto lets Claude's calls run without asking
+- claude-job-cut-off: a Claude job working when the server is killed is cut off, its parent says so once, and the next run tells Claude Code
+- claude-job-cut-off: a Claude job working when the server is stopped with server/stop is cut off, its parent says so once, and the next run tells Claude Code
 
 Provider, `packages/sigma/test/claude.test.ts`:
 
@@ -395,6 +397,10 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - claude-stop, claude-resume: a Claude Code process that does not end its turn after a stop is closed, and the next run resumes, told which call was cut off
 - claude-resume: a run that answered before the server stopped is not run again
 - claude-read: a skill Claude Code runs shows as its call and result, and Claude answers from it
+- claude-job-report, claude-wake: a background subagent that ends during the run reports in it, Claude's turn after the report is that run's answer, and the next prompt gets its own
+- claude-wake, claude-command-job: a background command that ends after its run wakes the conversation, which shows its report and Claude's follow-up in a run nobody prompted
+- claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run
+- interrupt-idle, claude-job-report: stopping a Claude run leaves its background command working, and stopping the idle conversation stops the command through Claude Code
 - claude-sign-in: signing in to Claude runs Claude Code's own sign-in in a terminal with the provider's environment, then names the account
 - compact-rpc, claude-compact: conversation/compact compacts a Claude conversation by sending Claude Code /compact with the instructions, and answers once it has
 - claude-compact, claude-session-gone: a resume at a position Claude Code compacted away starts a fresh session told the conversation
@@ -455,6 +461,17 @@ Package, `packages/claude/test/claude.test.ts`:
   recording's `<workspace>` paths become it.
 - A call Claude Code allows on its own, by its settings or because it only
   reads, runs without `allow this call?`.
+- Sigma starts Claude Code with `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`:
+  without it the SDK swallows `session_state_changed`, and a run, which ends
+  at `idle`, never ends. A recording with `sdk_host_only` on those frames was
+  made without it; strip the flag.
+- Claude Code 2.1.312 does not go idle while a background subagent works,
+  so its parent's run lasts until the subagent ends, and Claude Code's own
+  interrupt kills it (`task_notification` `stopped`). A background command
+  outlives both, and only a wake or `interrupt-idle` reaches it after.
+- After a cut-off, Claude Code's resume says the command
+  `didn't finish before the previous session end`, but the command it
+  started may still be running; Claude Code no longer tracks it.
 
 ## With a real account
 

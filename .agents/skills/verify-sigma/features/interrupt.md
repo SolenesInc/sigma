@@ -76,6 +76,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 - interrupt-wire: interrupting keeps what sigma already said and marks the run interrupted
 - interrupt-withdraw: interrupting withdraws the prompts that wait, and the transcript names each by its requestId
+- subagent-interrupt, interrupt-idle: interrupting a conversation's run leaves its subagents working, and interrupting it again, idle, stops them, so the tree goes idle
 
 Screen, `packages/sigma/test/screen.test.ts`:
 
@@ -84,6 +85,10 @@ Screen, `packages/sigma/test/screen.test.ts`:
 Provider, `packages/sigma/test/openai.test.ts`:
 
 - interrupt-wire: a ChatGPT answer streams live, and interrupting it closes the request and keeps what was said
+
+Provider, `packages/sigma/test/claude.test.ts`:
+
+- interrupt-idle, claude-job-report: stopping a Claude run leaves its background command working, and stopping the idle conversation stops the command through Claude Code
 
 ## Gotchas
 

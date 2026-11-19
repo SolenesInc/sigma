@@ -491,7 +491,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - subagent-limits: a tree runs at most as many subagents at once as config.toml allows
 - subagent-limits: with max_threads 0 in config.toml the root conversation is not offered spawn_agent
 - subagent-limits, child-tools: under the default config a subagent starts a subagent of its own, told only its own task
-- subagent-interrupt: interrupting a conversation stops the runs of its subagents too, and the tree goes idle
+- subagent-interrupt, interrupt-idle: interrupting a conversation's run leaves its subagents working, and interrupting it again, idle, stops them, so the tree goes idle
 - subagent-spawn, subagent-model: conversation/list shows each subagent with its lineage, on its parent's model or the one its spawn_agent names, and an unlisted model fails the call
 - subagent-answer: a subagent's answer reaches its idle parent as input that starts a run, so the parent acts on it
 
@@ -519,6 +519,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - subagent-claude: a call a Claude subagent wants to make waits for a person in the subagent's conversation
 - subagent-interrupt: stopping a Claude subagent stops only it, and its parent's run carries on
 - subagent-interrupt: stopping a run ends the Claude subagents working under it
+- claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run
 - subagent-spawn: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own
 - subagent-claude: a Claude subagent that hands back its report answers with the report, not Claude Code's placeholder
 - subagent-claude: a Claude subagent's approval waits and is answered in its own job, which writes its conversation instead of its parent's run
