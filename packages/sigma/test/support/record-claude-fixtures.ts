@@ -5,11 +5,14 @@
 //
 //   bun packages/sigma/test/support/record-claude-fixtures.ts [journey...]   (no journey: all of them)
 //
+// bash_hook_denied and steer_mid_message were recorded by this script at 8ee5805 through a server that loaded a guard
+// extension. Sigma's extensions are switched off since #131, so recording them again needs their journeys driven
+// through packages/claude's harness, as its tests do.
+//
 // Then derive the fixtures made from these (`derive-claude-fixtures.ts`) and read every recording before committing it.
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, watch } from "node:fs"
 import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
-import { homeWithExtensions } from "./extensions.ts"
 import { deadline, RawClient } from "./raw.ts"
 import { sigmaEnv, stopServer } from "./terminal.ts"
 import { type ViewWatch, person, runningServer, serving, settled, submit, tempHome, watchView } from "./server.ts"
@@ -24,29 +27,6 @@ const bundled = Bun.resolveSync(
 )
 /** A real model turn takes seconds, a subagent's tens of them; only a stuck journey reaches this. */
 const TURN = 300_000
-
-const guard = `import { Extension, Tool } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.hook("execute.before", (call) =>
-    Effect.gen(function* () {
-      const input = call.input as { command?: string }
-      if (input.command?.startsWith("touch")) return yield* Tool.refuse("no touching")
-    }),
-  ),
-)`
-
-/** Refuses Claude's reads of a.txt, as the claude package's steer test does. */
-const refuseA = `import { Extension, Tool } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define((ctx) =>
-  ctx.tool.hook("execute.before", (call) =>
-    Effect.gen(function* () {
-      const input = call.input as { file_path?: string }
-      if (input.file_path?.endsWith("a.txt")) return yield* Tool.refuse("a.txt is off limits")
-    }),
-  ),
-)`
 
 const gnomeSkill = `---
 name: gnome-facts
@@ -84,7 +64,6 @@ exec '${RECORDER}' "$@" --setting-sources=project
 interface Journey {
   readonly ask?: "ask" | "auto"
   readonly files?: Record<string, string>
-  readonly extensions?: Record<string, string>
   readonly start?: Record<string, unknown>
   /** Run the `sigma` binary as the server, so it can be killed, rather than a server in process. */
   readonly binary?: true
@@ -118,13 +97,6 @@ const journeys: Record<string, Journey> = {
       await s.answer(false)
       await s.settle()
     },
-  },
-  bash_hook_denied: {
-    extensions: { "guard.ts": guard },
-    play: (s) =>
-      s.say(
-        "Run the bash command `touch guarded.txt` with the Bash tool. If it is blocked, reply with only the reason it gave, word for word.",
-      ),
   },
   crash_points: {
     ask: "auto",
@@ -199,24 +171,6 @@ const journeys: Record<string, Journey> = {
       await s.say("Reply with exactly: still here")
     },
   },
-  steer_mid_message: {
-    files: { "a.txt": "apple\n", "b.txt": "banana\n" },
-    extensions: { "guard.ts": refuseA },
-    play: async (s) => {
-      await s.submit(
-        "In a single message, call the Read tool twice in parallel: once on a.txt and once on b.txt. Then reply with both contents, separated by a comma.",
-      )
-      // Sent while Claude Code asks about b.txt's call, after a.txt's was refused, as the claude package's test does.
-      await recorded(
-        s.to,
-        (line) =>
-          line.frame.request?.subtype === "hook_callback" &&
-          line.frame.request.input.tool_input?.file_path?.endsWith("b.txt"),
-      )
-      await s.submit("Also end your reply with the word BANANA.", true)
-      await s.settle()
-    },
-  },
   subagent_asks: {
     play: async (s) => {
       await s.submit(
@@ -266,7 +220,7 @@ const open = async (name: string, journey: Journey) => {
   const pids = join(work, `${name}.pids`)
   rmSync(to, { force: true })
   rmSync(pids, { force: true })
-  const home = journey.extensions ? homeWithExtensions(journey.extensions) : tempHome()
+  const home = tempHome()
   for (const [path, text] of Object.entries(journey.files ?? {})) {
     mkdirSync(join(home.dir, path, ".."), { recursive: true })
     writeFileSync(join(home.dir, path), text)
@@ -470,18 +424,6 @@ const shape = (path: string) =>
           : "",
     )
     .join("")
-
-/** Until the recording at `path` holds a frame Claude Code sent that `wanted` picks. */
-const recorded = (path: string, wanted: (line: { frame: any }) => boolean) =>
-  watching(
-    () =>
-      existsSync(path) &&
-      readFileSync(path, "utf8")
-        .split("\n")
-        .some((line) => line !== "" && JSON.parse(line).type === "emit_inbound" && wanted(JSON.parse(line))),
-    TURN,
-    `a frame in ${path}`,
-  )
 
 /** Until every result in the recording so far is followed by Claude Code's idle. */
 const recorderIdle = (path: string) =>
