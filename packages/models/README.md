@@ -30,7 +30,7 @@ or the script. A home's config names instances of a kind, such as `openai` and
 `openai-work`, and `ProviderKind.open(id, settings)` opens each one as a
 `ProviderInstance`:
 
-- its account: `health`, `models`, `defaultModel`, `signInMethods`, `signIn`
+- its account: `health`, `models`, `picksItsOwnModel`, `signInMethods`, `signIn`
   and `signOut`, the same for every kind, which the server serves as
   `providers/list`, `models/list` and `auth/*`;
 - `provider`, the `Provider` this seam routes the instance's requests to,

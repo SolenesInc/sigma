@@ -32,6 +32,9 @@ A provider `config.toml` names with
 - `openai-models` lists ChatGPT's models from ChatGPT once signed in, saved
   to `<home>/cache/openai-models.json`, else the saved list, else the one
   sigma ships.
+- `openai-default-model` starts a conversation that names no model on the
+  first model the account's list offers, best first and hidden ones left out,
+  as Codex picks it.
 - `openai-model` sends the conversation's model and effort, and a switched
   one from the next run.
 - `openai-sign-in` signs in through a browser or a device code, in
@@ -118,9 +121,13 @@ Preconditions:
   `sigma.model` entry between the two runs.
 - **Models, signed in.** In a fake-signed-in run, `drive.ts r serve` and
   `drive.ts r rpc models/list '{}'`: `openai` has `"defaultModel": "gpt-5.5"`
-  and the list sigma ships, `gpt-6.1-sol` first and `gpt-5.5` last, each
-  with `efforts` and a `defaultEffort`. The fake ChatGPT has no model list,
-  so `home/cache/openai-models.json` is not written.
+  and the list sigma ships with `gpt-5.5` moved first, the model the
+  recordings were made on, then `gpt-6.1-sol`, each with `efforts` and a
+  `defaultEffort`. `home/cache/openai-models.json` holds that list.
+- **Default model.** In a run with no sign-in, `drive.ts r serve` and
+  `drive.ts r rpc models/list '{}'`: `openai` has
+  `"defaultModel": "gpt-6.1-sol"`, the first of the list sigma ships, since
+  ChatGPT can't be asked.
 - **Failures.** `drive.ts r up --fake-openai usage_limit,stream_cut`,
   then `drive.ts r sigma exec --provider openai hello` twice: each
   exits 1, with stderr
@@ -273,7 +280,12 @@ steps' screens.
   ChatGPT lists them today, and
   `/tmp/sigma-verify/r/home/cache/openai-models.json` holds the same
   slugs. Copy that file into `evidence/`.
-- **Model.** Pick an `openai` model other than `gpt-5.5` from that list,
+- **Default model.** On a run whose `home/cache` is empty,
+  `drive.ts r sigma exec --provider openai 'Reply with exactly: pelican'`:
+  exit 0, stdout `pelican`, and `drive.ts r rpc conversation/list` shows it
+  on the `defaultModel` that `models/list` reports, the first model in
+  `cache/openai-models.json` by `priority` whose `visibility` is `list`.
+- **Model.** Pick an `openai` model other than the `defaultModel` from that list,
   and one of its `efforts`. If `cache/openai-models.json` gives it
   `"tool_mode":"code_mode_only"`, it answers through the `codemode` tool, as
   [Code mode](./code-mode.md) says. Run

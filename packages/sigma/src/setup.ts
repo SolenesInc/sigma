@@ -8,7 +8,7 @@ import {
   type ProviderModels,
   type ProviderSnapshot,
 } from "@sigma/protocol"
-import type { ProviderAccount } from "@sigma/models"
+import { defaultModelOf, type ProviderAccount } from "@sigma/models"
 import { Context, Effect, Fiber, Queue, Semaphore, Stream } from "effect"
 
 /** Where every connection sees sign-ins: the last state of each provider's, then every change. */
@@ -148,14 +148,15 @@ export class Setup extends Context.Service<
           Effect.forEach(
             [...drivers],
             ([id, driver]) =>
-              Effect.map(
-                driver.models(refresh),
-                (models): ProviderModels => ({
+              Effect.gen(function* () {
+                const models = yield* driver.models(refresh)
+                const defaultModel = yield* defaultModelOf(driver)
+                return {
                   provider: id,
-                  ...(driver.defaultModel ? { defaultModel: driver.defaultModel } : {}),
+                  ...(defaultModel === undefined ? {} : { defaultModel }),
                   models,
-                }),
-              ),
+                }
+              }),
             { concurrency: "unbounded" },
           ),
         start: (provider, method) =>

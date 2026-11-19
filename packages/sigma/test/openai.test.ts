@@ -24,6 +24,8 @@ import { imageDimensions } from "@sigma/tools"
 
 // sigma's tools are named in lower case; the recordings were made when they were capitalized.
 const TOOL_NAMES = { Bash: "bash" }
+// The model the recordings were made on, which takes sigma's tools directly.
+const RECORDED_MODEL = "gpt-5.5"
 
 const conversationWith = async (
   fake: FakeOpenAi,
@@ -49,7 +51,7 @@ const conversationWith = async (
     ...(options.instructions === undefined ? {} : { instructions: options.instructions }),
     provider: "openai",
     approvals: options.approvals ?? "auto",
-    ...(options.model === undefined ? {} : { model: options.model }),
+    model: options.model ?? RECORDED_MODEL,
     ...(options.effort === undefined ? {} : { effort: options.effort }),
   })
   const conversation = started.result.conversation as string

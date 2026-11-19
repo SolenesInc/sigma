@@ -151,7 +151,6 @@ export const scriptInstance = (
 ): ProviderInstance => ({
   id: "script",
   kind: "script",
-  defaultModel: SCRIPT_MODEL.id,
   health: () => Effect.succeed({ status: "ready" }),
   models: () => Effect.succeed(SCRIPT_MODELS.map((model) => ({ id: model.id, name: model.name, efforts: [] }))),
   ...nothingToSignIn,

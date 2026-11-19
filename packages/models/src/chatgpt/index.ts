@@ -20,8 +20,6 @@ export type { Catalog, Credentials }
 
 export const BASE_URL = "https://chatgpt.com/backend-api"
 export const AUTH_BASE = "https://auth.openai.com"
-/** The model a conversation that names none gets. */
-export const DEFAULT_MODEL = "gpt-5.5"
 /** Who ChatGPT is told sent each request and sign-in. */
 export const ORIGINATOR = "sigma"
 
@@ -60,6 +58,8 @@ export interface ChatGpt {
 /** The account half of an instance: what a ChatGPT instance answers whatever runs its conversations. */
 export const openChatGpt = Effect.fnUntraced(function* (options: Omit<ChatGptOptions, "instructions">) {
   const signingIn = yield* Semaphore.make(1)
+  // One ask for the models at a time, so a default chosen while the first ask is out waits for the account's list.
+  const asking = yield* Semaphore.make(1)
   const models = catalog(options.modelsPath)
   let askedForModels = false
   let rejected: string | undefined
@@ -125,14 +125,17 @@ export const openChatGpt = Effect.fnUntraced(function* (options: Omit<ChatGptOpt
 
   const account: ProviderAccount = {
     kind: "openai",
-    defaultModel: DEFAULT_MODEL,
     health: () => health,
     models: (refresh) =>
       Effect.gen(function* () {
-        if (!options.readOnly && (refresh || !askedForModels)) {
-          askedForModels = true
-          yield* Effect.ignore(fetchModels)
-        }
+        if (!options.readOnly)
+          yield* asking.withPermits(1)(
+            Effect.suspend(() => {
+              if (!refresh && askedForModels) return Effect.void
+              askedForModels = true
+              return Effect.ignore(fetchModels)
+            }),
+          )
         return models.listed()
       }),
     signInMethods: ["browser", "device_code"],

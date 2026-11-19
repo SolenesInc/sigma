@@ -162,6 +162,7 @@ export const claudeAccount = (settings: ClaudeProcessSettings): ProviderAccount 
     })
   return {
     kind: "claude",
+    picksItsOwnModel: true,
     health: (refresh) => Effect.map(probedNow(refresh), (found) => found.health),
     models: (refresh) => Effect.map(probedNow(refresh), (found) => found.models),
     signInMethods: ["terminal"],

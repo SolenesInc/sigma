@@ -5,9 +5,9 @@ import type { AuthState, ProviderModels, ProviderSnapshot } from "@sigma/protoco
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
-import { EMAIL, FakeOpenAi, signIn } from "./support/openai.ts"
+import { EMAIL, FakeOpenAi, matches, signIn } from "./support/openai.ts"
 import { errorTag, RawClient } from "./support/raw.ts"
-import { person, runningServer, watchView, tempHome } from "./support/server.ts"
+import { person, runningServer, settled, submit, watchView, tempHome } from "./support/server.ts"
 
 const startWith = async (client: RawClient, ask: Record<string, string> = {}) => {
   const reply = await client.call("conversation/start", { author: person("ada"), cwd: "/work", ...ask })
@@ -63,8 +63,9 @@ test("provider-config, signin-status, model-list: two instances of one provider 
   expect(models.map((list) => [list.provider, list.defaultModel])).toEqual([
     ["script", "script"],
     ["claude", undefined],
-    ["openai", "gpt-5.5"],
-    ["openai-work", "gpt-5.5"],
+    // ChatGPT can't be reached here, so the default is the first of the list sigma ships.
+    ["openai", "gpt-6.1-sol"],
+    ["openai-work", "gpt-6.1-sol"],
     ["claude-alt", undefined],
   ])
   const modelIds = (provider: string) => models.find((list) => list.provider === provider)!.models.map((m) => m.id)
@@ -323,7 +324,7 @@ test("openai-models: OpenAI's models come from ChatGPT, and the saved list answe
       client.close()
       expect(models).toEqual({
         provider: "openai",
-        defaultModel: "gpt-5.5",
+        defaultModel: "gpt-test",
         models: [
           {
             id: "gpt-test",
@@ -343,6 +344,56 @@ test("openai-models: OpenAI's models come from ChatGPT, and the saved list answe
   } finally {
     rmSync(home.dir, { recursive: true, force: true })
   }
+})
+
+// As ChatGPT sent it on 2026-11-19, trimmed to the fields that order it: hidden models among the listed ones, best
+// first by priority, and none of them offered sigma's tools directly in the recording, so tool_mode is left out.
+const accountModels = {
+  models: [
+    { slug: "gpt-6.1-sol", visibility: "list", priority: 3 },
+    { slug: "gpt-reserve", visibility: "hide", priority: 0 },
+    { slug: "gpt-6.1-terra", visibility: "list", priority: 1 },
+    { slug: "codex-auto-review", visibility: "hide", priority: 10 },
+  ],
+}
+
+test("openai-default-model: a conversation that names no model starts on the first model the account lists, and ChatGPT is asked for it", async () => {
+  await using fake = new FakeOpenAi()
+  const [recorded] = fake.play("text_answer")
+  fake.modelList = accountModels
+  await using server = await runningServer([], { openai: fake.options() })
+  await signIn(server.home)
+  const client = await RawClient.connect(server.home.socket)
+  const started = await startWith(client, { provider: "openai" })
+  expect(started.model).toEqual({ provider: "openai", model: "gpt-6.1-terra" })
+  expect((await openAiModels(client)).defaultModel).toBe("gpt-6.1-terra")
+  const view = watchView(client, started.conversation)
+  await submit(client, started.conversation, "hello")
+  await view.until(settled(1))
+  // The recording was made on gpt-5.5; the request is the same on the account's default.
+  const sent = JSON.parse(fake.responses()[0]!.body)
+  const expected = { ...(recorded as object), model: "gpt-6.1-terra" }
+  if (!matches(sent, expected)) expect(sent).toEqual(expected)
+  client.close()
+})
+
+test("openai-default-model: a conversation started while ChatGPT is still being asked for its models waits for the account's list", async () => {
+  await using fake = new FakeOpenAi()
+  fake.modelList = accountModels
+  const answer = Promise.withResolvers<void>()
+  fake.modelsHeld = answer.promise
+  await using server = await runningServer([], { openai: fake.options() })
+  await signIn(server.home)
+  const client = await RawClient.connect(server.home.socket)
+  const listing = client.call("models/list", {})
+  await fake.modelsAsked.promise
+  const starting = startWith(client, { provider: "openai" })
+  // The reply to a later call means the server has taken the start.
+  await listed(client)
+  answer.resolve()
+  expect((await starting).model).toEqual({ provider: "openai", model: "gpt-6.1-terra" })
+  await listing
+  client.close()
 })
 
 test("signin-refused: an answer for another sign-in is turned away, and a sign-in the browser refused fails saying why", async () => {

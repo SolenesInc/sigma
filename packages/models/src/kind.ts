@@ -57,8 +57,8 @@ export class ProviderError extends Schema.TaggedError<ProviderError>()("Provider
 export interface ProviderAccount {
   /** The kind it was opened from: the `driver` a home's config names. */
   readonly kind: string
-  /** What a selection naming no model gets; absent when the provider picks. */
-  readonly defaultModel?: string
+  /** True when a selection naming no model is the provider's own choice; otherwise it gets the first model listed. */
+  readonly picksItsOwnModel?: boolean
   readonly health: (refresh: boolean) => Effect.Effect<Health>
   /** Best first. */
   readonly models: (refresh: boolean) => Effect.Effect<ReadonlyArray<ModelInfo>>
@@ -67,6 +67,13 @@ export interface ProviderAccount {
   readonly signIn: (method: SignInMethod, flow: SignInFlow) => Effect.Effect<void, ProviderError>
   readonly signOut: Effect.Effect<void, ProviderError>
 }
+
+/**
+ * The model a selection naming none gets: the first the account lists, as Codex picks ChatGPT's, since a provider
+ * retires models; undefined when the provider picks its own.
+ */
+export const defaultModelOf = (account: ProviderAccount): Effect.Effect<string | undefined> =>
+  account.picksItsOwnModel ? Effect.succeed(undefined) : Effect.map(account.models(false), (models) => models[0]?.id)
 
 export interface ProviderInstance extends ProviderAccount {
   /** The name conversations select it by, such as `openai-work`. */
