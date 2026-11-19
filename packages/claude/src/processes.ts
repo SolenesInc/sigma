@@ -48,6 +48,11 @@ export interface ClaudeProcessesOptions {
    * job's end came before it. Without it, the turn waits for the conversation's next run.
    */
   readonly wake?: (conversation: ConversationId, reports: ReadonlyArray<JobReport>) => Effect.Effect<void, unknown>
+  /**
+   * Commits the reports a process still holds as it closes, which no run or wake took, such as the end of a job a
+   * person stopped while the conversation was idle. Without it they are lost with the process.
+   */
+  readonly record?: (conversation: ConversationId, reports: ReadonlyArray<JobReport>) => Effect.Effect<void, unknown>
 }
 
 /** What a run tells its process first, whether it found one live or starts one. */
@@ -133,13 +138,18 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
         return Scope.close(one.scope, Exit.void)
       })
 
-    /** How long until `one` compacts: its last request's cache expiry less the lead, when its context is long (D7). */
+    /**
+     * How long until `one` compacts: its last request's cache expiry less the lead, when its context is long (D7). None
+     * once that time has passed, as after a job that outlasted it: the cache it would read is gone, and Claude Code may
+     * be starting its own turn for the job's end.
+     */
     const compactsIn = (one: Live) => {
       const last = one.process.lastRequest
       if (options.compact === undefined || last?.ttl === undefined || last.context < IDLE_COMPACTION_THRESHOLD) {
         return undefined
       }
-      return Math.max(0, last.at + TTL_MILLIS[last.ttl] - lead - clock.currentTimeMillisUnsafe())
+      const due = last.at + TTL_MILLIS[last.ttl] - lead - clock.currentTimeMillisUnsafe()
+      return due > 0 ? due : undefined
     }
 
     /**
@@ -214,6 +224,16 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
               Effect.provideService(Clock.Clock, clock),
             )
             opened = process
+            if (options.record !== undefined) {
+              const record = options.record
+              yield* Scope.addFinalizer(
+                processScope,
+                Effect.suspend(() => {
+                  const held = process.takeReports()
+                  return held.length === 0 ? Effect.void : Effect.ignore(record(conversation, held))
+                }),
+              )
+            }
             const one: Live = { key, process, scope: processScope, seen: 0 }
             return { one, texts, live: false, kept: false }
           }),
