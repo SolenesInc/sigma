@@ -58,6 +58,10 @@ export class FakeOpenAi {
   private readonly awaited: Array<{ count: number; resolve: () => void }> = []
   private readonly server: ReturnType<typeof Bun.serve>
   modelList: unknown
+  /** ChatGPT answers each ask for its models once this settles. */
+  modelsHeld: Promise<void> = Promise.resolve()
+  /** Settles when sigma first asks for the models. */
+  readonly modelsAsked = Promise.withResolvers<void>()
   devicePolls = 1
   onResponse: (body: unknown) => void = () => undefined
 
@@ -140,6 +144,8 @@ export class FakeOpenAi {
     const body = await request.text()
     this.received.push({ path, headers: request.headers, body })
     if (path === "/codex/models") {
+      this.modelsAsked.resolve()
+      await this.modelsHeld
       return this.modelList ? Response.json(this.modelList) : Response.json({ error: "down" }, { status: 500 })
     }
     if (path === "/api/accounts/deviceauth/usercode") {

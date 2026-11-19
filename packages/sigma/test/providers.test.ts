@@ -5,7 +5,7 @@ import type { AuthState, ProviderModels, ProviderSnapshot } from "@sigma/protoco
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
-import { EMAIL, FakeOpenAi, signIn } from "./support/openai.ts"
+import { EMAIL, FakeOpenAi, matches, signIn } from "./support/openai.ts"
 import { errorTag, RawClient } from "./support/raw.ts"
 import { person, runningServer, settled, submit, watchView, tempHome } from "./support/server.ts"
 
@@ -346,18 +346,21 @@ test("openai-models: OpenAI's models come from ChatGPT, and the saved list answe
   }
 })
 
+// As ChatGPT sent it on 2026-11-19, trimmed to the fields that order it: hidden models among the listed ones, best
+// first by priority, and none of them offered sigma's tools directly in the recording, so tool_mode is left out.
+const accountModels = {
+  models: [
+    { slug: "gpt-6.1-sol", visibility: "list", priority: 3 },
+    { slug: "gpt-reserve", visibility: "hide", priority: 0 },
+    { slug: "gpt-6.1-terra", visibility: "list", priority: 1 },
+    { slug: "codex-auto-review", visibility: "hide", priority: 10 },
+  ],
+}
+
 test("openai-default-model: a conversation that names no model starts on the first model the account lists, and ChatGPT is asked for it", async () => {
   await using fake = new FakeOpenAi()
-  fake.play("text_answer")
-  // As ChatGPT sent it on 2026-11-19, trimmed: hidden models among the listed ones, best first by priority.
-  fake.modelList = {
-    models: [
-      { slug: "gpt-6.1-sol", visibility: "list", priority: 3, tool_mode: "code_mode_only" },
-      { slug: "gpt-reserve", visibility: "hide", priority: 0, tool_mode: "code_mode_only" },
-      { slug: "gpt-6.1-terra", visibility: "list", priority: 1, tool_mode: "code_mode_only" },
-      { slug: "codex-auto-review", visibility: "hide", priority: 10, tool_mode: "code_mode_only" },
-    ],
-  }
+  const [recorded] = fake.play("text_answer")
+  fake.modelList = accountModels
   await using server = await runningServer([], { openai: fake.options() })
   await signIn(server.home)
   const client = await RawClient.connect(server.home.socket)
@@ -367,7 +370,29 @@ test("openai-default-model: a conversation that names no model starts on the fir
   const view = watchView(client, started.conversation)
   await submit(client, started.conversation, "hello")
   await view.until(settled(1))
-  expect(JSON.parse(fake.responses()[0]!.body).model).toBe("gpt-6.1-terra")
+  // The recording was made on gpt-5.5; the request is the same on the account's default.
+  const sent = JSON.parse(fake.responses()[0]!.body)
+  const expected = { ...(recorded as object), model: "gpt-6.1-terra" }
+  if (!matches(sent, expected)) expect(sent).toEqual(expected)
+  client.close()
+})
+
+test("openai-default-model: a conversation started while ChatGPT is still being asked for its models waits for the account's list", async () => {
+  await using fake = new FakeOpenAi()
+  fake.modelList = accountModels
+  const answer = Promise.withResolvers<void>()
+  fake.modelsHeld = answer.promise
+  await using server = await runningServer([], { openai: fake.options() })
+  await signIn(server.home)
+  const client = await RawClient.connect(server.home.socket)
+  const listing = client.call("models/list", {})
+  await fake.modelsAsked.promise
+  const starting = startWith(client, { provider: "openai" })
+  // The reply to a later call means the server has taken the start.
+  await listed(client)
+  answer.resolve()
+  expect((await starting).model).toEqual({ provider: "openai", model: "gpt-6.1-terra" })
+  await listing
   client.close()
 })
 
