@@ -957,6 +957,25 @@ test("claude-job-report, subagent-claude: a background subagent's approval waits
   expect(jobsOf(session.view)).toEqual([expect.objectContaining({ state: "done" })])
 })
 
+test("subagent-interrupt: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, not cut off", async () => {
+  using claude = new FakeClaude("subagent_background_interrupted")
+  await using session = await conversationWith(claude)
+  await session.submit(
+    "Use the Agent tool with run_in_background set to true to start a general-purpose subagent that runs the bash command `touch made.txt` with the Bash tool and reports when it is done. Do not wait for it, and do not run it yourself. Reply with exactly: started",
+  )
+  const child = await subagentOf(session)
+  await waitingApproval(child.view)
+
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  await session.view.until(settled(1))
+  await child.view.until(childEnded)
+  await session.view.until((watch) => jobsOf(watch).every((job) => job.state !== "working"))
+  expect(jobsOf(session.view)).toEqual([expect.objectContaining({ kind: "agent", state: "stopped" })])
+  expect(runEnds(child.view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
+  // Claude Code tells of the end after the run stopped: its report waits for the conversation's next run.
+  expect(transcript(session.view.seen()).filter((line) => line.startsWith("report: "))).toEqual([])
+})
+
 const stopTasks = (claude: FakeClaude) =>
   claude.log().filter((entry) => entry.received?.request?.subtype === "stop_task")
 

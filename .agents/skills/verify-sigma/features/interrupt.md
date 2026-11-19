@@ -68,7 +68,7 @@ Preconditions:
 - **Second client.** Any client can interrupt, and every client sees the run end `interrupted`.
 - **Claude.** Stopping a Claude run interrupts Claude Code's turn and keeps its process for the next prompt, in [Claude](./claude.md) `claude-stop`.
 - **Subagents.** Stopping a run stops that run only: its subagents keep working, and a second `Esc` on the idle conversation stops them (`interrupt-idle`). `Esc` in a subagent's own conversation stops its run, not its parent.
-- **Claude jobs.** Stopping a Claude run leaves the background commands and subagents Claude Code started working; `Esc` on the idle conversation stops them through Claude Code's `stopTask`, in [Claude](./claude.md) `claude-job-cut-off`.
+- **Claude jobs.** Stopping a Claude run leaves the background commands Claude Code started working, and `Esc` on the idle conversation stops them through Claude Code's `stopTask`; Claude Code stops its background subagents with the run. See [Claude](./claude.md) `claude-job-cut-off`.
 
 ## Tests
 

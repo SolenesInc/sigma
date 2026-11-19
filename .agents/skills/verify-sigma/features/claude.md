@@ -69,9 +69,11 @@ it into a run that serves Claude Code's own follow-up.
 - `claude-job-cut-off` ends a job `cut off` when its process ends first: a
   server stop, a crash, or a run that needs a new process. The parent gets
   one report, `The background <agent|command> "<title>" was cut off: Claude Code ended before it did.`,
-  and the next run tells Claude Code. Stopping a run leaves its jobs working;
-  `Esc` on the idle conversation stops them (`interrupt-idle` in
-  [Interrupt](./interrupt.md)).
+  and the next run tells Claude Code. Stopping a run leaves its background
+  commands working, and `Esc` on the idle conversation stops them
+  (`interrupt-idle` in [Interrupt](./interrupt.md)); Claude Code stops its
+  background subagents with the run itself, so they end `stopped`. A report
+  Claude Code gives while no run serves waits for the next run.
 - `claude-idle-compaction` compacts an idle conversation whose last request
   had a context of 200,000 tokens or more: two minutes before the prompt
   cache that request read or wrote expires, sigma compacts it as
