@@ -517,7 +517,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - subagent-claude: a call a Claude subagent wants to make waits for a person in the subagent's conversation
 - subagent-interrupt: stopping a Claude subagent stops only it, and its parent's run carries on
 - subagent-interrupt: stopping a run ends the Claude subagents working under it
-- subagent-interrupt: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, not cut off
+- subagent-interrupt, claude-job-report: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, and its report joins the transcript when the idle process closes
 - claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run
 - subagent-spawn: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own
 - subagent-claude: a Claude subagent that hands back its report answers with the report, not Claude Code's placeholder

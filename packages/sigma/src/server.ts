@@ -4,6 +4,7 @@ import {
   CLAUDE_REPORT_KIND,
   claudeRunTasks,
   ClaudeJobsDoc,
+  appendReport,
   CONTINUED_ON_ITS_OWN,
   JOB_KINDS,
   type JobReport,
@@ -146,6 +147,10 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         // An idle conversation compacts as a person's compact does, by its `/compact` input; one that is busy again by
         // then refuses it and goes on.
         let compactIdle = (_conversation: ConversationId): Effect.Effect<void, unknown> => Effect.void
+        let recordReports = (
+          _conversation: ConversationId,
+          _reports: ReadonlyArray<JobReport>,
+        ): Effect.Effect<void, unknown> => Effect.void
         let wakeClaude = (
           _conversation: ConversationId,
           _reports: ReadonlyArray<JobReport>,
@@ -158,6 +163,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           ...(live.stop === undefined ? {} : { stop: live.stop }),
           hold: lifetime.hold,
           wake: (conversation, reports) => wakeClaude(conversation, reports),
+          record: (conversation, reports) => recordReports(conversation, reports),
         })
         const stoppedTooOften = new Map<ConversationId, number>()
         const registry = createRegistry()
@@ -238,13 +244,23 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
                       type: "input",
                       content: report.text,
                       whenBusy: "steer",
+                      // No requestId: Claude Code's task id names a resumed subagent's every end, and nothing retries a wake.
                       entry: { kind: CLAUDE_REPORT_KIND, ...(report.data === undefined ? {} : { data: report.data }) },
-                      ...(report.data === undefined
-                        ? {}
-                        : { requestId: `claude-report:${conversation}:${report.data.job}` }),
                     }),
               { discard: true },
             ),
+          )
+        // A process closed holding reports no run took: they join the transcript without a run, and a new process is
+        // told them as anything else its session missed.
+        recordReports = (conversation, reports) =>
+          Effect.flatMap(harness.conversation(conversation), (handle) =>
+            handle === undefined
+              ? Effect.void
+              : handle.commit((tx) =>
+                  Effect.forEach(reports, (report) => appendReport(tx, conversation, report, Date.now()), {
+                    discard: true,
+                  }),
+                ),
           )
         // Read-only, nothing runs, so no run counts a stop.
         if (!readOnly) for (const [id, stops] of yield* countStops(harness)) stoppedTooOften.set(id, stops)

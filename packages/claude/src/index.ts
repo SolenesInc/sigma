@@ -15,3 +15,4 @@ export {
   type ReportData,
 } from "./jobs.ts"
 export { JOB_KINDS } from "./job.ts"
+export { appendReport } from "./jobs.ts"

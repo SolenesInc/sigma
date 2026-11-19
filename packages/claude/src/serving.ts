@@ -270,8 +270,10 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
               ...(message.subagent_type === undefined ? {} : { subagent_type: message.subagent_type }),
               ...(message.prompt === undefined ? {} : { prompt: message.prompt }),
             }
+            // A command is the conversation's job when its own Claude Code started it; one a subagent started is the
+            // subagent's, which the process does not track as a job.
             if (message.task_type === "local_agent") yield* transcript.host(frame)
-            else if (frame.background) yield* transcript.hostCommand(frame)
+            else if (frame.background && message.parent_task_id === undefined) yield* transcript.hostCommand(frame)
             return undefined
           }
           // Claude Code's turn is over (F1): the run ends as the turn's result said, unless a message sent in it, such

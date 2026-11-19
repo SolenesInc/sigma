@@ -957,9 +957,9 @@ test("claude-job-report, subagent-claude: a background subagent's approval waits
   expect(jobsOf(session.view)).toEqual([expect.objectContaining({ state: "done" })])
 })
 
-test("subagent-interrupt: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, not cut off", async () => {
+test("subagent-interrupt, claude-job-report: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, and its report joins the transcript when the idle process closes", async () => {
   using claude = new FakeClaude("subagent_background_interrupted")
-  await using session = await conversationWith(claude)
+  await using session = await conversationWith(claude, {}, { claudeIdle: "50 millis" })
   await session.submit(
     "Use the Agent tool with run_in_background set to true to start a general-purpose subagent that runs the bash command `touch made.txt` with the Bash tool and reports when it is done. Do not wait for it, and do not run it yourself. Reply with exactly: started",
   )
@@ -972,8 +972,14 @@ test("subagent-interrupt: stopping a Claude run stops the background subagent Cl
   await session.view.until((watch) => jobsOf(watch).every((job) => job.state !== "working"))
   expect(jobsOf(session.view)).toEqual([expect.objectContaining({ kind: "agent", state: "stopped" })])
   expect(runEnds(child.view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
-  // Claude Code tells of the end after the run stopped: its report waits for the conversation's next run.
-  expect(transcript(session.view.seen()).filter((line) => line.startsWith("report: "))).toEqual([])
+  // Claude Code tells of the end after the run stopped, so no run takes the report: the process commits it as it closes.
+  const reports = (watch: ViewWatch) => transcript(watch.seen()).filter((line) => line.startsWith("report: "))
+  await claude.logged((fake) => fake.exited(0))
+  await session.view.until((watch) => reports(watch).length > 0)
+  expect(reports(session.view)).toEqual([
+    'report: The background agent "Create made.txt via touch" was stopped: Create made.txt via touch',
+  ])
+  expect(runEnds(session.view.seen())).toHaveLength(1)
 })
 
 const stopTasks = (claude: FakeClaude) =>

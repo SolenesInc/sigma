@@ -20,14 +20,16 @@ live.
   a reset, a compaction or another model's answer came after it. A fresh session is named with the conversation's title, which
   `ClaudeRunOptions.title` gives, so Claude Code does not ask a model for one. A live process that exited while it
   waited costs a cold start. A session Claude Code no longer has, or no longer holds the position of (as after its
-  compaction), is dropped and the run starts over in a fresh one, once. A run that answers leaves its process live;
-  one that fails, hits the turn limit or leaves Claude Code background work closes it. A stopped run interrupts Claude
+  compaction), is dropped and the run starts over in a fresh one, once. A run ends at Claude Code's idle, and one that answers
+  leaves its process live, kept while its jobs work; one that fails or hits the turn limit closes it, cutting its jobs
+  off. A run woken by Claude Code's own turn sends it nothing and serves that turn. A stopped run interrupts Claude
   Code's turn and leaves the process live once Claude Code ends that turn, within `STOP_TIMEOUT` (5 s), with nothing
   left queued or running; otherwise it closes it. The live process's session holds the stop, so the next run on it is
   not told what the stop recorded.
 - `src/processes.ts`: the server's live processes, at most one per conversation: the lease, the idle release after
-  `IDLE_RELEASE` (30 minutes), the release of a process that exited while it waited, and closing them all when the
-  server stops. Each process holds the server's lifetime from its start to its close. Nothing about them is durable: a
+  `IDLE_RELEASE` (30 minutes), the release of a process that exited while it waited, the wake of a conversation whose
+  process began a turn by itself, and closing them all when the server stops. A process with a job working is held
+  until the job ends, and its idle release counts from then. Each process holds the server's lifetime from its start to its close. Nothing about them is durable: a
   restart cold starts every conversation from `claude.session`.
 - `src/process.ts`: one Claude Code process, started through the Claude Agent SDK at a resume, a fork or a fresh
   session. It owns the query, the inbox its messages go through, the frame pump, the callbacks Claude Code makes, its
@@ -48,7 +50,10 @@ live.
   work, and a subagent's own by its job, so stopping it stops them too.
 - `src/job.ts`: `claude.job`, the run of a hosted subagent's conversation. It commits its subagent's frames and
   answers its callbacks through itself, not through the run that started it, until Claude Code says the subagent
-  ended or its process ends.
+  ended or its process ends; and `claude.command`, a background command's task in its parent. A job its process
+  outlived ends `cut off` and appends that report to its parent; an abort stops a live job through `stopTask`.
+- `src/jobs.ts`: the `claude.jobs` document, each background job of a conversation as its parent knows it, and the
+  `claude.report` entry that tells the parent a job ended.
 - `src/environment.ts`: how every Claude Code process starts, a run's, the account probe's and `claude auth`'s: the
   server's environment without the variables a host Claude Code session sets, then the provider instance's `env`. A
   run's settings also turn tool search on where the person's Claude Code settings leave it at `auto`.

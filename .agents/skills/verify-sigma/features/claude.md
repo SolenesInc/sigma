@@ -73,7 +73,8 @@ it into a run that serves Claude Code's own follow-up.
   commands working, and `Esc` on the idle conversation stops them
   (`interrupt-idle` in [Interrupt](./interrupt.md)); Claude Code stops its
   background subagents with the run itself, so they end `stopped`. A report
-  Claude Code gives while no run serves waits for the next run.
+  Claude Code gives while no run serves waits for the next run, or joins the
+  transcript when its process closes first.
 - `claude-idle-compaction` compacts an idle conversation whose last request
   had a context of 200,000 tokens or more: two minutes before the prompt
   cache that request read or wrote expires, sigma compacts it as
