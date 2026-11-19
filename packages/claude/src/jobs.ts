@@ -68,16 +68,23 @@ export const CONTINUED_ON_ITS_OWN: JobReport = { text: "Claude Code continued on
 
 const NOUN = { agent: "agent", command: "command" } as const
 
-/** What the parent is told of a job's end. A command's own summary says it already, as Claude Code words it. */
+const VERB = { done: "completed", failed: "failed", stopped: "was stopped" } as const
+
+/**
+ * What the parent is told of a job's end. A command's summary of how it ran to its end says it already, as Claude Code
+ * words it; a subagent's summary is its answer, told after its title.
+ */
 export const reportOf = (job: Omit<JobRecord, "taskId">): JobReport => {
   const status = job.state === "working" ? "done" : job.state
-  const noun = NOUN[job.kind]
+  const named = `The background ${NOUN[job.kind]} "${job.title}"`
   const text =
     status === "cut off"
-      ? `The background ${noun} "${job.title}" was cut off: Claude Code ended before it did.`
-      : job.kind === "command" && job.summary
-        ? job.summary
-        : `The background ${noun} "${job.title}" ${status === "stopped" ? "was stopped" : status === "done" ? "completed" : "failed"}${job.summary ? `: ${job.summary}` : "."}`
+      ? `${named} was cut off: Claude Code ended before it did.`
+      : job.kind === "command"
+        ? status !== "stopped" && job.summary
+          ? job.summary
+          : `${named} ${VERB[status]}.`
+        : `${named} ${VERB[status]}${job.summary ? `: ${job.summary}` : "."}`
   return {
     text,
     data: {

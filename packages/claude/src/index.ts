@@ -14,3 +14,4 @@ export {
   type JobReport,
   type ReportData,
 } from "./jobs.ts"
+export { JOB_KINDS } from "./job.ts"

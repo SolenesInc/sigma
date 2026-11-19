@@ -28,6 +28,9 @@ export const CLAUDE_JOB_KIND = "claude.job"
 export const CLAUDE_JOB_ANCHOR_KIND = "claude.job-anchor"
 export const CLAUDE_COMMAND_KIND = "claude.command"
 
+/** The tasks of jobs, which live as long as their Claude Code process: a server stop cuts them off, not waits (D5). */
+export const JOB_KINDS: ReadonlySet<string> = new Set([CLAUDE_JOB_KIND, CLAUDE_JOB_ANCHOR_KIND, CLAUDE_COMMAND_KIND])
+
 /**
  * `task`: Claude Code's id of the subagent's task. `parent`: the conversation whose `claude.jobs` holds the job, for a
  * background subagent the run started.

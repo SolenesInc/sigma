@@ -11,7 +11,17 @@ import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
 import { deadline, RawClient } from "./raw.ts"
 import { sigmaEnv, stopServer } from "./terminal.ts"
-import { type ViewWatch, person, runningServer, serving, settled, submit, tempHome, watchView } from "./server.ts"
+import {
+  type ViewWatch,
+  person,
+  runEnds,
+  runningServer,
+  serving,
+  settled,
+  submit,
+  tempHome,
+  watchView,
+} from "./server.ts"
 
 const MODEL = "claude-haiku-5-5"
 const FIXTURES = join(import.meta.dir, "../../../../fixtures/claude")
@@ -196,6 +206,61 @@ const journeys: Record<string, Journey> = {
       await (await s.subagent()).until(settled(1), TURN)
     },
   },
+  fork_wake: {
+    ask: "auto",
+    play: async (s) => {
+      await s.submit(
+        'Use the Agent tool with subagent_type "fork" to have a forked subagent reply with exactly: forked. Then reply with exactly what it said.',
+      )
+      await (await s.subagent()).until(settled(1), TURN)
+      // Claude Code answers the fork's end in the same run or in a run of its own: either way, it goes quiet first.
+      await s.quiet(1)
+      await s.say("Reply with exactly: second")
+    },
+  },
+  subagent_background_asks: {
+    play: async (s) => {
+      await s.submit(
+        "Use the Agent tool with run_in_background set to true to start a general-purpose subagent that runs the bash command `touch made.txt` with the Bash tool and reports when it is done. Do not wait for it, and do not run it yourself. Reply with exactly: started",
+      )
+      // Claude Code ends its turn while the subagent works, then waits on the subagent's approval before it goes idle.
+      const child = await s.subagent()
+      await s.answer(true, child)
+      await child.until(settled(1), TURN)
+      await s.quiet(1)
+    },
+  },
+  bash_background_stopped: {
+    ask: "auto",
+    play: async (s) => {
+      await s.say(
+        "Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started",
+      )
+      // Esc during a run stops the run, not the background command.
+      await s.submit("Use the Bash tool to run: sleep 30. Then reply with exactly: slept")
+      await s.until(() => s.calls() >= 2)
+      await s.interrupt()
+      await s.until(() => runEnds(s.seen()).length >= 2)
+      await s.quiet()
+      // Esc while idle stops the background command.
+      await s.interrupt()
+      await s.until(() => s.jobs().every((job) => job.state !== "working"))
+      await s.quiet()
+      await s.say("Reply with exactly: done")
+    },
+  },
+  bash_background_cut_off: {
+    ask: "auto",
+    binary: true,
+    play: async (s) => {
+      await s.say(
+        "Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started",
+      )
+      // Sigma is killed while the command runs; the next server's run resumes the session, told it was cut off.
+      await s.crash()
+      await s.say("Is the background command still running? Reply in one short sentence.")
+    },
+  },
   resume_after_kill: {
     binary: true,
     play: async (s) => {
@@ -269,12 +334,37 @@ const open = async (name: string, journey: Journey) => {
   const session = {
     to,
     cwd: home.dir,
-    submit: (text: string, steer = false) =>
-      submit(client, conversation, text, crypto.randomUUID(), person("ada"), steer),
+    submit: (text: string, steer = false) => {
+      // A prompt to an idle conversation runs next, after any run Claude Code's own wake started.
+      if (!steer) ended = runEnds(view.seen()).length + 1
+      return submit(client, conversation, text, crypto.randomUUID(), person("ada"), steer)
+    },
     settle: async () => {
-      await view.until(settled(++ended), TURN)
+      await view.until(settled(ended), TURN)
       await recorderIdle(to)
     },
+    /** Until the conversation has `reports` job reports, runs nothing, and Claude Code went idle. */
+    quiet: async (reports = 0) => {
+      await view.until(
+        (watch) =>
+          watch.seen().filter((e) => e.kind === "claude.report").length >= reports &&
+          (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run === undefined,
+        TURN,
+      )
+      await recorderIdle(to)
+    },
+    /** The calls Claude made in the journey's conversation. */
+    calls: () =>
+      view
+        .seen()
+        .filter((e) => e.kind === "pi.assistant")
+        .flatMap((e) => (e.model![0] as { content: Array<{ type: string }> }).content)
+        .filter((block) => block.type === "toolCall").length,
+    /** The conversation's jobs. */
+    jobs: () =>
+      Object.values(
+        (view.view().docs["claude.jobs"] as { jobs?: Record<string, { state: string }> } | undefined)?.jobs ?? {},
+      ),
     say: async (text: string) => {
       await session.submit(text)
       await session.settle()
@@ -295,6 +385,7 @@ const open = async (name: string, journey: Journey) => {
       })
     },
     until: (predicate: () => boolean) => view.until(predicate, TURN),
+    seen: () => view.seen(),
     select: async (provider: string, model: string) => {
       const reply = await client.call("conversation/select_model", {
         conversation,
@@ -327,7 +418,8 @@ const open = async (name: string, journey: Journey) => {
       const id = String((entry.data as { conversation: number }).conversation)
       return Object.assign(watchView(client, id), { conversation: id })
     },
-    interrupt: (on: string) => client.call("conversation/interrupt", { author: person("ada"), conversation: on }),
+    interrupt: (on = conversation) =>
+      client.call("conversation/interrupt", { author: person("ada"), conversation: on }),
     /** Kills the server, as a crash would, and starts another on the same home. */
     crash: async () => {
       client.close()
