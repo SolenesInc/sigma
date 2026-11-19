@@ -98,43 +98,10 @@ Preconditions:
   answered in the same process; Sigma starts a new Claude Code for every run,
   so typing it stalls and fails this step today. Stop after the answer, and
   press `Escape` if you typed it.
-- **Claude, between parallel calls** (`steer_mid_message`). In a fresh run made
-  with `--fake-claude steer_mid_message`, write this extension as is to
-  `/tmp/sigma-verify/r/home/extensions/guard.ts` (`mkdir -p` the folder
-  first), before the TUI starts the server. It refuses a read of `a.txt` and
-  holds a read of `b.txt` for ten seconds, which leaves time to steer between
-  the two results:
-
-  ```ts
-  import { Extension, Tool } from "@sigma/extension"
-  import { Effect } from "effect"
-
-  export default Extension.define((ctx) =>
-    ctx.tool.hook("execute.before", (call) =>
-      Effect.gen(function* () {
-        const path = String((call.input as { file_path?: string }).file_path)
-        if (path.endsWith("a.txt")) return yield* Tool.refuse("a.txt is off limits")
-        if (path.endsWith("b.txt")) yield* Effect.sleep("10 seconds")
-      }),
-    ),
-  )
-  ```
-
-  Start the TUI as above and type
-  `In a single message, call the Read tool twice in parallel: once on a.txt and once on b.txt. Then reply with both contents, separated by a comma.`.
-  Wait for `guard refused this call`, press `Tab`, type
-  `Also end your reply with the word BANANA.` and `Enter`, and wait
-  `--timeout 25000` for `b.txt holds banana. BANANA`. The screen shows
-  `▸ Read(.../a.txt)` with `guard refused this call: a.txt is off limits`,
-  `▸ Read(.../b.txt)` with `banana`, the steer's `ADA` entry, then `SIGMA`
-  answering `a.txt was off limits; b.txt holds banana.` and
-  `b.txt holds banana. BANANA`. The log holds the steer as one `"priority":"next"`
-  frame to `"spawn": 0`, and `watch <id>` has one
-  `sigma.run_end`. The recording's hook answer says `guard: a.txt is off limits`
-  where the log says `Tool call blocked: guard refused this call: a.txt is off limits`.
-  Type the steer inside the ten seconds. A steer typed once `banana` shows
-  has no call result left to travel with (see Gotchas): the recording waits
-  for it, and the run stalls at `WORKING` with `steering · Also` showing.
+- **Claude, between parallel calls** (`steer_mid_message`). Not drivable
+  while extensions are switched off: the step needs an extension to refuse
+  one read and hold the other long enough to steer between the two results.
+  Bring it back from the commit `extensions.md` names, with extensions.
 
 - **OpenAI** (`steer_after_parallel_calls`). In a fresh run made with
   `drive.ts r up --fake-openai steer_after_parallel_calls`, run

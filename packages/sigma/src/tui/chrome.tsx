@@ -6,7 +6,6 @@ import { authEnded } from "@sigma/protocol"
 import type {
   AuthResponse,
   AuthState,
-  ExtensionInfo,
   ModelSelection,
   ProviderModels,
   ProviderSnapshot,
@@ -63,7 +62,6 @@ export interface Screen {
   readonly hosted: boolean
   /** The server opened its home read-only: it takes no input, and only the commands that read work. */
   readonly readOnly: boolean
-  readonly statusLines: Readonly<Record<string, string>>
   /** Nothing to show yet: the splash shows instead of the transcript. */
   readonly empty: boolean
   /** A subagent under it waits on a person. */
@@ -198,11 +196,6 @@ const usageLabel = (usage: UsageStatus) => {
   return usage.tokens === 0 && context === "" ? "" : `${tokens(usage.tokens)} tokens${context}  `
 }
 
-const statusLines = (lines: Readonly<Record<string, string>>) => {
-  const shown = Object.entries(lines).map(([extension, text]) => `${extension}: ${text}`)
-  return shown.length === 0 ? "" : ` ${shown.join(" · ")}`
-}
-
 const StatusBar = (props: { screen: Screen }) => {
   const [now, setNow] = createSignal(Date.now())
   createEffect(() => {
@@ -237,7 +230,6 @@ const StatusBar = (props: { screen: Screen }) => {
           </text>
         )}
       </Show>
-      <text fg={color.dim}>{statusLines(props.screen.statusLines)}</text>
       <box flexGrow={1} />
       <text fg={color.dim}>{usageLabel(props.screen.usage)}</text>
       <Show when={props.screen.model}>{(model) => <text fg={color.violet}>{`${modelLabel(model())}  `}</text>}</Show>
@@ -430,13 +422,6 @@ export const Shell = (props: {
             </text>
           )}
         </Show>
-        <For each={setup.view.brokenExtensions}>
-          {(extension) => (
-            <text fg={color.yellow} marginLeft={1} flexShrink={0}>
-              {`✗ extension ${extension.name} failed to load: ${extension.message ?? "no reason given"}`}
-            </text>
-          )}
-        </For>
         <Prompt
           screen={props.screen}
           setup={setup.view}
@@ -461,7 +446,6 @@ export interface SetupClient {
   readonly "models/list": (payload: {
     readonly refresh?: boolean
   }) => Effect.Effect<ReadonlyArray<ProviderModels>, unknown>
-  readonly "extensions/list": () => Effect.Effect<ReadonlyArray<ExtensionInfo>, unknown>
   readonly "auth/start": (payload: {
     readonly provider: string
     readonly method?: "browser" | "device_code" | "terminal"
@@ -503,7 +487,7 @@ const openBrowser = (url: string) => {
 }
 
 /**
- * The providers, broken extensions, sign-in and model picker, kept current from `client` for as long as `scope` is
+ * The providers, sign-in and model picker, kept current from `client` for as long as `scope` is
  * open. `renderer` gives the terminal to a provider's own sign-in while it runs.
  */
 export const setupOf = (client: SetupClient, scope: Scope.Scope, renderer: () => CliRenderer | undefined) =>
@@ -516,18 +500,6 @@ export const setupOf = (client: SetupClient, scope: Scope.Scope, renderer: () =>
         Effect.ignore,
       )
     yield* Effect.forkIn(refreshProviders(false), scope)
-    yield* client["extensions/list"]().pipe(
-      Effect.tap((extensions) =>
-        Effect.sync(() =>
-          setView(
-            "brokenExtensions",
-            extensions.filter((extension) => extension.state === "failed"),
-          ),
-        ),
-      ),
-      Effect.ignore,
-      Effect.forkIn(scope),
-    )
 
     const signInTerminal = (state: AuthState, command: ReadonlyArray<string>, env: Readonly<Record<string, string>>) =>
       Effect.acquireUseRelease(

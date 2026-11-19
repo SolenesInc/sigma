@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite"
-import { mkdirSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { Console, Effect, Schedule, Schema } from "effect"
@@ -13,6 +13,7 @@ export interface Home {
   /** Held by `sigma serve --restart` while it replaces the running server; see `replaceServer`. */
   readonly nextLock: string
   readonly log: string
+  /** Where extensions lived; sigma loads none for now, and says so while anything is left here. */
   readonly extensions: string
 }
 
@@ -25,6 +26,15 @@ export const homeAt = (dir: string): Home => ({
   log: join(dir, "sigma.log"),
   extensions: join(dir, "extensions"),
 })
+
+/**
+ * What sigma says once, where a person looks, when the home still holds extensions: they are switched off for now.
+ * `.agents/skills/verify-sigma/features/extensions.md` names the commit that brings them back.
+ */
+export const extensionsOff = (home: Home): string | undefined => {
+  if (!existsSync(home.extensions) || readdirSync(home.extensions).length === 0) return undefined
+  return `extensions are switched off for now; sigma loads nothing in ${home.extensions}`
+}
 
 export const defaultHome = () => homeAt(resolve(process.env.SIGMA_HOME ?? join(homedir(), ".sigma")))
 

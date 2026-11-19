@@ -191,32 +191,25 @@ test("start-with-id: a conversation opened on a client's id survives a restart, 
   client.close()
 }, 30_000)
 
-test("extensions-load: a home named relative to the folder sigma serves from loads its extensions, listed by full path", async () => {
-  const folder = home()
-  const relative = homeAt(join(folder.dir, "h1"))
-  homes.unshift(relative)
-  mkdirSync(relative.extensions, { recursive: true })
-  writeFileSync(
-    join(relative.extensions, "clock.ts"),
-    `import { Extension } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define(() => Effect.void)
-`,
-  )
-  const env = { ...(await scriptEnv(relative)), SIGMA_HOME: "h1" }
-  const server = await serving(env, folder.dir)
-  const client = await RawClient.connect(relative.socket)
-  expect((await client.call("extensions/list")).result).toEqual([
-    { name: "clock", path: `${relative.extensions}/clock.ts`, state: "loaded" },
-  ])
-  client.close()
-  await stopServer(relative)
-  expect(await deadline(server.exited, 5000, "server exit")).toBe(0)
-})
-
-test("reload: a server refuses to start on a config.toml that does not read, and says why", async () => {
+test("extensions-off: a server whose home still holds extensions says they are switched off", async () => {
   const sigmaHome = home()
-  await Bun.write(`${sigmaHome.dir}/config.toml`, "[extensions.guard\n")
+  await Bun.write(join(sigmaHome.extensions, "guard", "index.ts"), "export default 42")
+  const server = sigma(["serve"], await scriptEnv(sigmaHome))
+  const log = server.stderr.getReader()
+  let printed = ""
+  const off = `extensions are switched off for now; sigma loads nothing in ${sigmaHome.extensions}\n`
+  while (!printed.includes(off)) {
+    const { value, done } = await deadline(log.read(), 10_000, "the server saying extensions are off")
+    if (done) throw new Error(`sigma serve exited: ${printed}`)
+    printed += new TextDecoder().decode(value)
+  }
+  await stopServer(sigmaHome)
+  expect(await deadline(server.exited, 5000, "server exit")).toBe(0)
+}, 30_000)
+
+test("provider-config-invalid: a server refuses to start on a config.toml that does not read, and says why", async () => {
+  const sigmaHome = home()
+  await Bun.write(`${sigmaHome.dir}/config.toml`, "[providers.claude\n")
   const server = sigma(["serve"], await scriptEnv(sigmaHome))
   expect(await deadline(server.exited, 10_000, "server exit")).toBe(1)
   expect(await new Response(server.stderr).text()).toContain(`${sigmaHome.dir}/config.toml`)
@@ -765,22 +758,6 @@ test("server-restart: sigma serve --restart replaces a server that took the home
   expect(restart.exitCode).toBeNull()
 }, 30_000)
 
-test("extensions-load: sigma extensions lists each extension by its full path", async () => {
-  const sigmaHome = home()
-  mkdirSync(sigmaHome.extensions, { recursive: true })
-  writeFileSync(
-    join(sigmaHome.extensions, "clock.ts"),
-    `import { Extension } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define(() => Effect.void)
-`,
-  )
-  const env = await scriptEnv(sigmaHome)
-  const line = `clock  loaded  ${sigmaHome.extensions}/clock.ts\n`
-  expect(await finished(sigma(["extensions"], env))).toMatchObject({ code: 0, stdout: line })
-  expect(await finished(sigma(["extensions", "reload"], env))).toMatchObject({ code: 0, stdout: line })
-}, 30_000)
-
 test("signout, signin-cannot: sigma logout and login sign out of a provider and refuse one sigma does not have", async () => {
   const env = await scriptEnv(home())
   expect(await finished(sigma(["logout", "openai"], env))).toMatchObject({
@@ -1103,7 +1080,7 @@ test("server-cannot-start: each sigma exec whose server cannot come back says wh
     }
   }
   const config = join(sigmaHome.dir, "config.toml")
-  await Bun.write(config, "[extensions.guard\n")
+  await Bun.write(config, "[providers.claude\n")
   server.kill("SIGKILL")
   await server.exited
   for (const each of execs) {

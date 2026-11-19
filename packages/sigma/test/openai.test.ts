@@ -5,7 +5,6 @@ import { type EntryRecord, RUN_END_KIND } from "@sigma/protocol"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Home } from "../src/home.ts"
-import { homeWithExtensions } from "./support/extensions.ts"
 import { accessToken, ACCOUNT, FakeOpenAi, matches, signIn } from "./support/openai.ts"
 import { deadline, RawClient } from "./support/raw.ts"
 import {
@@ -711,66 +710,6 @@ test("subagent-types, code-mode-models: a code-mode model that can spawn is told
     "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
   )
   expect(session.said().slice(-2)).toEqual(["assistant: Reviewed.", "run_end: answered"])
-})
-
-const focus = `import { Extension } from "@sigma/extension"
-import { Effect } from "effect"
-let asked = 0
-export default Extension.define((ctx) =>
-  ctx.request.hook((request) =>
-    Effect.sync(() => {
-      asked += 1
-      request.instructions.push("Request " + asked + " in " + request.conversation.cwd + ".")
-      request.tools = request.tools.filter((name) => name === "bash" || name === "made_up")
-      request.tools.push("made_up")
-    }),
-  ),
-)`
-
-test("request-hook: an extension's request hook adds instructions and narrows the tools of each request to the model", async () => {
-  await using fake = new FakeOpenAi()
-  const expected = fake.play("tool_call", TOOL_NAMES)
-  const home = homeWithExtensions({ "focus.ts": focus })
-  await using session = await conversationWith(fake, { home })
-  await session.submit("what does echo say?")
-  await session.view.until(settled(1))
-  expectRequests(fake, expected)
-  expect(session.said().at(-2)).toBe("assistant: It printed hi.")
-  const requests = fake.responses().map((response) => JSON.parse(response.body))
-  expect(requests.map((request) => request.instructions)).toEqual([
-    expect.stringMatching(new RegExp(`^You are Sigma[^]*\\nRequest 1 in ${home.dir}\\.\\n$`)),
-    expect.stringMatching(new RegExp(`^You are Sigma[^]*\\nRequest 2 in ${home.dir}\\.\\n$`)),
-  ])
-  expect(requests.map((request) => request.tools.map((tool: { name: string }) => tool.name))).toEqual([
-    ["bash"],
-    ["bash"],
-  ])
-})
-
-test("hook-failure: a request hook that fails is skipped with a toast, and the model gets the request as it was", async () => {
-  await using fake = new FakeOpenAi()
-  fake.play("text_answer")
-  const home = homeWithExtensions({
-    "broken.ts": `import { Extension } from "@sigma/extension"
-import { Effect } from "effect"
-export default Extension.define((ctx) =>
-  ctx.request.hook((request) => {
-    request.tools = []
-    request.instructions.push("Never sent.")
-    return Effect.fail("no network")
-  }),
-)`,
-  })
-  await using session = await conversationWith(fake, { home })
-  await session.submit("hello")
-  await session.view.until(settled(1))
-  const toasts = session.view.seen().filter((entry) => entry.kind === "sigma.toast")
-  expect(toasts.map((entry) => entry.data)).toEqual([{ extension: "broken", text: "request failed: no network" }])
-  const { instructions, tools } = JSON.parse(fake.responses()[0]!.body)
-  expect(instructions).not.toContain("Never sent.")
-  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(
-    expect.arrayContaining(["read", "write", "edit", "bash", "grep", "glob", "spawn_agent", "wait_agent"]),
-  )
 })
 
 test("code-mode-models, openai-code-mode, codemode-grammar, codemode-tool: a model ChatGPT marks code-mode-only is offered codemode alone, writes raw JavaScript for it, and gets the script's result", async () => {

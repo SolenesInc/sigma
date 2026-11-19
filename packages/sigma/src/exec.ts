@@ -7,7 +7,6 @@ import {
   type FellBehind,
   RUN_END_KIND,
   type RunEnd,
-  TOAST_KIND,
   USER_KIND,
   type View,
   WITHDRAWN_KIND,
@@ -269,10 +268,6 @@ export const exec = Effect.fnUntraced(function* (
       for (const block of blocks(message)) {
         if (block.type === "toolCall") note(`› ${describeCall(block.name ?? "", block.arguments)}`)
       }
-    } else if (entry.kind === TOAST_KIND) {
-      const toast = entry.data as { extension: string; text: string }
-      // On stderr, so a message streaming to stdout goes on where it was.
-      note(`◆ ${toast.extension}: ${toast.text}`)
     } else if (entry.kind === RUN_END_KIND) {
       printer.end()
       ended = entry.data as RunEnd

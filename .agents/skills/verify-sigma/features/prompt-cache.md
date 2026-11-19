@@ -216,8 +216,8 @@ Provider, `packages/sigma/test/openai.test.ts`:
 Provider, `packages/sigma/test/claude.test.ts`:
 
 - claude-live, cache-claude-turns: the next run reaches the Claude Code process that served the last one, told only its prompt, and what the process spent counts once
-- cache-claude-resume: a Claude Code process reopened for a conversation starts with the instructions, sigma tools and withheld tools of the one before
-- cache-claude-fork: a fork of a Claude conversation forks Claude Code's session, started with its parent's instructions, sigma tools and withheld tools
+- cache-claude-resume: a Claude Code process reopened for a conversation starts with the instructions of the one before
+- cache-claude-fork: a fork of a Claude conversation forks Claude Code's session, started with its parent's instructions
 - cache-claude-subagent: Claude Code's fork subagent stays available, and sigma hosts it as a conversation of its own
 
 Wire, `packages/sigma/test/wire.test.ts`:
@@ -253,8 +253,9 @@ Screen, `packages/sigma/test/screen.test.ts`:
   the parent's run, so the fork's conversation ends
   `interrupted: Claude Code ended before the subagent did`, and its usage is
   not counted (seed `claude-background-work-across-runs`).
-- An extension tool whose input is an empty struct fails Claude runs today;
-  give a test tool at least one field.
+- With extensions switched off, sigma offers Claude Code no MCP tools and
+  withholds none, so only the appended instructions can differ between two
+  spawns' fronts.
 
 ## With a real account
 

@@ -493,27 +493,6 @@ export const ReadContext = Rpc.make("conversation/context", {
   error: Schema.Union([NoSuchConversation, NoSuchEntry]),
 })
 
-export const ExtensionInfo = Schema.Struct({
-  name: Schema.String,
-  path: Schema.String,
-  state: Schema.Literals(["loaded", "failed", "disabled"]),
-  message: Schema.optionalKey(Schema.String.annotate({ description: "Why it failed to load." })),
-})
-export type ExtensionInfo = typeof ExtensionInfo.Type
-
-export const ListExtensions = Rpc.make("extensions/list", {
-  success: Schema.Array(ExtensionInfo).annotate({
-    description: "Every extension in the home, in the order they load.",
-  }),
-})
-
-export const ReloadExtensions = Rpc.make("extensions/reload", {
-  success: Schema.Array(ExtensionInfo).annotate({
-    description:
-      "Loads every extension again from disk, with its options from config.toml, then swaps them in, clears every status line and unloads the old ones.",
-  }),
-})
-
 export const TreeStatus = Schema.TaggedStruct("tree", {
   conversation: ConversationId.annotate({
     description: "A conversation people started; its tree is it and its subagents.",
@@ -555,12 +534,6 @@ export const WatchStatus = Rpc.make("status/watch", {
   error: FellBehind,
   stream: true,
 })
-
-/** Each extension's status line in a conversation, by extension name; the view's document of this kind. */
-export const STATUS_LINES_KIND = "sigma.status_lines"
-
-/** An entry `{ extension, text }`: an extension told the people in the conversation something. */
-export const TOAST_KIND = "sigma.toast"
 
 export const StopServer = Rpc.make("server/stop")
 
@@ -908,8 +881,6 @@ export const SigmaRpcs = RpcGroup.make(
   GetUsage,
   WatchTasks,
   ResolveApproval,
-  ListExtensions,
-  ReloadExtensions,
   WatchStatus,
   StopServer,
   ListProviders,

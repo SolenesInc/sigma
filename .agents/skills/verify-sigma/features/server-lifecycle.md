@@ -92,7 +92,7 @@ Preconditions:
   `--read-only` every other time: each prints `serving` and the TUI shows
   `READ ONLY` or `PROMPT` to match.
 - **Cannot start.** Run `drive.ts r serve`, `drive.ts r tui start` and
-  `drive.ts r tui wait READY`. Write `[extensions.guard` to
+  `drive.ts r tui wait READY`. Write `[providers.claude` to
   `/tmp/sigma-verify/r/home/config.toml`, run `drive.ts r kill-server`, then
   `drive.ts r tui wait 'cannot start'`: above the prompt, `✗ sigma's server
 cannot start: .../config.toml: TOML Parse error ...`. Count

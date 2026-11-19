@@ -161,7 +161,7 @@ const clock = defineExtension({
   ],
 })
 
-test("claude-extensions: an extension's tool reaches Claude through sigma's own MCP server, without asking", async () => {
+test("hook-claude: an extension's tool reaches Claude through sigma's own MCP server, without asking", async () => {
   const claude = fake("own_tool")
   const all = await run(
     Effect.gen(function* () {
@@ -182,7 +182,7 @@ test("claude-extensions: an extension's tool reaches Claude through sigma's own 
   expect(claude.log().find((entry) => entry.initialize)?.initialize.sdkMcpServers).toEqual(["sigma"])
 })
 
-test("claude-extensions: an extension refuses a call Claude wants, in sigma's words, and Claude Code hears why", async () => {
+test("hook-claude: an extension refuses a call Claude wants, in sigma's words, and Claude Code hears why", async () => {
   const claude = fake("bash_hook_denied")
   const all = await run(
     Effect.gen(function* () {
@@ -204,7 +204,7 @@ test("claude-extensions: an extension refuses a call Claude wants, in sigma's wo
   ])
 })
 
-test("claude-extensions: an extension's rewrite of a call is what Claude Code runs and what the transcript shows", async () => {
+test("hook-claude: an extension's rewrite of a call is what Claude Code runs and what the transcript shows", async () => {
   const claude = fake("bash_hook_rewritten")
   const all = await run(
     Effect.gen(function* () {
@@ -226,7 +226,7 @@ test("claude-extensions: an extension's rewrite of a call is what Claude Code ru
   ])
 })
 
-test("claude-extensions: an extension's hooks reach the calls of Claude's subagents, in the subagent's conversation", async () => {
+test("hook-claude: an extension's hooks reach the calls of Claude's subagents, in the subagent's conversation", async () => {
   const claude = fake("subagent_hooked")
   const hookedIn: Array<[string, number]> = []
   const witness = defineExtension({
@@ -265,7 +265,7 @@ test("claude-extensions: an extension's hooks reach the calls of Claude's subage
   ])
 })
 
-test("claude-extensions: an extension's tool runs for Claude's subagents, in the subagent's conversation", async () => {
+test("hook-claude: an extension's tool runs for Claude's subagents, in the subagent's conversation", async () => {
   const claude = fake("subagent_own_tool")
   const { parent, child } = await run(
     Effect.gen(function* () {
@@ -617,7 +617,7 @@ test("claude-switch, claude-live: switching to Claude from another provider rete
   )
 })
 
-test("execute-after: afterTool changes what Claude Code's Read returns, and says so when it can't change another tool's result", async () => {
+test("hook-claude: afterTool changes what Claude Code's Read returns, and says so when it can't change another tool's result", async () => {
   const claude = fake("read_after_hooked")
   const shout = defineExtension({
     name: "shout",

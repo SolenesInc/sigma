@@ -141,10 +141,7 @@ to settle and stops it, and the next client starts one on the new code.
   over `^L  sign in`; a sign-in shows in the `SIGN IN · <provider>` panel over
   `esc  cancel`; the model list is the `MODEL` panel, whose chosen row ends in
   `‹ <effort> ›`; a switch shows as `◆ <name> switched to <provider> · <model> · <effort>`,
-  and the status bar ends with the conversation's model. An extension's
-  status line shows as `<name>: <text>` after the status word, its toast as
-  `◆ <name>: <text>` in the transcript, and one that failed to load as
-  `✗ extension <name> failed to load: <why>` over the prompt.
+  and the status bar ends with the conversation's model.
 - **CLI.** `drive.ts r1 sigma <args>` runs `sigma` against the run's home and
   records the command, stdout, stderr and exit code.
   It gives `sigma` no terminal; a command that reads one, such as
@@ -154,7 +151,7 @@ to settle and stops it, and the next client starts one on the new code.
   `conversation/submit`, `conversation/interrupt`, `approval/resolve`,
   `conversation/select_model`, `skills/list`, `providers/list`,
   `models/list`, `auth/start`, `auth/respond`, `auth/cancel`, `auth/logout`,
-  `extensions/list`, `extensions/reload`, `server/stop`, `conversation/fork`,
+  `server/stop`, `conversation/fork`,
   `conversation/reset`, `conversation/compact`, `conversation/continue`,
   `submission/withdraw`, `conversation/configure`, `conversation/context`,
   `usage/get` and `tasks/watch` (a stream: `rpc` prints its first chunk).

@@ -3,7 +3,6 @@ import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { writeFileSync } from "node:fs"
 import { Console, Effect, Layer, Option } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
-import type { ExtensionInfo } from "@sigma/protocol"
 import { Client, clientLayer, REFUSAL_FILE, ServerFailed, serverAnswers, type StartOptions } from "./client.ts"
 import { exec } from "./exec.ts"
 import { claimHome, defaultHome, HOME_TAKEN_EXIT, type Home, type HomeTaken, replaceServer } from "./home.ts"
@@ -238,42 +237,6 @@ const logoutCommand = Command.make(
   }),
 ).pipe(Command.withDescription("Sign out of a provider"))
 
-const showExtensions = (home: Home, extensions: ReadonlyArray<ExtensionInfo>) =>
-  Effect.gen(function* () {
-    if (extensions.length === 0) return yield* Console.log(`no extensions in ${home.extensions}`)
-    for (const extension of extensions) {
-      yield* Console.log(
-        [extension.name, extension.state, extension.path, ...(extension.message ? [extension.message] : [])].join("  "),
-      )
-    }
-    if (extensions.some((extension) => extension.state === "failed")) process.exitCode = 1
-  })
-
-const reloadExtensionsCommand = Command.make(
-  "reload",
-  {},
-  Effect.fn(function* () {
-    const home = defaultHome()
-    yield* withServer(home, (client) =>
-      Effect.flatMap(client["extensions/reload"](), (extensions) => showExtensions(home, extensions)),
-    )
-  }),
-).pipe(Command.withDescription("Load every extension again from disk, with its options from config.toml"))
-
-const extensionsCommand = Command.make(
-  "extensions",
-  {},
-  Effect.fn(function* () {
-    const home = defaultHome()
-    yield* withServer(home, (client) =>
-      Effect.flatMap(client["extensions/list"](), (extensions) => showExtensions(home, extensions)),
-    )
-  }),
-).pipe(
-  Command.withDescription("List the home's extensions, and why any failed to load"),
-  Command.withSubcommands([reloadExtensionsCommand]),
-)
-
 const schemaCommand = Command.make(
   "schema",
   {},
@@ -310,7 +273,7 @@ const sigma = Command.make(
   }),
 ).pipe(
   Command.withDescription("A durable coding agent that many clients share"),
-  Command.withSubcommands([serveCommand, execCommand, loginCommand, logoutCommand, extensionsCommand, schemaCommand]),
+  Command.withSubcommands([serveCommand, execCommand, loginCommand, logoutCommand, schemaCommand]),
 )
 
 sigma.pipe(
