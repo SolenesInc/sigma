@@ -286,7 +286,7 @@ export const StartConversation = Rpc.make("conversation/start", {
     instructions: Schema.optionalKey(
       Schema.String.annotate({
         description:
-          "Instructions the model follows in this conversation, beside its own. Its subagents don't get them.",
+          "Instructions the model follows in this conversation, beside its own. They are fixed for the conversation's life, and its subagents start from them.",
       }),
     ),
     author: Author.annotate({
@@ -725,7 +725,7 @@ export const RESET_KIND = "pi.reset"
  */
 export const COMPACTION_KIND = "pi.compaction"
 
-/** An entry `{ author, instructions?, maxTurns? }`: someone changed the conversation's settings; null clears one. */
+/** An entry `{ author, maxTurns }`: someone changed the conversation's turn limit; null removes it. */
 export const CONFIGURED_KIND = "sigma.configured"
 
 export const Fork = Rpc.make("conversation/fork", {
@@ -812,22 +812,15 @@ export const Withdraw = Rpc.make("submission/withdraw", {
   error: Schema.Union([ReadOnlyServer, NoSuchConversation, NoSuchSubmission]),
 })
 
-/** Changes the conversation's settings from its next model request on. */
+/** Changes the conversation's turn limit from its next model request on. */
 export const Configure = Rpc.make("conversation/configure", {
   payload: {
     conversation: ConversationId,
     author: Author.annotate({ description: `Who changed it; its ${CONFIGURED_KIND} entry names them.` }),
-    instructions: Schema.optionalKey(
-      Schema.NullOr(Schema.String).annotate({
-        description: "The model's instructions beside its own; null clears them.",
-      }),
-    ),
-    maxTurns: Schema.optionalKey(
-      Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))).annotate({
-        description:
-          "The tool rounds one run may take before it ends failed, naming the limit; null for no limit, the default.",
-      }),
-    ),
+    maxTurns: Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))).annotate({
+      description:
+        "The tool rounds one run may take before it ends failed, naming the limit; null for no limit, the default.",
+    }),
   },
   error: Schema.Union([ReadOnlyServer, NoSuchConversation, TakesNoInput]),
 })

@@ -36,7 +36,8 @@ scripted conversations list none and carry none.
   after a reopen.
 - `start-instructions` keeps the instructions a conversation started with
   (`--instructions`, or `instructions` on `conversation/start`) on the
-  conversation, for every client to see; a subagent's instructions are
+  conversation, for every client to see. They are fixed for the
+  conversation's life: no command or call changes them. A subagent's instructions are
   those its parent inherited, the root's own at the top, followed by its own. A forked ChatGPT subagent's requests keep its
   parent's `instructions`, and its own arrive after the inherited history as
   an update of the `instructions` section (`cache-fork-subagent` in

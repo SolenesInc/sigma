@@ -708,22 +708,14 @@ const EntryView = (props: {
       )
     }
     case CONFIGURED_KIND: {
-      const data = dataOf<{ author: Author; instructions?: string | null; maxTurns?: number | null }>(entry)
-      const changes = [
-        ...(data.instructions === undefined
-          ? []
-          : [data.instructions === null ? "cleared the instructions" : `set the instructions: ${data.instructions}`]),
-        ...(data.maxTurns === undefined
-          ? []
-          : [
-              data.maxTurns === null
-                ? "removed the turn limit"
-                : `set the turn limit to ${data.maxTurns} ${data.maxTurns === 1 ? "turn" : "turns"}`,
-            ]),
-      ]
+      const { author, maxTurns } = dataOf<{ author: Author; maxTurns: number | null }>(entry)
+      const change =
+        maxTurns === null
+          ? "removed the turn limit"
+          : `set the turn limit to ${maxTurns} ${maxTurns === 1 ? "turn" : "turns"}`
       return (
         <text fg={color.dim} marginTop={1} marginLeft={2}>
-          {`◆ ${data.author.name.toLowerCase()} ${changes.join(" and ")}`}
+          {`◆ ${author.name.toLowerCase()} ${change}`}
         </text>
       )
     }
@@ -1292,11 +1284,6 @@ const conversationScreen = Effect.fnUntraced(function* (
           : `too late to withdraw: ${typedOf(newest.content)} already ${withdrawn.result === "settled" ? "ran" : "reached sigma"}`,
       )
     },
-    instructions: (text) =>
-      report(
-        client["conversation/configure"]({ conversation, author, instructions: text === "" ? null : text }),
-        () => undefined,
-      ),
     "max-turns": (count) => {
       const turns = count === "" ? null : Number(count)
       if (turns !== null && !(Number.isInteger(turns) && turns >= 1))

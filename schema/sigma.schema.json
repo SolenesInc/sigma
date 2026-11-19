@@ -87,7 +87,7 @@
           },
           "instructions": {
             "type": "string",
-            "description": "Instructions the model follows in this conversation, beside its own. Its subagents don't get them."
+            "description": "Instructions the model follows in this conversation, beside its own. They are fixed for the conversation's life, and its subagents start from them."
           },
           "author": {
             "type": "object",
@@ -1362,17 +1362,6 @@
             "additionalProperties": true,
             "description": "Who changed it; its sigma.configured entry names them."
           },
-          "instructions": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The model's instructions beside its own; null clears them."
-          },
           "maxTurns": {
             "anyOf": [
               {
@@ -1389,7 +1378,8 @@
         },
         "required": [
           "conversation",
-          "author"
+          "author",
+          "maxTurns"
         ],
         "additionalProperties": true
       },

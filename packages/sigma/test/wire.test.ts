@@ -2138,12 +2138,7 @@ test("fork-rpc, fork-shown: a fork goes on from an earlier entry with only what 
   await view.until(settled(2))
   const firstEnd = view.seen().find((entry) => entry.kind === RUN_END_KIND)!.id
   // Changed after the fork's entry, and still what the fork runs with.
-  await client.call("conversation/configure", {
-    conversation,
-    author: person("bo"),
-    instructions: "be brief",
-    maxTurns: 3,
-  })
+  await client.call("conversation/configure", { conversation, author: person("bo"), maxTurns: 3 })
   const forked = await client.call("conversation/fork", {
     author: person("ada"),
     conversation,
@@ -2154,7 +2149,7 @@ test("fork-rpc, fork-shown: a fork goes on from an earlier entry with only what 
   const fork = watchView(client, "other-way")
   await opened(fork)
   expect(fork.view().conversation.parent).toEqual({ conversationId: Number(conversation), at: firstEnd })
-  expect(fork.view().docs["pi.agent"]).toMatchObject({ instructions: "be brief", maxTurns: 3 })
+  expect(fork.view().docs["pi.agent"]).toMatchObject({ maxTurns: 3 })
   const listed = (await client.call("conversation/list")).result as Array<{
     id: string
     fork?: unknown
@@ -2428,9 +2423,9 @@ test("author-every-change: two people steer one conversation, and its committed 
   reader.close()
 })
 
-test("configure-rpc, run-turn-limit: changed instructions reach the model and the transcript says who changed them; a turn limit ends a looping run by name", async () => {
+test("configure-rpc, run-turn-limit: the transcript says who set the turn limit, and the limit ends a looping run by name", async () => {
   const echo = { tool: { name: "bash", input: { command: "echo again" } } }
-  await using server = await runningServer([{ text: "a" }, echo, echo, echo, { text: "b" }])
+  await using server = await runningServer([echo, echo, echo, echo, { text: "b" }])
   const client = await RawClient.connect(server.home.socket)
   const reply = await client.call("conversation/start", {
     author: person("ada"),
@@ -2439,35 +2434,23 @@ test("configure-rpc, run-turn-limit: changed instructions reach the model and th
   })
   const conversation = (reply.result as { conversation: string }).conversation
   const view = watchView(client, conversation)
-  const configure = (settings: Record<string, unknown>) =>
-    client.call("conversation/configure", { conversation, author: person("bo"), ...settings })
-  /** The instructions the newest system message gives the model. */
-  const instructions = async () => {
-    const reply = await client.call("conversation/context", { conversation })
-    const messages = (reply.result as { messages: Array<{ role: string; sections?: { instructions?: unknown } }> })
-      .messages
-    return messages.findLast((message) => message.sections !== undefined && "instructions" in message.sections)
-      ?.sections?.instructions
-  }
-  expect((await configure({ instructions: "answer in French" })).error).toBe(undefined)
-  await submit(client, conversation, "one")
-  await view.until(settled(1))
-  expect(await instructions()).toContain("answer in French")
-  expect((await configure({ maxTurns: 1 })).error).toBe(undefined)
+  const configure = (maxTurns: unknown) =>
+    client.call("conversation/configure", { conversation, author: person("bo"), maxTurns })
+  expect((await configure(1)).error).toBe(undefined)
   await submit(client, conversation, "loop")
+  await view.until(settled(1))
+  expect(runEnds(view.seen())[0]).toEqual({ outcome: "failed", message: "reached the turn limit of 1 turn" })
+  expect((await configure(null)).error).toBe(undefined)
+  await submit(client, conversation, "two")
   await view.until(settled(2))
-  const end = runEnds(view.seen())[1]!
-  expect(end).toEqual({ outcome: "failed", message: "reached the turn limit of 1 turn" })
+  // Two tool rounds, past the limit removed.
+  expect(runEnds(view.seen())[1]!.outcome).toBe("answered")
   const configured = view.seen().filter((entry) => entry.kind === "sigma.configured")
   expect(configured.map((entry) => entry.data)).toEqual([
-    { author: person("bo"), instructions: "answer in French" },
     { author: person("bo"), maxTurns: 1 },
+    { author: person("bo"), maxTurns: null },
   ])
-  expect((await configure({ instructions: null, maxTurns: null })).error).toBe(undefined)
-  await submit(client, conversation, "two")
-  await view.until(settled(3))
-  expect(await instructions()).toBe(null)
-  expect((await configure({ maxTurns: 0 })).error?.message).toContain("maxTurns")
+  expect((await configure(0)).error?.message).toContain("maxTurns")
   client.close()
 })
 

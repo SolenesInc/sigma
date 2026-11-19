@@ -19,7 +19,7 @@ an ordinary prompt.
   ([Conversations and forks](./conversations.md)), `/reset`
   ([Reset and handoff](./reset.md)), `/compact` ([Compaction](./compaction.md)),
   `/continue` and `/withdraw` ([Submissions](./submissions.md)),
-  `/instructions` and `/max-turns`
+  `/max-turns`
   ([Per-conversation agent and settings](./agent-settings.md)), `/usage`
   ([Usage and cost](./usage.md)) and `/tasks` ([Task kernel](./tasks.md)).
 
@@ -43,7 +43,6 @@ Preconditions:
   `/compact [instructions]  summarize the context now`,
   `/continue  start a run with no new input, such as after one failed`,
   `/withdraw  take back the newest queued prompt`,
-  `/instructions [text]  set the model's instructions; without text, clear them`,
   `/max-turns [n]  end a run after n tool rounds; without n, no limit`,
   `/usage  the tokens this conversation and every conversation spent`,
   `/tasks  the work running now in every conversation` and
@@ -66,7 +65,7 @@ Screen, `packages/sigma/test/screen.test.ts`:
 ## Gotchas
 
 - A command's argument is the rest of the line: `/reset` with no text resets
-  without a handoff, and `/instructions` alone clears them.
+  without a handoff, and `/max-turns` alone removes the limit.
 - A mistyped command reaches the model as a prompt, with no warning, and so
   does a command that takes nothing (`/help`, `/fork`, `/continue`,
   `/withdraw`, `/usage`, `/tasks`) typed with text after it: `/continue the

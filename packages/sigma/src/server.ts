@@ -696,18 +696,14 @@ const Handlers = SigmaRpcs.toLayer(
           return { result: result === "aborted" ? ("withdrawn" as const) : result }
         }),
       ),
-      "conversation/configure": writing(({ conversation: id, author, instructions, maxTurns }) =>
+      "conversation/configure": writing(({ conversation: id, author, maxTurns }) =>
         Effect.gen(function* () {
           const conversation = yield* takingInput(id)
-          const change = {
-            ...(instructions === undefined ? {} : { instructions }),
-            ...(maxTurns === undefined ? {} : { maxTurns }),
-          }
           yield* Effect.orDie(
             conversation.commit((tx) =>
               Effect.gen(function* () {
-                yield* configure(tx, conversation.id, change)
-                yield* tx.appendEntry(conversation.id, { kind: CONFIGURED_KIND, data: { author, ...change } })
+                yield* configure(tx, conversation.id, { maxTurns })
+                yield* tx.appendEntry(conversation.id, { kind: CONFIGURED_KIND, data: { author, maxTurns } })
               }),
             ),
           )

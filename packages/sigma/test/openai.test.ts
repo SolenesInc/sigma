@@ -357,38 +357,36 @@ test("cache-turns: each ChatGPT request of a conversation, within a run and acro
   expectCacheKept(second!, third!)
 })
 
-test("cache-instructions-change, section-deltas: instructions changed between two prompts reach ChatGPT after the history, and the request keeps the instructions it started with", async () => {
+test("cache-instructions-change, section-deltas: an AGENTS.md changed between two prompts reaches ChatGPT after the history, and the request keeps the instructions it started with", async () => {
   await using fake = new FakeOpenAi()
   fake.play("text_answer")
   fake.play("text_answer")
-  await using session = await conversationWith(fake, { instructions: "Be brief." })
+  await using session = await conversationWith(fake, {
+    cwd: (home) => {
+      write(join(home, "AGENTS.md"), "Answer in English.")
+      return home
+    },
+  })
   await session.submit("hello")
   await session.view.until(settled(1))
-  await session.client.call("conversation/configure", {
-    conversation: session.conversation,
-    author: person("bo"),
-    instructions: "Answer in French.",
-  })
+  write(join(session.server.home.dir, "AGENTS.md"), "Answer in French.")
   await session.submit("again")
   await session.view.until(settled(2))
   const [first, second] = sentBodies(fake)
   expect(sentBodies(fake)).toHaveLength(2)
-  expect(first!.instructions).toEndWith("<instructions>\nBe brief.\n</instructions>")
+  expect(first!.instructions).toContain("Answer in English.")
   expectCacheKept(first!, second!)
-  expect(second!.input.slice(first!.input.length)).toEqual([
+  const added = second!.input.slice(first!.input.length) as Array<any>
+  expect(added.slice(0, 2)).toEqual([
     { type: "message", role: "assistant", content: [{ type: "output_text", text: "Hello there" }] },
     { type: "message", role: "user", content: [{ type: "input_text", text: "again" }] },
-    {
-      type: "message",
-      role: "developer",
-      content: [
-        {
-          type: "input_text",
-          text: 'Updated system prompt section "instructions":\n\n<instructions>\nAnswer in French.\n</instructions>',
-        },
-      ],
-    },
   ])
+  expect(added).toHaveLength(3)
+  expect(added[2].role).toBe("developer")
+  const update: string = added[2].content[0].text
+  expect(update).toStartWith('Updated system prompt section "workspace":\n\n')
+  expect(update).toContain("Answer in French.")
+  expect(update).not.toContain("Answer in English.")
 })
 
 test("cache-fresh-subagent: a subagent started without its parent's history keeps its own requests' front, under a cache key of its own", async () => {

@@ -104,7 +104,6 @@ export const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["/compact [instructions]", "summarize the context now"],
   ["/continue", "start a run with no new input, such as after one failed"],
   ["/withdraw", "take back the newest queued prompt"],
-  ["/instructions [text]", "set the model's instructions; without text, clear them"],
   ["/max-turns [n]", "end a run after n tool rounds; without n, no limit"],
   ["/usage", "the tokens this conversation and every conversation spent"],
   ["/tasks", "the work running now in every conversation"],

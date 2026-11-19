@@ -16,14 +16,14 @@ Extensions contribute named prompt sections, and what the model was told is reco
 
 ### People
 
-- Change a conversation's instructions, or an `AGENTS.md` file, between two
-  prompts to a ChatGPT conversation (`section-deltas`).
+- Change an `AGENTS.md` file or a skill between two prompts to a ChatGPT
+  conversation (`section-deltas`).
 
 ### Agents
 
-- `conversation/configure` with `instructions` between two
-  `conversation/submit`s (`section-deltas`). Driving it is
-  **Instructions changed** in [Prompt cache](./prompt-cache.md).
+- An `AGENTS.md` file changed between two `conversation/submit`s
+  (`section-deltas`). Driving it is **Instructions changed** in
+  [Prompt cache](./prompt-cache.md).
 
 The other use cases here are kernel use cases, with no client path of their
 own and no `drive.ts` steps.
@@ -38,7 +38,7 @@ Feature ledger area I: spec §7.1, §7.4; README System Prompt; example 14-syste
 
 Provider, `packages/sigma/test/openai.test.ts`:
 
-- cache-instructions-change, section-deltas: instructions changed between two prompts reach ChatGPT after the history, and the request keeps the instructions it started with
+- cache-instructions-change, section-deltas: an AGENTS.md changed between two prompts reaches ChatGPT after the history, and the request keeps the instructions it started with
 
 ## Gotchas
 
