@@ -32,7 +32,7 @@ someone, such as attn, sets; otherwise as the system's user.
 
 - Start `sigma` with `SIGMA_AUTHOR_ID` and `SIGMA_AUTHOR_NAME` set, then act
   in the TUI: type a prompt, `Esc`, `/continue`, `/withdraw`, `/compact`,
-  `/fork`, `/model`, `/reset`, `/instructions`, `/max-turns`, `^Y` or `^N`.
+  `/fork`, `/model`, `/reset`, `/max-turns`, `^Y` or `^N`.
 
 ### Agents
 

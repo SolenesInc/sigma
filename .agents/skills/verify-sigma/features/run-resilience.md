@@ -85,12 +85,12 @@ Feature ledger area G: spec §5.4, §8.2, §8.3; README Per-Conversation Agent; 
 
 Wire, `packages/sigma/test/wire.test.ts`:
 
-- configure-rpc, run-turn-limit: changed instructions reach the model and the transcript says who changed them; a turn limit ends a looping run by name
+- configure-rpc, run-turn-limit: the transcript says who set the turn limit, and the limit ends a looping run by name
 - run-retry-live: a provider hiccup shows its retry and when it comes, and stopping it ends the run
 
 Screen, `packages/sigma/test/screen.test.ts`:
 
-- configure-rpc, run-turn-limit: /instructions and /max-turns show who changed what, and a looping run ends naming the limit
+- configure-rpc, run-turn-limit: /max-turns shows who set the limit, and a looping run ends naming it
 - run-retry-live: the status bar counts down a provider's retry, and escape stops it
 
 `bun run coverage` lists the kernel ids here with their tests, their mapped upstream rows or their owning child.

@@ -837,12 +837,10 @@ test("withdraw-rpc: /withdraw takes back the queued prompt before it runs", asyn
   await quit(session)
 })
 
-test("configure-rpc, run-turn-limit: /instructions and /max-turns show who changed what, and a looping run ends naming the limit", async () => {
+test("configure-rpc, run-turn-limit: /max-turns shows who set the limit, and a looping run ends naming it", async () => {
   const echo = call("bash", { command: "echo again" })
   const session = await open([echo, echo], ["--auto"])
   await session.waitFor((screen) => screen.includes("READY"))
-  session.type("/instructions answer in French\r")
-  await session.waitFor((screen) => screen.includes("set the instructions: answer in French"))
   session.type("/max-turns 1\r")
   await session.waitFor((screen) => screen.includes("set the turn limit to 1 turn"))
   session.type("/max-turns zero\r")
@@ -902,8 +900,10 @@ test("commands-help: /help lists every command with what it does, and escape goe
   await session.waitFor((screen) => screen.includes("READY"))
   session.type("/help\r")
   const screen = await session.waitFor((screen) => screen.includes("COMMANDS"))
-  for (const command of ["/fork", "/reset", "/compact", "/continue", "/withdraw", "/instructions", "/max-turns"])
+  for (const command of ["/fork", "/reset", "/compact", "/continue", "/withdraw", "/max-turns"])
     expect(screen).toContain(command)
+  // A conversation's instructions are fixed once it starts.
+  expect(screen).not.toContain("/instructions")
   session.type("\x1b")
   await session.waitFor((screen) => !screen.includes("COMMANDS"))
   await quit(session)

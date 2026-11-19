@@ -19,9 +19,8 @@ with what the last one had. A person sees the result in `/usage`, whose
   across runs, with the same `instructions`, `tools` and `prompt_cache_key`
   as the one before, and an `input` that starts with all of the one before's.
 - `cache-instructions-change` keeps a ChatGPT conversation's `instructions`
-  as they were in its first request after a section changes (its
-  instructions through `conversation/configure`, an `AGENTS.md` file, a
-  skill), and sends the change after the history as a `developer` message,
+  as they were in its first request after a section changes (an `AGENTS.md`
+  file, a skill, or a forked subagent's own instructions), and sends the change after the history as a `developer` message,
   `Updated system prompt section "<name>":` and the section's new text.
 - `cache-fresh-subagent` does the same among the requests of a subagent
   started with `fork_turns: "none"`, under a `prompt_cache_key` of its own.
@@ -99,20 +98,21 @@ Preconditions:
   because `text_answer` was recorded as a conversation's first request.
 
 - **Instructions changed** (`cache-instructions-change`, `section-deltas`).
-  `drive.ts r up --fake-openai text_answer,text_answer`,
-  `drive.ts r sigma exec --provider openai --instructions 'Be brief.' hello`:
-  `Hello there`. Take the id, then
-  `drive.ts r rpc conversation/configure '{"conversation": "<id>", "author": {"id": "ada", "name": "ada"}, "instructions": "Answer in French."}'`
-  and `drive.ts r sigma exec --conversation <id> again`. Compare the two
+  `drive.ts r up --fake-openai text_answer,text_answer`, write
+  `Answer in English.` to `/tmp/sigma-verify/r/home/AGENTS.md`, then
+  `drive.ts r sigma exec --provider openai hello`: `Hello there`. Take the
+  id, write `Answer in French.` to the same file, then
+  `drive.ts r sigma exec --conversation <id> again`. Compare the two
   requests, and show what the second added:
 
   ```sh
   jq -s -c '[.[] | .body] as $b | {instructions: ($b[1].instructions == $b[0].instructions), front: ($b[1].input[0:($b[0].input|length)] == $b[0].input), added: [$b[1].input[($b[0].input|length):][] | {role, text: .content[0].text}]}' /tmp/sigma-verify/r/evidence/fake-openai.ndjson
   ```
 
-  `instructions` and `front` read `true`, and `added` ends with
-  `{"role": "developer", "text": "Updated system prompt section \"instructions\":\n\n<instructions>\nAnswer in French.\n</instructions>"}`
-  after the answer and `again`.
+  `instructions` and `front` read `true`, and `added` ends with a
+  `developer` message whose text starts
+  `Updated system prompt section \"workspace\":` and holds
+  `Answer in French.`, after the answer and `again`.
 
 - **A fresh subagent** (`cache-fresh-subagent`). `drive.ts r up --fake-openai fresh_subagent_tool_call`,
   `drive.ts r sigma exec --provider openai --auto 'Ask a scout what echo prints.'`:
@@ -207,7 +207,7 @@ Preconditions:
 Provider, `packages/sigma/test/openai.test.ts`:
 
 - cache-turns: each ChatGPT request of a conversation, within a run and across runs, repeats the one before it and adds to its end
-- cache-instructions-change, section-deltas: instructions changed between two prompts reach ChatGPT after the history, and the request keeps the instructions it started with
+- cache-instructions-change, section-deltas: an AGENTS.md changed between two prompts reaches ChatGPT after the history, and the request keeps the instructions it started with
 - cache-fresh-subagent: a subagent started without its parent's history keeps its own requests' front, under a cache key of its own
 - cache-conversation-fork: a spawn_agent fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own
 - cache-fork-subagent: a forked subagent of a type sends its parent's cache key, instructions and tools, and gets its notice and type after the inherited history
@@ -245,9 +245,6 @@ Screen, `packages/sigma/test/screen.test.ts`:
 - Claude Code's cache lasts 1 hour for the main conversation on a
   subscription and 5 minutes for subagents, forks and API keys.
   `claude-idle-compaction` in [Claude](./claude.md) acts on that lifetime.
-- A conversation's instructions changed with `conversation/configure` do not
-  reach a live Claude Code process. The next process starts with the new
-  ones, and its first request reads only the tools from the cache.
 - Claude Code 2.1.312 always runs a fork subagent in the background, and its
   parent usually ends its turn first. Sigma closes the process at the end of
   the parent's run, so the fork's conversation ends
@@ -284,17 +281,18 @@ ChatGPT, in a run made with `drive.ts r up --openai-kept`:
   2026-11-14: `noted` with `input` 12,042 and `cacheRead` 0, then
   `amber-412-cedar` with `input` 162 and `cacheRead` 11,904.
   `drive.ts r rpc usage/get '{"conversation": "<id>"}'` sums both.
-- **Instructions changed** (`cache-instructions-change`). In a new
-  conversation, `drive.ts r sigma exec --provider openai --model gpt-6-luna --instructions 'Be brief.' "$(cat /tmp/sigma-verify/long.txt)"`:
-  `noted`. Take the id, then
-  `drive.ts r rpc conversation/configure '{"conversation": "<id>", "author": {"id": "ada", "name": "ada"}, "instructions": "Answer in French."}'`
-  and the same `watch --submit` and `jq` as **Turns**, saved as `second`:
+- **Instructions changed** (`cache-instructions-change`). Write
+  `Answer in English.` to `/tmp/sigma-verify/r/home/AGENTS.md`, then in a new
+  conversation, `drive.ts r sigma exec --provider openai --model gpt-6-luna "$(cat /tmp/sigma-verify/long.txt)"`:
+  `noted`. Take the id, write `Answer in French.` to the same file, then
+  the same `watch --submit` and `jq` as **Turns**, saved as `second`:
   the second answer's `cacheRead` is still nearly all of the first's
-  `input`, and the `pi.system` entry before it holds only the
-  `instructions` section. Measured on 2026-11-14: `noted` with `input`
-  12,065 and `cacheRead` 0, then `amber-412-cedar` with `input` 206 and
-  `cacheRead` 11,904. Before sigma sent the change in place, a change to
-  `instructions` read nothing from the cache (F2 in seed `s-4yhmqe`).
+  `input`, and the `pi.system` entry before it holds only the `workspace`
+  section. Measured on 2026-11-14, with the conversation's own instructions
+  changed in place (a way since removed): `noted` with `input` 12,065 and
+  `cacheRead` 0, then `amber-412-cedar` with `input` 206 and `cacheRead`
+  11,904. Before sigma sent a change in place, a changed section read
+  nothing from the cache (F2 in seed `s-4yhmqe`).
 - **A fork.** In a new run, the same first `exec`: `noted`. Take the id and
   its `sigma.run_end` entry's id from `drive.ts r watch <id> --save parent`,
   then

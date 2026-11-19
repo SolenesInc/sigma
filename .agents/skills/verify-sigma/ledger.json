@@ -529,7 +529,7 @@
     "area": "G",
     "feature": "Turn limit, `maxTurns` (R380-404)",
     "verdict": "bring",
-    "useCases": ["run-turn-limit"]
+    "useCases": ["run-turn-limit", "configure-rpc"]
   },
   {
     "id": "G2",
@@ -620,7 +620,7 @@
     "area": "H",
     "feature": "`configure()`: instructions change later (R380-404)",
     "verdict": "bring",
-    "useCases": ["agent-instructions", "configure-rpc"]
+    "useCases": ["agent-instructions"]
   },
   {
     "id": "H3",
