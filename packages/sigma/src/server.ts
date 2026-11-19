@@ -1,6 +1,13 @@
 // The server a home runs: one Harness over `kernel.sqlite`, served over the home's socket with the protocol
 // (`@sigma/protocol`). Conversations run on the home's providers (`./providers.ts`).
-import { claudeRunTasks, makeClaudeProcesses } from "@sigma/claude"
+import {
+  CLAUDE_REPORT_KIND,
+  claudeRunTasks,
+  ClaudeJobsDoc,
+  CONTINUED_ON_ITS_OWN,
+  type JobReport,
+  makeClaudeProcesses,
+} from "@sigma/claude"
 import { CodemodeSandbox } from "@sigma/codemode/sandbox"
 import { LocalExecutionEnv } from "@sigma/env/local"
 import {
@@ -138,6 +145,10 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         // An idle conversation compacts as a person's compact does, by its `/compact` input; one that is busy again by
         // then refuses it and goes on.
         let compactIdle = (_conversation: ConversationId): Effect.Effect<void, unknown> => Effect.void
+        let wakeClaude = (
+          _conversation: ConversationId,
+          _reports: ReadonlyArray<JobReport>,
+        ): Effect.Effect<void, unknown> => Effect.void
         // Opened before the harness, so a server stop closes the live Claude Code processes after the runs (D3).
         const processes = yield* makeClaudeProcesses({
           ...(live.idle === undefined ? {} : { idle: live.idle }),
@@ -145,6 +156,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           ...(live.idleCompaction ? { compact: (conversation) => compactIdle(conversation) } : {}),
           ...(live.stop === undefined ? {} : { stop: live.stop }),
           hold: lifetime.hold,
+          wake: (conversation, reports) => wakeClaude(conversation, reports),
         })
         const stoppedTooOften = new Map<ConversationId, number>()
         const registry = createRegistry()
@@ -199,6 +211,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
               runEnded,
               inputWithdrawn,
               runTasks: claudeRuns.runTasks,
+              viewDocs: [ClaudeJobsDoc],
               // A prompt queued behind a run that fails runs next, as one queued behind an answer does.
               settings: { afterFailedRun: "continue" },
               readOnly,
@@ -211,6 +224,27 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
             if (handle === undefined) return Effect.fail(new Error(`conversation ${conversation} is gone`))
             return compactInRun(handle, { author: SIGMA, whenBusy: "reject" })
           })
+        // Claude Code woke by itself: its reports reach the conversation as input, which an idle one runs (D3). A busy one
+        // places them at its next step, and they are never sent to Claude Code, which read them itself (D4).
+        wakeClaude = (conversation, reports) =>
+          Effect.flatMap(harness.conversation(conversation), (handle) =>
+            Effect.forEach(
+              reports.length > 0 ? reports : [CONTINUED_ON_ITS_OWN],
+              (report) =>
+                handle === undefined
+                  ? Effect.void
+                  : handle.submit({
+                      type: "input",
+                      content: report.text,
+                      whenBusy: "steer",
+                      entry: { kind: CLAUDE_REPORT_KIND, ...(report.data === undefined ? {} : { data: report.data }) },
+                      ...(report.data === undefined
+                        ? {}
+                        : { requestId: `claude-report:${conversation}:${report.data.job}` }),
+                    }),
+              { discard: true },
+            ),
+          )
         // Read-only, nothing runs, so no run counts a stop.
         if (!readOnly) for (const [id, stops] of yield* countStops(harness)) stoppedTooOften.set(id, stops)
         const status = yield* followTreeStatus(harness)

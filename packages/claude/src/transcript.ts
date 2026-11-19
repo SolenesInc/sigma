@@ -1,6 +1,6 @@
 // What sigma commits of one conversation a Claude Code process writes to: the run's own, or a hosted subagent's, which
 // its `claude.job` task writes (D1). Each commits through its own task: its texts, its calls and their results, the
-// questions it asks a person, and the subagents it starts. A call Claude Code runs itself is committed before its
+// questions it asks a person, and the jobs it starts. A call Claude Code runs itself is committed before its
 // PreToolUse hook is answered, so the intent is durable before the effect; a question for a person waits on
 // `sigma.approvals`, keyed `<task>/<call>`.
 import type { HookCallback, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -24,6 +24,7 @@ import {
 import type { AnyTask, ConversationId, EntryId, JsonObject, TaskId, TaskRuntime, Tx } from "@sigma/kernel"
 import type { AssistantMessage, ToolCall, Usage } from "@sigma/models"
 import { Deferred, Effect, Option, Stream } from "effect"
+import { recordJob } from "./jobs.ts"
 import type { Job, JobLinks } from "./links.ts"
 import { textOf } from "./retell.ts"
 
@@ -74,19 +75,23 @@ export const assistantMessage = (
     { omitUndefinedProperties: true },
   ) as unknown as JsonObject
 
-/** A frame that starts a subagent: Claude Code's `task_started` for a `local_agent`. */
+/** A frame that starts a job: Claude Code's `task_started` for a subagent, or for a background command. */
 export type Started = {
   readonly task_id: string
   readonly tool_use_id: string
   readonly description: string
+  /** Claude Code runs it in the background: the turn can end while it works. */
+  readonly background: boolean
   readonly subagent_type?: string
   readonly prompt?: string
 }
 
-/** The tasks a conversation hosts its subagents with, and where their jobs are handed over. */
+/** The tasks a conversation hosts its jobs with, and where their jobs are handed over. */
 export type Hosting = {
   /** `claude.job`: the run of a subagent's conversation. */
   readonly job: AnyTask<any>
+  /** `claude.command`: a background command, in the background of the conversation that started it. */
+  readonly command: AnyTask<any>
   /** The background task that owns a subagent's conversation in its parent (F6). */
   readonly anchor: AnyTask<any>
   readonly links: JobLinks
@@ -370,6 +375,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
         yield* recordNow(yield* Deferred.await(sighting(frame.tool_use_id)), undefined)
       }
       const auto = yield* autoApproved
+      const job = scope.started(frame.tool_use_id)
       let hosted: TaskId | undefined
       yield* commit((tx) =>
         Effect.gen(function* () {
@@ -383,11 +389,30 @@ export const makeTranscript = (scope: TranscriptScope) => {
               })
             : task
           const created = yield* tx.createConversation({ ownership: { kind: "task", taskId: owner } })
+          // A background subagent of the run is one of its conversation's jobs (D3).
+          const reported = main && frame.background
           hosted = yield* tx.createTask(
             scope.hosting.job,
-            { call: frame.tool_use_id, title: frame.description },
+            {
+              call: frame.tool_use_id,
+              title: frame.description,
+              task: frame.task_id,
+              ...(reported ? { parent: Number(conversationId) } : {}),
+            },
             { ownership: { kind: "conversation" }, conversationId: created.id, abandonOnRestart: true },
           )
+          job.conversation = Number(created.id)
+          if (reported) {
+            yield* recordJob(tx, conversationId, {
+              task: frame.task_id,
+              kind: "agent",
+              title: frame.description,
+              call: frame.tool_use_id,
+              conversation: Number(created.id),
+              taskId: Number(hosted),
+              state: "working",
+            })
+          }
           yield* recordOrigin(tx, created.id, {
             call: frame.tool_use_id,
             title: frame.description,
@@ -410,7 +435,45 @@ export const makeTranscript = (scope: TranscriptScope) => {
       )
       const { hosting, started } = scope
       yield* Deferred.succeed(hosting.links.link(hosted!), {
-        job: started(frame.tool_use_id),
+        job,
+        from: { agent, provider, modelId, hosting, started },
+      })
+    })
+
+  /**
+   * Hosts a background command the run's Claude Code started as a `claude.command` task in the background of this
+   * conversation, which ends the command's job when Claude Code says it ended, or cuts it off (D6).
+   */
+  const hostCommand = (frame: Started) =>
+    Effect.gen(function* () {
+      const job = scope.started(frame.tool_use_id)
+      let hosted: TaskId | undefined
+      yield* commit((tx) =>
+        Effect.gen(function* () {
+          hosted = yield* tx.createTask(
+            scope.hosting.command,
+            { task: frame.task_id },
+            {
+              ownership: { kind: "conversation" },
+              conversationId,
+              background: true,
+              abandonOnRestart: true,
+            },
+          )
+          yield* recordJob(tx, conversationId, {
+            task: frame.task_id,
+            kind: "command",
+            title: frame.description,
+            call: frame.tool_use_id,
+            taskId: Number(hosted),
+            state: "working",
+          })
+          return undefined
+        }),
+      )
+      const { hosting, started } = scope
+      yield* Deferred.succeed(hosting.links.link(hosted!), {
+        job,
         from: { agent, provider, modelId, hosting, started },
       })
     })
@@ -418,7 +481,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
   /** The callbacks for this conversation's calls. */
   const callbacks: Callbacks = { preToolUse, canUseTool }
 
-  return { callbacks, said, results, host, recordText }
+  return { callbacks, said, results, host, hostCommand, recordText }
 }
 
 export type Transcript = ReturnType<typeof makeTranscript>

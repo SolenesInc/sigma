@@ -1,7 +1,8 @@
 // The `claude.run` task: one run of a conversation whose model Claude Code serves, from its inputs to its run_end. It
 // starts or resumes Claude Code's session where the conversation's position says, tells it what the session missed, and
 // lets `converse` commit what it does. A host restart leaves calls without results; the next invocation records them
-// as interrupted and goes on from the position. Each subagent Claude Code starts is a `claude.job` (`job.ts`).
+// as interrupted and goes on from the position. Each job Claude Code starts has a task of its own (`job.ts`), and
+// outlives the run: a job's end that wakes the conversation starts a run that sends Claude Code nothing (D3).
 import {
   applyBoundary,
   appendToolResult,
@@ -37,7 +38,8 @@ import {
 } from "@sigma/kernel"
 import type { Message } from "@sigma/models"
 import { Effect } from "effect"
-import { CLAUDE_JOB_KIND, JobAnchor, makeJobTask } from "./job.ts"
+import { CLAUDE_JOB_KIND, JobAnchor, makeCommandTask, makeJobTask } from "./job.ts"
+import { CLAUDE_REPORT_KIND } from "./jobs.ts"
 import { JobLinks } from "./links.ts"
 import {
   type ClaudeProcessSettings,
@@ -144,13 +146,15 @@ const stopped = (entry: EntryRecord) =>
 /**
  * What a live process that has seen the entries through `seen` is told: what came after them, or `undefined` when
  * they changed the context it holds, as for a resume (F12). What a stop recorded is not told: only a stop the process
- * itself went through leaves it after `seen`, since any other cut-off ends the process.
+ * itself went through leaves it after `seen`, since any other cut-off ends the process. Nor is a job's report, which
+ * the process read itself (D4): a run of reports alone is told nothing.
  */
 const afterSeen = (runtime: Runtime, provider: string, seen: number) =>
   Effect.map(entriesAfter(runtime, seen), (missed) => {
     if (!continuable(missed, provider)) return undefined
-    const told = unseen(missed.filter((entry) => !stopped(entry)))
-    return told.length === 0 ? [CONTINUE] : told
+    const told = unseen(missed.filter((entry) => !stopped(entry) && entry.kind !== CLAUDE_REPORT_KIND))
+    if (told.length > 0) return told
+    return missed.some((entry) => entry.kind === CLAUDE_REPORT_KIND) ? [] : [CONTINUE]
   })
 
 /** The id of the conversation's newest entry. */
@@ -192,8 +196,9 @@ const fresh = (runtime: Runtime, api: TaskApi, title: Title) =>
 
 /**
  * Serves the run with the conversation's live process, or a new one `openings` starts. A run that answers leaves the
- * process live, having seen every entry before the run's end, unless Claude Code still has background work (D6). A
- * stopped run leaves it live too, once Claude Code ended the turn it cut off (D5).
+ * process live, having seen every entry before the run's end, with any jobs still working (D5). A stopped run leaves it
+ * live too, once Claude Code ended the turn it cut off (D5 of s-evw1pn). A live process told nothing serves the turn
+ * Claude Code began by itself (F8); one with no such turn has nothing to answer, as for reports a turn already read.
  */
 const converse = <E>(shared: Shared, config: ProcessConfig, run: RunContext, openings: Openings<E>) =>
   Effect.scoped(
@@ -204,8 +209,16 @@ const converse = <E>(shared: Shared, config: ProcessConfig, run: RunContext, ope
         processKey(config),
         selectionOf(config.agent),
         openings,
-        (start) => openProcess(config, start),
+        (start, wake) => openProcess(config, start, wake),
       )
+      if (lease.texts.length === 0 && !lease.process.waking) {
+        const answer = yield* newest(runtime)
+        lease.keep(answer)
+        return {
+          ended: { _tag: "answered", answer: idFromNumber<EntryId>(answer), turnLimit: false } as Ended,
+          live: lease.live,
+        }
+      }
       const ended = yield* lease.process.serve(run, lease.texts).pipe(
         // The run's commits are refused from here, but it still reads.
         Effect.onInterrupt(() =>
@@ -217,7 +230,7 @@ const converse = <E>(shared: Shared, config: ProcessConfig, run: RunContext, ope
         ),
       )
       // Read before the run's end commits, which may start the next run with inputs the process has not seen.
-      if (ended._tag === "answered" && !ended.turnLimit && !lease.process.busy) lease.keep(yield* newest(runtime))
+      if (ended._tag === "answered" && !ended.turnLimit) lease.keep(yield* newest(runtime))
       return { ended, live: lease.live }
     }),
   )
@@ -359,9 +372,10 @@ export function claudeRunTasks(options: ClaudeRunOptions): {
 } {
   const links = new JobLinks()
   const job = makeJobTask(links)
-  const run = makeRunTask({ options, hosting: { job, anchor: JobAnchor, links } })
+  const command = makeCommandTask(links)
+  const run = makeRunTask({ options, hosting: { job, command, anchor: JobAnchor, links } })
   return {
-    tasks: [run, job, JobAnchor],
+    tasks: [run, job, JobAnchor, command],
     runTasks: {
       kinds: new Set([CLAUDE_RUN_KIND, CLAUDE_JOB_KIND]),
       choose: (model: ModelRef | undefined) =>
