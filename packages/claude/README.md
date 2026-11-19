@@ -46,7 +46,8 @@ live.
   `<task>/<call>`, where the first answer counts. An extension's tool reaches Claude Code over sigma's in-process MCP
   server and runs as a `pi.tool` task. `afterTool` runs through PostToolUse: Claude Code takes a changed result only
   for `Read`, so another tool's change is reported. Each subagent Claude Code starts is hosted as a conversation of
-  its own, owned by a background `claude.job-anchor` in the conversation that started it.
+  its own: a run's are owned by a background `claude.job-anchor` in its conversation, so the run can end while they
+  work, and a subagent's own by its job, so stopping it stops them too.
 - `src/job.ts`: `claude.job`, the run of a hosted subagent's conversation. It commits its subagent's frames and
   answers its callbacks through itself, not through the run that started it, until Claude Code says the subagent
   ended or its process ends.

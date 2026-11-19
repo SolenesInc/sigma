@@ -551,8 +551,8 @@ export const makeTranscript = (scope: TranscriptScope) => {
     })
 
   /**
-   * Hosts a subagent Claude Code started as a conversation of its own, under this one: a background anchor here owns
-   * it, so this conversation's run can end while it works (F6), and its `claude.job` task writes it (D1).
+   * Hosts a subagent Claude Code started as a conversation of its own, under this one, which its `claude.job` task
+   * writes (D1). A background anchor owns the conversation of a run's subagent; a job owns its subagent's own.
    */
   const host = (frame: Started) =>
     Effect.gen(function* () {
@@ -564,12 +564,16 @@ export const makeTranscript = (scope: TranscriptScope) => {
       let hosted: TaskId | undefined
       yield* commit((tx) =>
         Effect.gen(function* () {
-          const anchor = yield* tx.createTask(scope.hosting.anchor, null, {
-            ownership: { kind: "conversation" },
-            conversationId,
-            background: true,
-          })
-          const created = yield* tx.createConversation({ ownership: { kind: "task", taskId: anchor } })
+          // The run's subagents are background work, so the run can end while they work (F6). A subagent's own
+          // subagents are its job's, so stopping it stops them too.
+          const owner = main
+            ? yield* tx.createTask(scope.hosting.anchor, null, {
+                ownership: { kind: "conversation" },
+                conversationId,
+                background: true,
+              })
+            : task
+          const created = yield* tx.createConversation({ ownership: { kind: "task", taskId: owner } })
           hosted = yield* tx.createTask(
             scope.hosting.job,
             { call: frame.tool_use_id, title: frame.description },
