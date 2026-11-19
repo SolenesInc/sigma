@@ -250,9 +250,6 @@ Screen, `packages/sigma/test/screen.test.ts`:
   the parent's run, so the fork's conversation ends
   `interrupted: Claude Code ended before the subagent did`, and its usage is
   not counted (seed `claude-background-work-across-runs`).
-- With extensions switched off, sigma offers Claude Code no MCP tools and
-  withholds none, so only the appended instructions can differ between two
-  spawns' fronts.
 
 ## With a real account
 

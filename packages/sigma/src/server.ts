@@ -84,7 +84,7 @@ import {
 import * as RpcServer from "effect/rpc/RpcServer"
 import type { ModelAsk } from "./config.ts"
 import type { ProviderOptions } from "./providers.ts"
-import { extensionsOff, type Home } from "./home.ts"
+import type { Home } from "./home.ts"
 import { Lifetime } from "./lifetime.ts"
 import { homeSocketServer } from "./socket.ts"
 import { Setup } from "./setup.ts"
@@ -166,7 +166,6 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         // Claude Code has its own tools and subagents, so sigma's built-in ones are not offered to it.
         const claudeRuns = claudeRunTasks({
           settings: (provider) => claude.get(provider),
-          builtinExtensions: new Set(base.map((extension) => extension.name)),
           title: (conversation) => titleOf(harness, conversation),
           processes,
         })
@@ -812,7 +811,5 @@ export const serve = (home: Home, options: ServerOptions) =>
   Effect.gen(function* () {
     const lifetime = yield* Lifetime
     yield* Console.error(`sigma ${VERSION} serving ${home.dir}`)
-    const off = extensionsOff(home)
-    if (off !== undefined) yield* Console.error(off)
     yield* lifetime.ended
   }).pipe(Effect.provide(serverLayer(home, options)), Effect.scoped)

@@ -66,10 +66,6 @@ type Running = RunningTask<Record<string, never>, ClaudeRunCheckpoint, ClaudeRun
 export interface ClaudeRunOptions {
   /** How the Claude Code of a provider instance is started; `undefined` for a provider Claude Code does not serve. */
   readonly settings: (provider: string) => ClaudeProcessSettings | undefined
-  /** Extensions whose tools Claude Code has its own of, so sigma's MCP server leaves them out. */
-  readonly builtinExtensions?: ReadonlySet<string>
-  /** Tool names extensions removed, whose Claude Code equivalents it is told not to use. */
-  readonly withheldTools?: () => ReadonlyArray<string>
   /** The conversation's title, which names a fresh session so Claude Code does not ask a model for one. */
   readonly title?: (conversation: ConversationId) => Effect.Effect<string | undefined>
   /** The live processes the runs lease, from `makeClaudeProcesses`. */
@@ -312,8 +308,6 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
           const config: ProcessConfig = {
             agent,
             settings,
-            builtinExtensions: shared.options.builtinExtensions ?? new Set<string>(),
-            withheldTools: shared.options.withheldTools?.() ?? [],
             rootConversation: String(runtime.conversationId),
           }
           const run: RunContext = { runtime, api, agent, hosting: shared.hosting }

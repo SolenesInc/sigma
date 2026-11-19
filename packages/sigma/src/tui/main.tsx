@@ -50,7 +50,6 @@ import { launchAuthor } from "../author.ts"
 import { VERSION } from "../version.ts"
 import { mailPayload } from "../agents.ts"
 import { Client, serverRefusal, type StartOptions } from "../client.ts"
-import { defaultHome, extensionsOff } from "../home.ts"
 import { attachmentsIn, imagesIn } from "../attach.ts"
 import { describeCall } from "./calls.ts"
 import {
@@ -902,9 +901,7 @@ export const tui = Effect.fnUntraced(function* (
   options: StartOptions,
   prompt: string | undefined,
 ) {
-  // Said once, when the TUI opens, as the notice the person's next action replaces.
-  const off = extensionsOff(defaultHome())
-  let next = yield* Effect.scoped(conversationScreen(id, options, prompt, off))
+  let next = yield* Effect.scoped(conversationScreen(id, options, prompt))
   while (next !== undefined) next = yield* Effect.scoped(conversationScreen(next, options, undefined))
 })
 
@@ -918,7 +915,6 @@ const conversationScreen = Effect.fnUntraced(function* (
   id: string | undefined,
   options: StartOptions,
   prompt: string | undefined,
-  opening?: string,
 ) {
   const client = yield* Client
   const author = launchAuthor()
@@ -1035,9 +1031,7 @@ const conversationScreen = Effect.fnUntraced(function* (
   let renderer: CliRenderer | undefined
   const setup = yield* setupOf(client, scope, () => renderer)
   const [workingSince, setWorkingSince] = createSignal<number | undefined>(undefined)
-  const [notice, setNotice] = createSignal<Notice | undefined>(
-    opening === undefined ? undefined : { text: opening, warning: false },
-  )
+  const [notice, setNotice] = createSignal<Notice | undefined>(undefined)
   const [panel, setPanel] = createSignal<Panel | undefined>(undefined)
   const [contextWindows, setContextWindows] = createSignal<ReadonlyMap<string, number>>(new Map())
   Effect.runFork(

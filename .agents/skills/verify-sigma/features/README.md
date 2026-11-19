@@ -175,9 +175,6 @@ lists when a change touches them.
   finishes when the server comes back, scripted or with a Claude Code subagent
   mid-run; the third crash in a row ends it.
 - [Quiet when idle](./quiet-when-idle.md) (people): an idle TUI and server use no CPU.
-- [Extensions](./extensions.md) (people, agents): switched off for now; a home
-  with files in `SIGMA_HOME/extensions` is told so once, in the TUI and the
-  server's log, and the file names the commit to revert to bring them back.
 - [Prompt cache](./prompt-cache.md) (people, agents): ChatGPT requests repeat
   the one before and add to its end, a subagent's under its own key; Claude
   runs share a process or reopen it as it was, forks fork Claude Code's

@@ -94,7 +94,6 @@ Package, `packages/tools/test/images.test.ts`:
 Package, `packages/claude/test/claude.test.ts`:
 
 - image-input: an image in a prompt reaches Claude Code beside its text
-- image-tool-result: an image an extension tool returns reaches Claude Code beside its text
 
 ## Gotchas
 

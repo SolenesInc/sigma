@@ -98,11 +98,6 @@ Preconditions:
   answered in the same process; Sigma starts a new Claude Code for every run,
   so typing it stalls and fails this step today. Stop after the answer, and
   press `Escape` if you typed it.
-- **Claude, between parallel calls** (`steer_mid_message`). Not drivable
-  while extensions are switched off: the step needs an extension to refuse
-  one read and hold the other long enough to steer between the two results.
-  Bring it back from the commit `extensions.md` names, with extensions.
-
 - **OpenAI** (`steer_after_parallel_calls`). In a fresh run made with
   `drive.ts r up --fake-openai steer_after_parallel_calls`, run
   `drive.ts r tui start --provider openai`, wait for `READY`, type
@@ -155,8 +150,7 @@ Package, `packages/claude/test/claude.test.ts`:
 - On Claude, today, a steer reaches Claude Code only with a call result that
   arrives after it is sent. A steer sent after the run's last result waits in
   `steering · <text>` until the run ends, and then runs next like a queued
-  prompt; pressing `Escape` on the stalled `steer_mid_message` run shows it
-  start a run of its own. What a real Claude Code does meanwhile is checked
+  prompt. What a real Claude Code does meanwhile is checked
   in With a real account.
 - The Claude steps hold the run at an approval or a hook so that
   the steer lands inside the run; the fakes wait for a steer the recording
