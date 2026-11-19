@@ -604,10 +604,22 @@ test("server-cannot-start: an open TUI whose server cannot start shows why, star
   ).finally(() => watcher.close())
   expect(seen.map(({ count }) => count - seen[0]!.count)).toEqual([0, 1, 2])
   expect(seen[2]!.at - seen[1]!.at).toBeGreaterThan(900)
-  // A prompt typed now clears the notice, which comes back while the server still refuses; the prompt waits.
+  // A prompt typed now is taken and waits, and the notice says why while the server still refuses: a refusal after the
+  // prompt shows it again. The prompt clears the notice, but a refusal the TUI hears in the same frame shows it at once,
+  // and the test types just as one arrives, so whether a frame without it is drawn is timing, not a promise.
+  const before = refusals()
   session.type("hi\r")
-  await session.waitFor((screen) => !screen.includes("cannot start"))
-  await session.waitFor((screen) => screen.includes("cannot start"), 20_000)
+  const after = watch(sigmaHome.dir)
+  await deadline(
+    new Promise<void>((resolve) => {
+      const check = () => refusals() > before && resolve()
+      after.on("change", check)
+      check()
+    }),
+    20_000,
+    "a refusal after the prompt",
+  ).finally(() => after.close())
+  await session.waitFor((screen) => screen.includes("type a message") && screen.includes("cannot start"), 20_000)
   // The config fixed, the next server starts, the notice goes and the prompt is answered.
   rmSync(config)
   await session.waitFor(
