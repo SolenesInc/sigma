@@ -993,31 +993,33 @@ const conversationScreen = Effect.fnUntraced(function* (
   // can replace a read-only server with one that writes, or the other way, so each watch asks what this server is.
   // While the server refuses to start, the person sees what it said, until a server answers again.
   let refusal: Notice | undefined
-  const relist: Effect.Effect<void> = initialize.pipe(
-    Effect.tap(({ readOnly }) =>
-      Effect.sync(() => {
-        setReadOnly(readOnly)
-        const shown = untrack(notice)
-        if (shown === refusal || (!readOnly && shown === READ_ONLY_NOTICE)) setNotice(undefined)
-        refusal = undefined
-      }),
-    ),
-    Effect.andThen(Stream.runForEach(client["status/watch"](), () => listed)),
-    Effect.catchTag("RpcClientError", (error) =>
-      Effect.sync(() => {
-        const said = serverRefusal(error)
-        if (said === undefined) return
-        const text = `sigma's server cannot start: ${said}`
-        // Shown again after the person's next action replaced it, while the server still refuses.
-        if (untrack(notice)?.text === text) return
-        refusal = { text, warning: true }
-        setNotice(refusal)
-      }),
-    ),
-    Effect.ignore,
-    Effect.andThen(Effect.sleep(REWATCH_DELAY)),
-    Effect.andThen(Effect.suspend(() => relist)),
-  )
+  const relist: Effect.Effect<void> = Effect.suspend(() => {
+    // A refusal answers a call made before the person's latest action, such as a prompt typed while the call waited,
+    // so it is not put back over what that action showed: the next attempt, a second later, shows it again.
+    const before = untrack(notice)
+    return initialize.pipe(
+      Effect.tap(({ readOnly }) =>
+        Effect.sync(() => {
+          setReadOnly(readOnly)
+          const shown = untrack(notice)
+          if (shown === refusal || (!readOnly && shown === READ_ONLY_NOTICE)) setNotice(undefined)
+          refusal = undefined
+        }),
+      ),
+      Effect.andThen(Stream.runForEach(client["status/watch"](), () => listed)),
+      Effect.catchTag("RpcClientError", (error) =>
+        Effect.sync(() => {
+          const said = serverRefusal(error)
+          if (said === undefined) return
+          const text = `sigma's server cannot start: ${said}`
+          // Shown again after the person's next action replaced it, while the server still refuses.
+          if (untrack(notice) !== before || untrack(notice)?.text === text) return
+          refusal = { text, warning: true }
+          setNotice(refusal)
+        }),
+      ),
+    )
+  }).pipe(Effect.ignore, Effect.andThen(Effect.sleep(REWATCH_DELAY)), Effect.andThen(Effect.suspend(() => relist)))
 
   if (prompt !== undefined) {
     const images = imagesIn(prompt, info?.cwd ?? process.cwd())

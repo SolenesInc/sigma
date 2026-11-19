@@ -166,6 +166,9 @@ const protocolLayer = (home: Home) =>
  * A caller's own interruption is not a failure and passes through, and so does the client's own close, which ends the
  * calls still waiting with an interrupt: a caller that asks again on a lost connection would otherwise ask forever.
  *
+ * A call written to a connection the server just dropped fails as a lost connection too: the RPC client turns that
+ * write's error into a defect, which a caller that asks again on a lost connection would not ask again on.
+ *
  * While the server refuses to start, every call fails at once. Such a failure is held for the same second the next start
  * waits, so a caller that asks again on a lost connection asks once a second rather than every 50 ms.
  */
@@ -174,12 +177,16 @@ const serverGone = new RpcClientError({
 })
 
 const survivingStops = (client: Client["Service"], open: () => boolean): Client["Service"] => {
-  const failed = (cause: Cause.Cause<unknown>) =>
-    open() && Cause.hasInterruptsOnly(cause)
+  const failed = (cause: Cause.Cause<unknown>) => {
+    const squashed = Cause.squash(cause)
+    return open() && Cause.hasInterruptsOnly(cause)
       ? Effect.fail(serverGone)
-      : serverRefusal(Cause.squash(cause)) === undefined
-        ? Effect.failCause(cause)
-        : Effect.delay(Effect.failCause(cause), AFTER_REFUSAL)
+      : Socket.isSocketError(squashed)
+        ? Effect.fail(new RpcClientError({ reason: squashed.reason }))
+        : serverRefusal(squashed) === undefined
+          ? Effect.failCause(cause)
+          : Effect.delay(Effect.failCause(cause), AFTER_REFUSAL)
+  }
   return Object.fromEntries(
     Object.entries(client).map(([tag, call]) => [
       tag,
