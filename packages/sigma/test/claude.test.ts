@@ -841,22 +841,68 @@ test("claude-auto: in a conversation started without asking, a call Claude Code 
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: made", "run_end: answered"])
 })
 
+const FORK_PROMPT =
+  'Use the Agent tool with subagent_type "fork" to have a forked subagent reply with exactly: forked. Then reply with exactly what it said.'
+
 test("cache-claude-subagent: Claude Code's fork subagent stays available, and sigma hosts it as a conversation of its own", async () => {
-  using claude = new FakeClaude("fork_subagent")
+  using claude = new FakeClaude("fork_wake")
   await using session = await conversationWith(claude, { approvals: "auto" })
-  await session.submit(
-    'Use the Agent tool with subagent_type "fork" to have a forked subagent reply with exactly: forked. Then reply with exactly what it said.',
-  )
+  await session.submit(FORK_PROMPT)
   await session.view.until(settled(1))
   const child = await subagentOf(session)
   await child.view.until(childEnded)
-  // The fork runs in Claude Code's background; this recording's parent ends its turn first.
   expect(calls(session.view.seen())).toMatchObject([{ name: "Agent", arguments: { subagent_type: "fork" } }])
-  expect(child.data).toMatchObject({ title: 'Reply with exactly "forked"', agentType: "fork" })
-  expect(transcript(child.view.seen())[0]).toBe("user: Reply with exactly the single word: forked")
-  expect(transcript(session.view.seen()).slice(-2)).toEqual([
-    "assistant: Waiting on the forked agent's reply.",
+  expect(child.data).toMatchObject({ title: "Fork reply with exact word", agentType: "fork" })
+  expect(transcript(child.view.seen())[0]).toBe("user: Reply with exactly the single word: forked. Nothing else.")
+})
+
+test("claude-job-report, claude-wake: a background subagent that ends during the run reports in it, and Claude's turn after the report is that run's answer", async () => {
+  using claude = new FakeClaude("fork_wake")
+  await using session = await conversationWith(claude, { approvals: "auto" })
+  await session.submit(FORK_PROMPT)
+  await session.view.until(settled(1))
+  const child = await subagentOf(session)
+  await child.view.until(childEnded)
+
+  expect(transcript(child.view.seen()).slice(-2)).toEqual(["assistant: forked", "run_end: answered"])
+  // Claude Code ran a second turn for the fork's end before it went idle: it belongs to this run (F3).
+  expect(transcript(session.view.seen())).toEqual([
+    `user: ${FORK_PROMPT}`,
+    "assistant: ",
+    'report: The background agent "Fork reply with exact word" completed: forked',
+    "assistant: The forked agent is still running, so I don't have its reply yet. I'll relay its exact output once the completion notification arrives.",
+    "assistant: forked",
     "run_end: answered",
+  ])
+})
+
+test("claude-wake, claude-command-job: a background command that ends after its run wakes the conversation, which shows its report and Claude's follow-up in a run nobody prompted", async () => {
+  using claude = new FakeClaude("bash_background_wake")
+  await using session = await conversationWith(claude, { approvals: "auto" })
+  await session.submit(
+    "Use the Bash tool with run_in_background set to true to run: sleep 8; echo done. Do not wait for it. Reply with exactly: started",
+  )
+  await session.view.until(settled(2))
+
+  expect(transcript(session.view.seen()).slice(-5)).toEqual([
+    expect.stringMatching(/^assistant: The background command is running\..*started$/s),
+    "run_end: answered",
+    'report: Background command "Start background sleep-then-echo command" completed (exit code 0)',
+    "assistant: The background command finished with exit code 0. Its output was `done`.",
+    "run_end: answered",
+  ])
+  const report = session.view.seen().find((entry) => entry.kind === "claude.report")!
+  expect(report.data).toEqual({
+    job: "bxvwu23df",
+    kind: "command",
+    title: "Start background sleep-then-echo command",
+    call: "toolu_01FM29M8LmvmQ5p5PG9fQWvk",
+    status: "done",
+  })
+  // The wake run sent Claude Code nothing: the one message it got is the prompt.
+  expect(claude.log().filter((entry) => entry.received?.type === "user")).toHaveLength(1)
+  expect(Object.values((session.view.view().docs["claude.jobs"] as { jobs: object }).jobs)).toEqual([
+    expect.objectContaining({ task: "bxvwu23df", kind: "command", state: "done" }),
   ])
 })
 
