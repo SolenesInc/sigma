@@ -1,6 +1,6 @@
 ---
 name: verify-conformance
-description: Use before opening a pull request that changes a kernel package (kernel, harness, models, env, tools, codemode, claude, delta, schema) or anything in packages/conformance.
+description: Use before landing a change to a kernel package (kernel, harness, models, env, tools, codemode, claude, delta, schema) or anything in packages/conformance.
 ---
 
 # Verify conformance

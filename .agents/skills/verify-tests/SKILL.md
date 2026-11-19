@@ -1,6 +1,6 @@
 ---
 name: verify-tests
-description: Use before opening a pull request whose changes add, change or delete sigma's own tests.
+description: Use before landing a change whose changes add, change or delete sigma's own tests.
 ---
 
 # Verify tests
