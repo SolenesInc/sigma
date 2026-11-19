@@ -1,7 +1,8 @@
 // One Claude Code process, started through the Claude Agent SDK: its query, the inbox it reads its messages from, the
-// reader that observes each frame it sends as it arrives and routes it, and the callbacks Claude Code makes. A
-// subagent's frames and callbacks go to its job (D1, F7); the rest go to the run it serves, or wait for the next run
-// while it serves none. What a run does with its frames is `serving.ts`, what a job does is `job.ts`.
+// reader that observes each frame it sends as it arrives and routes it, and the callbacks Claude Code makes. A job's
+// frames and callbacks go to the job (D1, F7); the rest go to the run it serves, or wait for the next run while it
+// serves none. A job's end it reads while no run serves waits as a report, and a turn Claude Code starts by itself
+// wakes the conversation (D3). What a run does with its frames is `serving.ts`, what a job does is `job.ts`.
 import {
   createSdkMcpServer,
   type EffortLevel,
@@ -19,7 +20,8 @@ import { Cause, Clock, Deferred, type Duration, Effect, Exit, Option, Semaphore 
 import { z } from "zod"
 import { claudeEnvironment, toolSearchSettings } from "./environment.ts"
 import { Inbox } from "./inbox.ts"
-import { ENDED_WITH_PROCESS, Job, type JobEnd, STOPPED_WITH_RUN } from "./links.ts"
+import { ENDINGS, type JobReport, reportOf, summaryOf } from "./jobs.ts"
+import { ENDED_WITH_PROCESS, Job, type JobEnd } from "./links.ts"
 import type { Said } from "./retell.ts"
 import {
   type Ended,
@@ -100,8 +102,10 @@ export const selectionOf = (agent: Agent): Selection => ({
 
 export interface ClaudeProcess {
   /**
-   * Serves the run `run`: switches to the run's model and effort, sends it `opening`, then hands every frame to it
-   * until the run ends. A process that exits before Claude Code took the opening ends the run `exited`.
+   * Serves the run `run`: switches to the run's model and effort, commits the reports the process holds, sends it
+   * `opening`, then hands every frame to it until Claude Code goes idle (D2). An empty opening sends nothing: the run
+   * serves the turn Claude Code began by itself (F8). A process that exits before Claude Code took the opening ends the
+   * run `exited`.
    */
   readonly serve: (run: RunContext, opening: ReadonlyArray<Said>) => Effect.Effect<Ended, unknown>
   /**
@@ -111,12 +115,18 @@ export interface ClaudeProcess {
   readonly canSelect: (selection: Selection) => boolean
   /**
    * Stops the turn of the run it served (D5): interrupts Claude Code and takes the run's frames, handing them to no run,
-   * until the turn's result. Succeeds with whether the process can serve another run: it ended the turn within
-   * `within`, with nothing left queued and no background work. A stopped run's subagents end with the turn.
+   * until Claude Code goes idle. Succeeds with whether the process can serve another run: it ended the turn within
+   * `within`, with nothing left queued. Its jobs keep working (D7).
    */
   readonly stop: (within: Duration.Input) => Effect.Effect<boolean>
-  /** Background work Claude Code started and has not said ended: a background command or subagent (D6). */
+  /** Work Claude Code started and has not said ended, such as a background command or subagent: its jobs (D5). */
   readonly busy: boolean
+  /** Completes once the process has no job. */
+  readonly quiet: Effect.Effect<void>
+  /** Claude Code began a turn by itself, which waits for a run to serve it (D3). */
+  readonly waking: boolean
+  /** The reports of the jobs that ended while no run served, oldest first; taken once. */
+  readonly takeReports: () => ReadonlyArray<JobReport>
   /** Completes once the process has exited. */
   readonly exited: Effect.Effect<void>
   /** The cache facts of the newest main-loop request, once one was made (F13). */
@@ -133,10 +143,14 @@ export interface LastRequest {
   readonly ttl: "5m" | "1h" | undefined
 }
 
-/** What takes the frames that are not a job's: whether a frame was its last, and what the process's end does to it. */
+/**
+ * What takes the frames that are not a job's: whether a frame was its last, what the process's end does to it, and,
+ * for a run, the reports of the jobs that end while it serves.
+ */
 type Taker = {
   readonly frame: (message: SDKMessage) => Effect.Effect<boolean>
   readonly exit: (error: unknown) => void
+  readonly report?: (report: JobReport) => Effect.Effect<void>
 }
 
 /** One model's running totals in one Claude Code process, as it reports them (`modelUsage`). */
@@ -207,8 +221,11 @@ export const processKey = (config: ProcessConfig) => {
   })
 }
 
-/** Starts a Claude Code process at `start`; it is closed with the scope. */
-export const openProcess = (config: ProcessConfig, start: Start) =>
+/**
+ * Starts a Claude Code process at `start`; it is closed with the scope. `wake` is called when Claude Code begins a turn
+ * by itself while the process serves no run (D3).
+ */
+export const openProcess = (config: ProcessConfig, start: Start, wake: () => void = () => undefined) =>
   Effect.gen(function* () {
     const { agent, settings } = config
     const { modelId, effort } = selectionOf(agent)
@@ -224,16 +241,23 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     // `modelUsage` at this process's previous result: a process reports its own running totals, which a resumed
     // session does not carry over (died_while_idle's second process reports a first turn's cache read again).
     let totals: Record<string, UsageTotals> | undefined
-    /** The run the process serves now, which the callbacks of its own conversation reach. */
-    let serving: Serving | undefined
+    /** The run the process serves now, which the callbacks of its own conversation wait for. */
+    let serving = Deferred.makeUnsafe<Serving>()
     /** The tasks Claude Code started and has not said ended. */
     const tasks = new Set<string>()
-    /** The subagents Claude Code started and has not said ended, by task id, and by the Agent call that started each. */
+    /** Completes when `tasks` empties, and is made anew when one starts. */
+    let quiet = Deferred.makeUnsafe<void>()
+    Deferred.doneUnsafe(quiet, Exit.void)
+    /** Claude Code began a turn by itself, and no run took it yet. */
+    let waking = false
+    /** The jobs that ended while no run served. */
+    let reports: JobReport[] = []
+    /** The jobs Claude Code started and has not said ended, by task id, and by the call that started each. */
     const jobs = new Map<string, Job>()
     const jobsByCall = new Map<string, Job>()
     /**
-     * The job each subagent's start made, by the Agent call that started it, until the conversation that hosts it
-     * takes it: a subagent can end before it is hosted, as one a subagent started, or one started while no run served.
+     * The job each start made, by the call that started it, until the conversation that hosts it takes it: a job can
+     * end before it is hosted, as a subagent a subagent started, or one started while no run served.
      */
     const starts = new Map<string, Job>()
     /** What takes the frames that are not a job's: the run served, or a stop. While none does, they wait in `held`. */
@@ -243,7 +267,7 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     let ended: { readonly error: unknown } | undefined
     const exit = Deferred.makeUnsafe<void>()
 
-    /** Ends the jobs left working: a subagent lives in its process, and ends with it (D6 of s-evw1pn). */
+    /** Ends the jobs left working: a job lives in its process, and is cut off with it (D6). */
     const endJobs = (end: JobEnd) => {
       for (const job of jobs.values()) job.inbox.push({ end })
       jobs.clear()
@@ -260,10 +284,8 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
         }),
     )
 
-    const current = () => {
-      if (serving === undefined) throw new Error("Claude Code called back while the process served no run")
-      return serving
-    }
+    /** The run served: a main-loop callback comes only in a turn, which a run serves once it attaches (D3). */
+    const current = (signal: AbortSignal | undefined) => until(Deferred.await(serving), signal)
 
     const jobOf = (task: string) => {
       let job = jobs.get(task)
@@ -277,7 +299,7 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       until(Deferred.await(job.callbacks), signal)
     /** The callbacks for a call the agent `agentId` makes: a subagent's go to its job, the main loop's to the run. */
     const callbacksOf = async (agentId: string | undefined, signal: AbortSignal | undefined): Promise<Callbacks> =>
-      agentId === undefined ? current() : jobCallbacks(jobOf(agentId), signal)
+      agentId === undefined ? current(signal) : jobCallbacks(jobOf(agentId), signal)
 
     const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {
       PreToolUse: [
@@ -288,7 +310,9 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
           ],
         },
       ],
-      PostCompact: [{ hooks: [async (...args) => current().postCompact(...args)] }],
+      PostCompact: [
+        { hooks: [async (input, id, options) => (await current(options.signal)).postCompact(input, id, options)] },
+      ],
     }
     const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, options) =>
       (await callbacksOf(options.agentID, options.signal)).canUseTool(tool, input, options)
@@ -300,6 +324,9 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       ...claudeEnvironment(settings.env),
       SIGMA_ROOT_CONVERSATION: config.rootConversation,
       CLAUDE_AGENT_SDK_CLIENT_APP: "sigma",
+      // Claude Code's turn-over signal reaches sigma: without it, Claude Code marks the signal for the SDK alone, and
+      // the SDK keeps it to itself (F1).
+      CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
       ...(member === undefined
         ? {}
         : {
@@ -438,17 +465,18 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
         (result) => result,
         (error: unknown) => ({ done: true as const, value: error }),
       )
-    /** Tracks Claude Code's tasks, which end the process when its run ends with one still working (D6). */
+    /** Tracks Claude Code's tasks, which keep the process live while any works (D5). */
     const track = (message: SDKMessage) => {
       if (message.type === "stream_event") return observeRequest(message)
       if (message.type !== "system") return
-      if (message.subtype === "task_started") tasks.add(message.task_id)
-      else if (message.subtype === "task_notification") tasks.delete(message.task_id)
-      else if (
-        message.subtype === "task_updated" &&
-        ["completed", "failed", "killed"].includes(message.patch.status!)
+      if (message.subtype === "task_started") {
+        if (tasks.size === 0) quiet = Deferred.makeUnsafe<void>()
+        tasks.add(message.task_id)
+      } else if (
+        message.subtype === "task_notification" ||
+        (message.subtype === "task_updated" && ["completed", "failed", "killed"].includes(message.patch.status!))
       ) {
-        tasks.delete(message.task_id)
+        if (tasks.delete(message.task_id) && tasks.size === 0) Deferred.doneUnsafe(quiet, Exit.void)
       }
     }
 
@@ -507,17 +535,23 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     }
 
     /**
-     * The job a frame is for: a subagent's own frames and its end go to its job, and a subagent a subagent started is
-     * hosted by its parent's. Every other frame, and every `task_started` of a subagent, is the run's: a subagent's
-     * job is made as its start is read, so none of its frames arrive before it.
+     * The job a frame is for: a job's own frames and its end go to it, and a subagent a subagent started is hosted by its
+     * parent's. Every other frame, and the `task_started` of a job the main loop started, is the run's: a job is made as
+     * its start is read, so none of its frames arrive before it. A job is every subagent, and each background command
+     * the main loop starts.
      */
     const route = (message: SDKMessage): Job | undefined => {
       if (message.type === "system") {
-        if (message.subtype === "task_started" && message.task_type === "local_agent" && message.tool_use_id) {
+        if (message.subtype === "task_started" && message.tool_use_id) {
+          const top = message.parent_task_id === undefined
+          const background = message.is_backgrounded === true
+          const kind = message.task_type === "local_agent" ? "agent" : top && background ? "command" : undefined
+          if (kind === undefined) return undefined
           const job = jobOf(message.task_id)
+          job.start = { kind, title: message.description, call: message.tool_use_id, reported: top && background }
           jobsByCall.set(message.tool_use_id, job)
           starts.set(message.tool_use_id, job)
-          return message.parent_task_id === undefined ? undefined : jobs.get(message.parent_task_id)
+          return top ? undefined : jobs.get(message.parent_task_id!)
         }
         if (message.subtype === "task_notification" && message.tool_use_id) {
           const job = jobsByCall.get(message.tool_use_id)
@@ -533,6 +567,29 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       return jobsByCall.get(message.parent_tool_use_id)
     }
 
+    const takeReports = () => {
+      const taken = reports
+      reports = []
+      return taken
+    }
+
+    /** Hands a report to the run served, or holds it for a wake or the next run (D3). */
+    const report = (job: Job, notification: { status: string; summary?: string }) => {
+      const start = job.start!
+      const made = reportOf({
+        task: job.task,
+        kind: start.kind,
+        title: start.title,
+        call: start.call,
+        ...(job.conversation === undefined ? {} : { conversation: job.conversation }),
+        state: ENDINGS[notification.status as keyof typeof ENDINGS] ?? "failed",
+        ...(summaryOf(notification) === undefined ? {} : { summary: summaryOf(notification)! }),
+      })
+      if (taker?.report !== undefined) return taker.report(made)
+      reports.push(made)
+      return Effect.void
+    }
+
     /** Hands a frame to the taker, or holds it for the next one. */
     const take = (message: SDKMessage) => {
       const now = taker
@@ -545,11 +602,13 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       })
     }
 
-    /** Makes `next` the taker: it takes the held frames first, then the end, if the process has ended. */
+    /** Makes `next` the taker: it takes the held reports and frames first, then the end, if the process has ended. */
     const attach = (next: Taker) =>
       serial.withPermits(1)(
         Effect.gen(function* () {
           taker = next
+          waking = false
+          if (next.report !== undefined) for (const held of takeReports()) yield* next.report(held)
           while (taker === next && held.length > 0) yield* take(held.shift()!)
           if (taker === next && ended !== undefined) {
             taker = undefined
@@ -578,8 +637,22 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
             const message = next.value
             if (!observe(message)) return Effect.void
             const job = route(message)
+            // A turn nobody sent: Claude Code woke by itself, for a job's end or its own wakeup (F2).
+            if (
+              message.type === "system" &&
+              message.subtype === "session_state_changed" &&
+              message.state === "running" &&
+              taker === undefined &&
+              awaitingReplay.size === 0
+            ) {
+              waking = true
+              wake()
+            }
             if (job === undefined) return take(message)
             job.inbox.push({ frame: message })
+            if (message.type === "system" && message.subtype === "task_notification" && job.start?.reported) {
+              return report(job, message)
+            }
             return Effect.void
           }),
         )
@@ -613,6 +686,11 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
                 Deferred.doneUnsafe(done, handled as Exit.Exit<Ended, unknown>)
                 return true
               }),
+            // A report the run cannot commit fails it, as a frame it cannot does.
+            report: (made) =>
+              Effect.catchCause(now.report(made), (cause) =>
+                Effect.sync(() => Deferred.doneUnsafe(done, Exit.failCause(cause))),
+              ),
             exit: (error) => {
               const message =
                 error === undefined
@@ -620,15 +698,17 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
                   : `Claude Code stopped: ${error instanceof Error ? error.message : String(error)}`
               // Claude Code never took the opening, so nothing of the run reached it.
               const lost = opened !== undefined && awaitingReplay.has(opened)
-              Deferred.doneUnsafe(done, Exit.succeed(lost ? ({ _tag: "exited", message } as const) : failure(message)))
+              // A turn that ended before the process did ended the run as its result said.
+              const ended = now.ended ?? (lost ? ({ _tag: "exited", message } as const) : failure(message))
+              Deferred.doneUnsafe(done, Exit.succeed(ended))
             },
           }
-          serving = now
+          Deferred.doneUnsafe(serving, Exit.succeed(now))
           yield* Effect.addFinalizer(() =>
             Effect.andThen(
               detach(served),
               Effect.sync(() => {
-                serving = undefined
+                serving = Deferred.makeUnsafe<Serving>()
               }),
             ),
           )
@@ -640,7 +720,7 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
               message: `Claude Code did not switch its model or effort: ${String(switched.failure)}`,
             } as const
           }
-          opened = send(opening)
+          if (opening.length > 0) opened = send(opening)
           yield* attach(served)
           return yield* Deferred.await(done)
         }),
@@ -648,16 +728,20 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
 
     const stop = (within: Duration.Input) =>
       Effect.gen(function* () {
-        // A person stopped the run: its subagents are stopped with it, as an abort of each would, before Claude Code
-        // reports how its interrupt ended them.
-        yield* serial.withPermits(1)(Effect.sync(() => endJobs(STOPPED_WITH_RUN)))
+        // A person stopped the run, not its jobs, which keep working (D7).
         yield* Effect.promise(() => messages.interrupt().catch(() => undefined))
         const done = Deferred.makeUnsafe<boolean>()
         const stopping: Taker = {
           frame: (message) =>
             Effect.sync(() => {
-              if (message.type !== "result") return false
-              Deferred.doneUnsafe(done, Exit.succeed(awaitingReplay.size === 0 && tasks.size === 0))
+              if (
+                message.type !== "system" ||
+                message.subtype !== "session_state_changed" ||
+                message.state !== "idle"
+              ) {
+                return false
+              }
+              Deferred.doneUnsafe(done, Exit.succeed(awaitingReplay.size === 0))
               return true
             }),
           exit: () => Deferred.doneUnsafe(done, Exit.succeed(false)),
@@ -672,6 +756,11 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
       get busy() {
         return tasks.size > 0
       },
+      quiet: Effect.suspend(() => Deferred.await(quiet)),
+      get waking() {
+        return waking
+      },
+      takeReports,
       exited: Deferred.await(exit),
       get lastRequest() {
         return lastRequest

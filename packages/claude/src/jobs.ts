@@ -20,6 +20,8 @@ export type JobRecord = {
   call: string
   /** A subagent's own conversation. */
   conversation?: number
+  /** The task that holds it: a subagent's `claude.job`, a command's `claude.command`, which an abort stops. */
+  taskId: number
   state: JobState
   /** What Claude Code said of its end. */
   summary?: string
@@ -39,6 +41,13 @@ export const ClaudeJobsDoc = defineDoc<{ jobs: Record<string, JobRecord> }>({
   checkpointWhen: () => true,
 })
 
+/** How a job ended, from Claude Code's word for it. */
+export const ENDINGS = { completed: "done", failed: "failed", stopped: "stopped", killed: "stopped" } as const
+
+/** What a `task_notification` says a job ended with: a handed-back report, which the SDK does not type yet, or its summary. */
+export const summaryOf = (frame: { summary?: string }) =>
+  (frame as { handback_report?: { text?: string } }).handback_report?.text || frame.summary
+
 export const CLAUDE_REPORT_KIND = "claude.report"
 
 /** What a `claude.report` entry holds besides its text, which is its user message. */
@@ -51,16 +60,16 @@ export type ReportData = {
   status: Exclude<JobState, "working">
 }
 
-/** One job's end, as a run commits it or a wake submits it. */
-export type JobReport = { readonly text: string; readonly data: ReportData }
+/** One job's end, as a run commits it or a wake submits it; one with no data stands for no job. */
+export type JobReport = { readonly text: string; readonly data?: ReportData }
 
-/** A report for a wake turn no job's end came before, as a scheduled wakeup starts (D4). */
-export const CONTINUED_ON_ITS_OWN = "Claude Code continued on its own."
+/** The report of a wake turn no job's end came before, as a scheduled wakeup starts (D4). */
+export const CONTINUED_ON_ITS_OWN: JobReport = { text: "Claude Code continued on its own." }
 
 const NOUN = { agent: "agent", command: "command" } as const
 
 /** What the parent is told of a job's end. A command's own summary says it already, as Claude Code words it. */
-export const reportOf = (job: JobRecord): JobReport => {
+export const reportOf = (job: Omit<JobRecord, "taskId">): JobReport => {
   const status = job.state === "working" ? "done" : job.state
   const noun = NOUN[job.kind]
   const text =
@@ -86,7 +95,7 @@ export const reportOf = (job: JobRecord): JobReport => {
 export const appendReport = (tx: Tx, conversationId: ConversationId, report: JobReport, now: number) =>
   tx.appendEntry(conversationId, {
     kind: CLAUDE_REPORT_KIND,
-    data: report.data as unknown as JsonObject,
+    ...(report.data === undefined ? {} : { data: report.data as unknown as JsonObject }),
     model: [{ role: "user", content: report.text, timestamp: now } as unknown as JsonObject],
   })
 
