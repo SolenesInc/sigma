@@ -201,6 +201,7 @@ test("claude-session-gone: when Claude Code lost the session, a fresh one is giv
       "Which word did I ask you to remember? Reply with that word only.",
     ],
   ])
+  // What the model made of it: haiku answers the retold "Reply with exactly: noted" rather than the question.
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: noted", "run_end: answered"])
   expect(runEnds(session.view.seen()).map((end) => end.outcome)).toEqual(["answered", "answered"])
 })

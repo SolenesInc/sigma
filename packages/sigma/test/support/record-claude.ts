@@ -69,9 +69,10 @@ const lines = async (stream: ReadableStream<Uint8Array>, each: (line: string) =>
 }
 
 // Whether Claude Code has sent a turn's `result` and not yet the `idle` that follows it.
-let resultBeforeIdle = false
-let idled = () => {}
-const idle = () => (resultBeforeIdle ? new Promise<void>((resolve) => (idled = resolve)) : Promise.resolve())
+// The `idle` a turn's `result` waits for; settled while no result waits.
+let turnEnd = Promise.withResolvers<void>()
+turnEnd.resolve()
+const idle = () => turnEnd.promise
 
 const outbound = lines(Bun.stdin.stream(), (line) => {
   const frame = JSON.parse(line)
@@ -89,10 +90,9 @@ const inbound = lines(child.stdout, (line) => {
   const frame = JSON.parse(line)
   // `/clear` moves the session to a new id; later frames carry it.
   if (session === undefined && typeof frame.session_id === "string") session = frame.session_id
-  if (frame.type === "result") resultBeforeIdle = true
+  if (frame.type === "result") turnEnd = Promise.withResolvers<void>()
   if (frame.type === "system" && frame.subtype === "session_state_changed" && frame.state === "idle") {
-    resultBeforeIdle = false
-    idled()
+    turnEnd.resolve()
   }
   const kept = scrub(frame)
   if (kept !== undefined) record("emit_inbound", kept)

@@ -60,7 +60,8 @@ const work = `/tmp/sigma-record-${process.pid}`
 mkdirSync(work, { recursive: true })
 /**
  * The Claude executable a journey's server runs: a sign-in goes to the bundled Claude Code, a probe to the fake
- * `claude` answering signed in with its models, as in the provider tests, and each conversation's process is recorded. Every process reads only the project's settings, and logs its pid and argv.
+ * `claude` answering signed in with its models, as in the provider tests, and each conversation's process is
+ * recorded. Every process reads only the project's settings, and logs its pid and argv.
  */
 const executable = (pids: string) => {
   const path = join(work, "claude")
@@ -355,7 +356,7 @@ const open = async (name: string, journey: Journey) => {
     /** Kills spawn `n` as a crash would, once it has gone idle. */
     kill: async (n: number) => {
       await recorderIdle(to)
-      process.kill(spawns()[n]!.pid, "SIGKILL")
+      await killRecorder(spawns()[n]!.pid)
     },
     /** Deletes spawn `n`'s Claude Code session, as if Claude Code had lost it. */
     forgetSession: (n: number) => {
@@ -381,6 +382,8 @@ const open = async (name: string, journey: Journey) => {
     crash: async () => {
       client.close()
       await server.kill()
+      // A killed server leaves its Claude Code processes running: one would finish its turn into the recording.
+      for (const { pid } of spawns()) await killRecorder(pid)
       server = await serve()
       client = await RawClient.connect(home.socket)
       view = watchView(client, conversation)
@@ -395,6 +398,44 @@ const open = async (name: string, journey: Journey) => {
   }
   await view.until(() => true)
   return session
+}
+
+/**
+ * Kills a recorder and the Claude Code it runs, and waits until both are gone: a Claude Code left alone after its
+ * recorder dies can go on spending requests and writing its session.
+ */
+const killRecorder = async (pid: number) => {
+  const children = Bun.spawnSync(["pgrep", "-P", String(pid)])
+    .stdout.toString()
+    .split("\n")
+    .filter(Boolean)
+    .map(Number)
+  for (const each of [pid, ...children]) {
+    try {
+      process.kill(each, "SIGKILL")
+    } catch {
+      // Already gone.
+    }
+  }
+  for (const each of [pid, ...children]) await gone(each)
+}
+
+/** Until process `pid` no longer exists. */
+const gone = (pid: number) =>
+  deadline(
+    (async () => {
+      while (alive(pid)) await Bun.sleep(50)
+    })(),
+    10_000,
+    `process ${pid} to exit`,
+  )
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Until `path` exists. */
