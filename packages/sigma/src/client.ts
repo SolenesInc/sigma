@@ -10,6 +10,7 @@ import { RpcClientError } from "effect/rpc/RpcClientError"
 import * as RpcSerialization from "effect/rpc/RpcSerialization"
 import * as Socket from "effect/socket/Socket"
 import { HOME_TAKEN_EXIT, type Home } from "./home.ts"
+import { CONNECTION_QUEUE } from "./server.ts"
 
 /** A client of the home's server. */
 export class Client extends Context.Service<Client, RpcClient.FromGroup<typeof SigmaRpcs, RpcClientError>>()(
@@ -204,6 +205,27 @@ const survivingStops = (client: Client["Service"], open: () => boolean): Client[
   ) as unknown as Client["Service"]
 }
 
+/**
+ * Every stream's items buffered up to what one watch may hold unread on the server. The client reads the connection
+ * in one loop and hands each stream's items to that stream's buffer, waiting while the buffer is full; the RPC
+ * client's default holds 16. A caller that makes a call while handling a stream's item, as exec does reading what its
+ * watch missed, waits on an answer behind items the full buffer cannot take, and the connection stops for good.
+ * CONNECTION_QUEUE is a tripwire past what a reading client ever holds: only a caller kept from reading that long
+ * meets it. Below it, a caller that is slow but reads drains its way to the FellBehind the server sends once it, too,
+ * holds that many, and watches again.
+ */
+const watchSizedStreams = (client: Client["Service"]): Client["Service"] =>
+  Object.fromEntries(
+    Object.entries(client).map(([tag, call]) => [
+      tag,
+      (payload: unknown, options?: object) =>
+        (call as (payload: unknown, options: object) => unknown)(payload, {
+          streamBufferSize: CONNECTION_QUEUE,
+          ...options,
+        }),
+    ]),
+  ) as unknown as Client["Service"]
+
 export const clientLayer = (home: Home) =>
   Layer.effect(
     Client,
@@ -212,6 +234,6 @@ export const clientLayer = (home: Home) =>
       // Added after the client's own finalizer, so it runs first, before the client ends what still waits.
       let open = true
       yield* Effect.addFinalizer(() => Effect.sync(() => (open = false)))
-      return survivingStops(client, () => open)
+      return survivingStops(watchSizedStreams(client), () => open)
     }),
   ).pipe(Layer.provide(protocolLayer(home)))
