@@ -98,6 +98,12 @@ const substitute = (frame: unknown) =>
     ),
   )
 
+// A test can hold the recording before the first frame of a subtype, such as a background job's `task_notification`,
+// as time a real job takes, until it sends this process SIGUSR1.
+const holdBefore = process.env.FAKE_CLAUDE_HOLD_BEFORE
+let held = false
+const released = new Promise<void>((resolve) => process.on("SIGUSR1", () => resolve()))
+
 const inbound: Array<any> = []
 let wake: (() => void) | undefined
 let ended = false
@@ -176,6 +182,11 @@ for (const step of segments[spawn] ?? []) {
     await new Promise<void>((resolve) => process.stdout.write("", () => resolve()))
     process.exit(step.code)
   } else if (step.type === "emit_inbound") {
+    if (!held && holdBefore !== undefined && frame.subtype === holdBefore) {
+      held = true
+      log({ held: holdBefore })
+      await released
+    }
     if (frame.type === "control_request") asked.set(frame.request_id, frame.request.subtype)
     if (frame.type === "control_request" && frame.request?.subtype === "hook_callback") {
       hookRequests.add(frame.request_id)

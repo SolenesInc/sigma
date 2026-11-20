@@ -43,10 +43,13 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
   `effort` its `start_worker` names, unchanged. A provider whose loop sigma
   runs must list the model, or the call fails; Claude Code takes any name.
 - `worker-card` shows the card's state: `working`, `waiting on you` with the
-  asked call and `allow <Tool(subject)>?  ^Y  allow  ^N  deny`, `done` with its
-  last message, `interrupted` or `failed`.
+  asked call and `allow <Tool(subject)>? · answer below`, `done` with its
+  last message, `interrupted` or `failed`; a Claude background subagent's
+  card reads `stopped` or `cut off` when its job ended so.
 - `worker-approve` answers a worker's asked call with `^Y` or `^N` in the
-  parent's TUI, or `approval/resolve` on the worker's conversation. A call
+  parent's TUI, from the `WAITING ON YOU` panel (`approval-panel` in
+  [Tool calls and approvals](./tool-calls-and-approvals.md)), or
+  `approval/resolve` on the worker's conversation. A call
   asked deeper in the tree shows on the card of the worker above it.
 - `worker-message` delivers a parent's `message_worker` to a running worker
   at its next step, as a `sigma.mail` entry of kind `message`
@@ -152,7 +155,9 @@ Preconditions:
 
   `drive.ts r tui start`, wait for `READY`, type `delegate` and `Enter`. Wait
   for `allow bash(echo scribbled)?`: the screen shows
-  `⧉ scribe waiting on you` (the card stands in place of the call), `bash(echo scribbled)` and `◆ WAITING`. Press
+  `⧉ scribe waiting on you` (the card stands in place of the call), `bash(echo scribbled)`,
+  `allow bash(echo scribbled)? · answer below`, the panel row
+  `⧉ scribe allow bash(echo scribbled)?  ^Y  allow  ^N  deny` and `◆ WAITING`. Press
   `C-y` and wait for `the scribe is done`: the card reads `⧉ scribe done` over
   `wrote it`, `▸ wait_worker` with `/root/scribe` saying `wrote it` under it,
   then `SIGMA` says `the scribe is done`, `■ READY`.
@@ -255,8 +260,8 @@ Preconditions:
 
   `drive.ts r tui start`, wait for `READY`, type `delegate` and `Enter`, and
   wait for `allow bash(echo deep)?`: on the parent's screen `⧉ lead waiting on you`
-  holds `allow bash(echo deep)?  ^Y  allow  ^N  deny`, though the call is the
-  helper's. Press `C-y` and wait for `the lead is done` and `READY`: the card
+  holds `allow bash(echo deep)? · answer below`, though the call is the
+  helper's, and the panel names the helper: `⧉ helper allow bash(echo deep)?`. Press `C-y` and wait for `the lead is done` and `READY`: the card
   reads `⧉ lead done` over `the helper is done`.
   `drive.ts r rpc conversation/list` has `"task": "/root/lead/helper"`, and
   `drive.ts r watch <helper id>` shows a `sigma.approval` by `ada` and the
@@ -447,7 +452,8 @@ Preconditions:
   ``Use the Task tool to start a general-purpose subagent that runs the bash command `touch made.txt` with the Bash tool and reports when it is done. Do not run it yourself. Then reply with exactly: made``
   and `Enter`, then wait for `waiting on you`:
   `⧉ Create made.txt file (general-purpose) waiting on you` over
-  `Bash(touch made.txt)` and `allow Bash(touch made.txt)?  ^Y  allow  ^N  deny`.
+  `Bash(touch made.txt)` and `allow Bash(touch made.txt)? · answer below`, and the
+  `WAITING ON YOU · 1` panel holds its row with `^Y  allow  ^N  deny`.
   Press `C-y` and wait for `READY`: the card reads `done` over
   ``Done. `touch made.txt` ran in <checkout>``, then `made`. `drive.ts r rpc conversation/list`
   lists the subagent with `lineage` `parent`, `root`, `call`,

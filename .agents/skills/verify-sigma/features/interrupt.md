@@ -12,6 +12,12 @@ can interrupt any conversation's run.
   `Esc` or `conversation/interrupt` with no run stops the run of every
   subagent in its tree, and every background job Claude Code started in any
   of them, each told to stop. Stopping a run leaves that work going.
+- `background-count` shows `⧉ <n> in background` in the status bar while work
+  goes on under the conversation beside its runs: its own subagents that
+  work, and the jobs Claude Code runs in the background. The prompt's bottom
+  border says what `Esc` stops now: `esc  stop the run` during a run, and
+  `esc  stop <n> background jobs` while the conversation is idle with such
+  work.
 - `interrupt-withdraw` withdraws the prompts waiting in the queue: each leaves
   the queue without running, and the transcript gets a `sigma.withdrawn` entry
   naming its `requestId`, so a client that lost its watch learns the prompt's
@@ -22,7 +28,8 @@ can interrupt any conversation's run.
 
 ### People
 
-- Press `Esc` in the TUI while it shows `WORKING`.
+- Press `Esc` in the TUI while it shows `WORKING`, or while it shows `READY`
+  with `⧉ <n> in background`; the prompt's bottom border says which.
 
 ### Agents
 
@@ -53,6 +60,16 @@ Preconditions:
   watch ends on a `pi.assistant` entry with what was said and
   `"stopReason": "aborted"`, then `sigma.run_end` with
   `{"outcome": "interrupted", "message": "aborted"}`.
+- **Run, then background jobs** (`--fake-claude bash_background_stopped`).
+  `drive.ts r tui start --provider claude --auto`, send
+  `Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started`,
+  wait for `in background · running` and `READY`, then send
+  `Use the Bash tool to run: sleep 30. Then reply with exactly: slept` and
+  wait for `esc  stop the run`: the status bar reads
+  `WORKING <n>s   ⧉ 1 in background`. `Escape`, wait for
+  `esc  stop 1 background job`: `◆ interrupted`, `READY`, and the call still
+  reads `in background · running`. `Escape` again, wait for
+  `in background · stopped`: the count and the hint are gone.
 - **Withdraw.** In a fresh run with the same script, run `drive.ts r serve`,
   start a conversation, and run
   `drive.ts r watch <id> --submit count --until run_end --save withdraw &`.
@@ -81,6 +98,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 Screen, `packages/sigma/test/screen.test.ts`:
 
 - interrupt-tui: escape stops sigma mid-answer and the answer shows it was interrupted
+- claude-job-card, background-count: a background command's card reads running while it works and done after, the status bar counts it, and its report shows under its name before Sigma's follow-up
 
 Provider, `packages/sigma/test/openai.test.ts`:
 

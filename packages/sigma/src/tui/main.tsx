@@ -11,6 +11,7 @@ import {
   type TranscriptItem,
   type TranscriptView,
 } from "@sigma/harness"
+import { type JobReport, JOBS_KIND, REPORT_KIND } from "@sigma/hosted"
 import type { EntryRecord } from "@sigma/kernel"
 import {
   type Author,
@@ -55,6 +56,7 @@ import { Client, serverRefusal, type StartOptions } from "../client.ts"
 import { attachmentsIn, imagesIn } from "../attach.ts"
 import { describeCall, describeTargetChange, receivedOf } from "./calls.ts"
 import {
+  type Ask,
   clip,
   COMMANDS,
   type ConversationActions,
@@ -69,7 +71,7 @@ import {
   tokens,
 } from "./chrome.tsx"
 import { modelLabel } from "./setup.tsx"
-import { color, KeyCap } from "./theme.tsx"
+import { color } from "./theme.tsx"
 
 const RESULT_LINES = 6
 /** The running output a call shows: its last lines. */
@@ -104,7 +106,14 @@ type Live = {
   readonly tools?: ReadonlyArray<LiveTool>
   readonly nestedTools?: ReadonlyArray<NestedTool>
 }
-type Approval = { readonly callId: string; readonly answer?: unknown }
+type Approval = {
+  readonly callId: string
+  readonly tool?: string
+  readonly arguments?: unknown
+  /** When the call asked. */
+  readonly at?: number
+  readonly answer?: unknown
+}
 type Approvals = { readonly requests?: Readonly<Record<string, Approval>> }
 type InboxItem = { readonly id: number; readonly mode: string; readonly content?: Message["content"] }
 type Usage = {
@@ -126,6 +135,17 @@ type Docs = {
   readonly "sigma.approvals"?: Approvals
   readonly "pi.usage"?: UsageLedger
   readonly "sigma.reaching"?: { readonly wait?: { readonly target: string; readonly since: number } }
+  /** The background jobs Claude Code started here, by Claude Code's task id. */
+  readonly [JOBS_KIND]?: { readonly jobs?: Readonly<Record<string, JobRecord>> }
+}
+
+/** What a report entry holds besides its text. */
+type ReportData = NonNullable<JobReport["data"]>
+/** A background job as the TUI draws it, from its parent's jobs document. */
+type JobRecord = {
+  readonly call: string
+  readonly kind: ReportData["kind"]
+  readonly state: ReportData["status"] | "working"
 }
 
 const messageOf = (entry: EntryRecord): Message | undefined => entry.model?.[0] as Message | undefined
@@ -188,11 +208,15 @@ interface Index {
   readonly subagents: ReadonlyMap<string, Subagent>
 }
 
-/** A subagent's conversation, and the title and type a hosted one (Claude's) was given, which its call does not carry. */
+/**
+ * A subagent's conversation, and the title and type a hosted one (Claude's) was given, which its call does not carry.
+ * `task` is the name agents address one of Sigma's own subagents by; a subagent Claude Code runs has none.
+ */
 type Subagent = {
   readonly conversation: string
   readonly title?: string | undefined
   readonly agentType?: string | undefined
+  readonly task?: string | undefined
 }
 
 const indexOf = (items: ReadonlyArray<TranscriptItem>): Index => {
@@ -317,6 +341,7 @@ const DRAWN = new Set([
   "pi.user",
   USER_KIND,
   MAIL_KIND,
+  REPORT_KIND,
   "pi.assistant",
   RUN_END_KIND,
   MODEL_KIND,
@@ -347,6 +372,7 @@ const startsTurn = (previous: TranscriptItem | undefined) =>
   previous.entry.kind === "pi.user" ||
   previous.entry.kind === USER_KIND ||
   previous.entry.kind === MAIL_KIND ||
+  previous.entry.kind === REPORT_KIND ||
   previous.entry.kind === RUN_END_KIND ||
   previous.entry.kind === CONTINUED_KIND
 
@@ -378,6 +404,90 @@ const askingIn = (tree: Tree, subagent: string) =>
     (each) => each !== undefined && pendingCalls(each.docs()).length > 0,
   )
 
+/** What a subagent's card calls it: the title it was started with, or else the name its parent's call gave it. */
+const titleOf = (tree: Tree, id: string) => {
+  const parent = tree.parents[id] === tree.root.id ? tree.root : tree.children[tree.parents[id] ?? ""]
+  const started = [...(parent === undefined ? [] : indexOf(parent.items()).subagents)].find(
+    ([, subagent]) => subagent.conversation === id,
+  )
+  return (
+    started?.[1].title ??
+    nameOf(parent, started?.[0]) ??
+    Object.values(tree.started).find((listed) => listed.conversation === id)?.title ??
+    `conversation ${id}`
+  )
+}
+
+/** The `task_name` the call `callId` of `followed` gave the subagent it started. */
+const nameOf = (followed: Followed | undefined, callId: string | undefined) => {
+  if (followed === undefined || callId === undefined) return undefined
+  for (const item of followed.items()) {
+    if (item.kind !== "entry" || item.entry.kind !== "pi.assistant") continue
+    const call = callsOf(messageOf(item.entry)).find((each) => each.id === callId)
+    if (call) return (call.arguments as { task_name?: string } | undefined)?.task_name
+  }
+  return undefined
+}
+
+/** A call of the tree waiting on a person, as the asks panel lists it, with the request that answers it. */
+type Waiting = Ask & { readonly conversation: string; readonly approval: string }
+
+const waitingIn = (followed: Followed, by: string | undefined) =>
+  pendingCalls(followed.docs()).map(([approval, request]) => ({
+    conversation: followed.id,
+    approval,
+    at: request.at ?? 0,
+    ...(by === undefined ? {} : { by }),
+    call: describeCall(request.tool ?? "", request.arguments),
+  }))
+
+/**
+ * Every call of the tree waiting on a person, in the order `^Y` and `^N` answer them (D9 of s-cjk9k6): the shown
+ * conversation's own first, then its subagents', oldest first.
+ */
+const asksOf = (tree: Tree): ReadonlyArray<Waiting> => {
+  const byAge = (a: { at: number }, b: { at: number }) => a.at - b.at
+  const own = waitingIn(tree.root, undefined).toSorted(byAge)
+  const theirs = Object.values(tree.children)
+    .flatMap((child) => waitingIn(child, titleOf(tree, child.id)))
+    .toSorted(byAge)
+  return [...own, ...theirs]
+}
+
+const jobsOf = (followed: Followed) => Object.values(followed.docs()[JOBS_KIND]?.jobs ?? {})
+
+/**
+ * The work going on under the tree beside its runs, which `Esc` on an idle conversation stops: Sigma's own subagents
+ * that work, and the jobs Claude Code runs in the background. A subagent Claude Code runs counts as its job.
+ */
+const backgroundOf = (tree: Tree) => {
+  const own = new Set(
+    Object.values(tree.started).flatMap((started) => (started.task === undefined ? [] : [started.conversation])),
+  )
+  const subagents = Object.values(tree.children).filter(
+    (child) => own.has(child.id) && child.loaded() && statusOf(child.docs()) !== "idle",
+  ).length
+  const jobs = [tree.root, ...Object.values(tree.children)].flatMap(jobsOf).filter((job) => job.state === "working")
+  return subagents + jobs.length
+}
+
+/** What a job's card says of it. */
+const JOB_STATES: Readonly<Record<JobRecord["state"], { label: string; tone: string }>> = {
+  working: { label: "running", tone: color.cyan },
+  done: { label: "done", tone: color.dim },
+  failed: { label: "failed", tone: color.yellow },
+  stopped: { label: "stopped", tone: color.yellow },
+  "cut off": { label: "cut off", tone: color.yellow },
+}
+
+/** The line under a call that waits on a person: the asks panel below the transcript answers it. */
+const AskedLine = (props: { call: string }) => (
+  <box flexDirection="row" marginLeft={2} gap={1}>
+    <text fg={color.yellow}>{`allow ${props.call}?`}</text>
+    <text fg={color.dim}>· answer below</text>
+  </box>
+)
+
 const lastActivity = (child: Followed) => {
   const live = textOf(child.docs()["pi.live"]?.generation?.message?.content)
   if (live !== "") return lastLine(live)
@@ -407,10 +517,22 @@ const childState = (child: Followed | undefined): { label: string; tone: string 
   return { label: outcome === "interrupted" ? "interrupted" : "failed", tone: color.yellow }
 }
 
-const SubagentCard = (props: { tree: Tree; conversation: string; title: string; agentType: string | undefined }) => {
+const SubagentCard = (props: {
+  tree: Tree
+  conversation: string
+  title: string
+  agentType: string | undefined
+  /** The job Claude Code runs it as, when it runs in the background. */
+  job?: JobRecord | undefined
+}) => {
   const child = () => props.tree.children[props.conversation]
   const asker = () => askingIn(props.tree, props.conversation)
-  const state = () => (asker() ? { label: "waiting on you", tone: color.yellow } : childState(child()))
+  // A job that ended other than done says how, which its conversation's last run may not: stopped, or cut off.
+  const ended = () => {
+    const state = props.job?.state
+    return state === undefined || state === "working" || state === "done" ? undefined : JOB_STATES[state]
+  }
+  const state = () => (asker() ? { label: "waiting on you", tone: color.yellow } : (ended() ?? childState(child())))
   const asking = () => {
     const pending = asker() && pendingCalls(asker()!.docs())[0]
     if (!pending) return undefined
@@ -430,15 +552,7 @@ const SubagentCard = (props: { tree: Tree; conversation: string; title: string; 
           </text>
         )}
       </Show>
-      <Show when={asking()}>
-        {(call) => (
-          <box flexDirection="row" marginLeft={2} gap={1}>
-            <text fg={color.yellow}>{`allow ${call()}?`}</text>
-            <KeyCap cap="^Y" what="allow" />
-            <KeyCap cap="^N" what="deny" />
-          </box>
-        )}
-      </Show>
+      <Show when={asking()}>{(call) => <AskedLine call={call()} />}</Show>
     </box>
   )
 }
@@ -459,11 +573,7 @@ const NestedCalls = (props: { followed: Followed; index: Index; parent: string }
           <box flexDirection="column" marginLeft={2}>
             <text fg={color.violet}>{`▸ ${describeCall(call.name, call.arguments)}`}</text>
             <Show when={asking()}>
-              <box flexDirection="row" marginLeft={2} gap={1}>
-                <text fg={color.yellow}>allow this call?</text>
-                <KeyCap cap="^Y" what="allow" />
-                <KeyCap cap="^N" what="deny" />
-              </box>
+              <AskedLine call="this call" />
             </Show>
             <Show when={answer()}>
               {(given) => (
@@ -510,18 +620,30 @@ const ToolCallView = (props: { followed: Followed; index: Index; tree: Tree; cal
       call.startsWith(`${props.call.id}/`) ? [started] : [],
     )
   const input = () => props.call.arguments as { task_name?: string; agent_type?: string } | undefined
+  /** The background job Claude Code runs for this call. */
+  const job = () => jobsOf(props.followed).find((each) => each.call === props.call.id)
+  const command = () => {
+    const started = job()
+    return started?.kind === "command" ? JOB_STATES[started.state] : undefined
+  }
   return (
     <Show
       when={subagent()}
       fallback={
         <box flexDirection="column" marginLeft={2}>
-          <text fg={color.violet}>{`▸ ${describeCall(props.call.name, props.call.arguments)}`}</text>
+          <box flexDirection="row" gap={1}>
+            <text fg={color.violet}>{`▸ ${describeCall(props.call.name, props.call.arguments)}`}</text>
+            <Show when={command()}>
+              {(state) => (
+                <>
+                  <text fg={color.dim}>in background ·</text>
+                  <text fg={state().tone}>{state().label}</text>
+                </>
+              )}
+            </Show>
+          </box>
           <Show when={asking()}>
-            <box flexDirection="row" marginLeft={2} gap={1}>
-              <text fg={color.yellow}>allow this call?</text>
-              <KeyCap cap="^Y" what="allow" />
-              <KeyCap cap="^N" what="deny" />
-            </box>
+            <AskedLine call="this call" />
           </Show>
           <Show when={answer()}>
             {(given) => (
@@ -538,7 +660,7 @@ const ToolCallView = (props: { followed: Followed; index: Index; tree: Tree; cal
               {tail(output(), OUTPUT_LINES)}
             </text>
           </Show>
-          <Show when={result()}>
+          <Show when={command() === undefined && result()}>
             {(shown) => (
               <Show
                 when={received()}
@@ -577,6 +699,7 @@ const ToolCallView = (props: { followed: Followed; index: Index; tree: Tree; cal
           conversation={started().conversation}
           title={started().title ?? input()?.task_name ?? props.call.name}
           agentType={started().agentType ?? input()?.agent_type}
+          job={job()}
         />
       )}
     </Show>
@@ -647,6 +770,18 @@ const EntryView = (props: {
           attached={[]}
         />
       )
+    case REPORT_KIND: {
+      // A wake with no job's end before it says Claude Code went on by itself.
+      const job = entry.data === undefined ? undefined : dataOf<ReportData>(entry)
+      return (
+        <UserView
+          label={job?.title ?? "claude code"}
+          tone={color.violet}
+          text={textOf(messageOf(entry)?.content)}
+          attached={[]}
+        />
+      )
+    }
     case "pi.assistant": {
       const message = messageOf(entry)
       const text = textOf(message?.content)
@@ -1006,7 +1141,12 @@ const conversationScreen = Effect.fnUntraced(function* (
           if (!(lineage.call in untrack(spawned)))
             setSpawned((all) => ({
               ...all,
-              [lineage.call]: { conversation: each.id, title: lineage.title, agentType: lineage.agentType },
+              [lineage.call]: {
+                conversation: each.id,
+                title: lineage.title,
+                agentType: lineage.agentType,
+                task: lineage.task,
+              },
             }))
           adopt(each.id, lineage.parent)
         }
@@ -1105,6 +1245,22 @@ const conversationScreen = Effect.fnUntraced(function* (
     )
   // A read-only server runs nothing, so a run it shows in flight is not working.
   const status = () => (readOnly() ? "idle" : statusOf(root.docs()))
+  const { asks, background } = createRoot(() => ({
+    asks: createMemo(() => asksOf(tree), [], {
+      equals: (a, b) =>
+        a.length === b.length &&
+        a.every((ask, at) => {
+          const other = b[at]!
+          return (
+            ask.conversation === other.conversation &&
+            ask.approval === other.approval &&
+            ask.by === other.by &&
+            ask.call === other.call
+          )
+        }),
+    }),
+    background: createMemo(() => backgroundOf(tree)),
+  }))
   const screen: Screen = {
     id: conversation,
     fork: info?.fork && {
@@ -1137,8 +1293,11 @@ const conversationScreen = Effect.fnUntraced(function* (
         textOf(root.docs()["pi.live"]?.generation?.message?.content) === ""
       )
     },
-    get subagentAsks() {
-      return Object.values(tree.children).some((child) => pendingCalls(child.docs()).length > 0)
+    get asks() {
+      return asks()
+    },
+    get background() {
+      return readOnly() ? 0 : background()
     },
     get notice() {
       return notice()
@@ -1200,11 +1359,11 @@ const conversationScreen = Effect.fnUntraced(function* (
     },
     attachments: (text) => attachmentsIn(text, imageDir(screen.cwd)).map((attachment) => attachment.name),
     answer: (allow) => {
-      const asking = [root, ...Object.values(tree.children)].find((each) => pendingCalls(each.docs()).length > 0)
-      const pending = asking && pendingCalls(asking.docs())[0]
-      if (asking && pending) {
-        Effect.runFork(client["approval/resolve"]({ conversation: asking.id, approval: pending[0], author, allow }))
-      }
+      const head = untrack(asks)[0]
+      if (head)
+        Effect.runFork(
+          client["approval/resolve"]({ conversation: head.conversation, approval: head.approval, author, allow }),
+        )
     },
     interrupt: () => Effect.runFork(client["conversation/interrupt"]({ conversation, author })),
     selectModel: (selection) =>
