@@ -6,7 +6,7 @@
 //
 // A `map` file `{ "from": <path>, "to": <path> }` makes the target another machine at one path: the server's `from`
 // is the agent's `to`, rewritten in every frame both ways, so a file at `from` on the home is not the one the target
-// has there.
+// has there. A `platform` file makes the target another kind of computer: its sigma-env's hello reports that platform.
 import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -28,6 +28,8 @@ const text = (name: string) => readFileSync(join(dir, name), "utf8").trim()
 const map = existsSync(join(dir, "map"))
   ? (JSON.parse(text("map")) as { readonly from: string; readonly to: string })
   : undefined
+const platform = existsSync(join(dir, "platform")) ? text("platform") : undefined
+const relayed = map !== undefined || platform !== undefined
 mkdirSync(join(dir, "run"), { recursive: true })
 const child = spawn(process.execPath, [AGENT, ...args], {
   env: {
@@ -36,17 +38,40 @@ const child = spawn(process.execPath, [AGENT, ...args], {
     SIGMA_TARGET_FILES: text("files"),
     XDG_RUNTIME_DIR: join(dir, "run"),
   },
-  stdio: map === undefined ? "inherit" : ["pipe", "pipe", "inherit"],
+  stdio: relayed ? ["pipe", "pipe", "inherit"] : "inherit",
 })
 writeFileSync(join(dir, "pid"), String(child.pid))
 child.on("exit", (code, signal) => (signal === null ? process.exit(code ?? 1) : process.kill(process.pid, signal)))
 
-if (map !== undefined) {
-  const relay = (from: NodeJS.ReadableStream, to: NodeJS.WritableStream, a: string, b: string, end: () => void) => {
+if (relayed) {
+  const swap = (line: string, a?: string, b?: string) =>
+    a === undefined || b === undefined ? line : line.replaceAll(a, b)
+  /** The agent's hello reports the target's platform, not this machine's. */
+  const told = (line: string) => {
+    if (platform === undefined) return line
+    const frame = JSON.parse(line)
+    return frame.t === "hello" ? JSON.stringify({ ...frame, platform }) : line
+  }
+  const relay = (
+    from: NodeJS.ReadableStream,
+    to: NodeJS.WritableStream,
+    frame: (line: string) => string,
+    end: () => void,
+  ) => {
     const lines = createInterface({ input: from })
-    lines.on("line", (line) => to.write(`${line.replaceAll(a, b)}\n`))
+    lines.on("line", (line) => to.write(`${frame(line)}\n`))
     lines.on("close", end)
   }
-  relay(process.stdin, child.stdin!, map.from, map.to, () => child.stdin!.end())
-  relay(child.stdout!, process.stdout, map.to, map.from, () => {})
+  relay(
+    process.stdin,
+    child.stdin!,
+    (line) => swap(line, map?.from, map?.to),
+    () => child.stdin!.end(),
+  )
+  relay(
+    child.stdout!,
+    process.stdout,
+    (line) => told(swap(line, map?.to, map?.from)),
+    () => {},
+  )
 }

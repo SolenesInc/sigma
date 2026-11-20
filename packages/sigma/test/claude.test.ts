@@ -1168,7 +1168,7 @@ const boxFolder = (home: string) => {
 const spawnLine = (claude: FakeClaude, spawn: number) =>
   claude.log().find((entry) => entry.spawn === spawn && entry.argv !== undefined)
 
-test("target-member-mode: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's AGENTS.md, skills and agent types", async () => {
+test("target-member-mode: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("member_bash")
   // The conversation's folder is a repository on the target, and another at the same path on the home.
@@ -1182,6 +1182,8 @@ test("target-member-mode: a remote conversation's Claude Code has only sigma's t
     mkdirSync(join(home, ".git"), { recursive: true })
     writeFileSync(join(home, "AGENTS.md"), "Home rules.")
     targets.map("box", home, work)
+    // And the target is another kind of computer than the home.
+    targets.platform("box", "freebsd")
     return home
   }
   await using session = await memberSession(claude, targets, cwd)
@@ -1214,6 +1216,11 @@ test("target-member-mode: a remote conversation's Claude Code has only sigma's t
   expect(initialize.appendSystemPrompt).toContain(`The working directory is ${repo}.`)
   expect(initialize.appendSystemPrompt).toContain("Run the tests with make check.")
   expect(initialize.appendSystemPrompt).not.toContain("Home rules.")
+  // Which computer its tools act on, over the home's that Claude Code describes.
+  expect(initialize.appendSystemPrompt).toContain("Your tools act on the computer box, whose platform is freebsd;")
+  expect(initialize.appendSystemPrompt).toContain(
+    "The environment Claude Code describes (its working directory, platform, shell and OS version) is the computer Claude Code runs on",
+  )
   // Nor of code mode, which Claude Code is not offered.
   expect(initialize.appendSystemPrompt).not.toContain("<codemode>")
   // Its skills, read with sigma's read, which Claude Code knows by its MCP name.

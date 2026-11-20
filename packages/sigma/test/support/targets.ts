@@ -43,6 +43,11 @@ export class TestTargets {
     writeFileSync(join(this.root, name, "map"), JSON.stringify({ from, to }))
   }
 
+  /** Makes the target a computer of another platform, which its sigma-env reports, such as `linux`. */
+  platform(name: string, platform: string) {
+    writeFileSync(join(this.root, name, "platform"), platform)
+  }
+
   /** A shell command that kills the target's sigma-env, which a model's bash call can run on it. */
   killCommand(name: string) {
     return `kill -9 $(cat ${join(this.root, name, "pid")})`

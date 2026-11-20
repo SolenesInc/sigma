@@ -101,7 +101,8 @@ const changeText = ({ to, filesKept }: TargetChange) =>
  * Before each request of a remote conversation that sigma's loop runs, reaches its target and records the instance
  * behind it. A changed one is committed as `sigma.target_changed` for clients, and the model is told of it in this
  * section, before the request. A target it cannot reach keeps what the model was told; the tool calls say what is gone
- * (D5). A provider that runs its own loop, as Claude Code does, is told by `targetNotice` instead.
+ * (D5). A provider that runs its own loop, as Claude Code does, is told by `targetNotice` instead, and its model is
+ * told in the `machine` section which computer its tools act on.
  */
 export const targetSection = (targets: TargetPool, harness: () => Harness, ownLoop: (provider: string) => boolean) =>
   defineExtension({
@@ -121,8 +122,26 @@ export const targetSection = (targets: TargetPool, harness: () => Harness, ownLo
             return doc?.changed === undefined ? undefined : changeText(doc.changed)
           }).pipe(Effect.catch(() => Effect.succeed(shown.target))),
       },
+      {
+        // Claude Code tells its model of the computer its own loop runs on, the home, and no option of 2.1.312 drops
+        // or replaces that but `--bare`, which refuses OAuth sign-in. So in member mode sigma names the computer its
+        // tools act on, and says which of the two the model works on.
+        key: "machine",
+        tag: false,
+        render: ({ agent, shown }) =>
+          Effect.gen(function* () {
+            const target = agent.target
+            if (isLocal(target) || !ownLoop(agent.model?.provider ?? "")) return undefined
+            const hello = yield* targets.connect(target)
+            return machineText(target, hello)
+          }).pipe(Effect.catch(() => Effect.succeed(shown.machine))),
+      },
     ],
   })
+
+/** What a member-mode model reads of the computer its tools act on. */
+const machineText = (target: string, hello: AgentHello) =>
+  `Your tools act on the computer ${target}, whose platform is ${hello.platform}; the working directory above is on it. The environment Claude Code describes (its working directory, platform, shell and OS version) is the computer Claude Code runs on, which none of your tools reach: work on ${target}, by its platform and paths.`
 
 /**
  * What a remote conversation whose provider runs its own loop must read now of its target: reaches it and records the

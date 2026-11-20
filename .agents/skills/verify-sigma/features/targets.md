@@ -40,7 +40,9 @@ on. attn will use targets to run a member's work in a sandbox.
   resumes and forks find their session there and nothing lands in the
   person's `~/.claude`. Its system prompt's `append` holds the
   conversation's instructions, then the target's `AGENTS.md` files and
-  skills. A restarted or replaced instance is told at the start of its next
+  skills, then which computer its tools act on: the target, by name and the
+  platform its sigma-env reports, over the computer Claude Code's own
+  environment block describes. A restarted or replaced instance is told at the start of its next
   run, or in the result of the call it happened under. Claude Code waits for
   a sigma call as long as sigma's bash may run, so bash's own timeout is the
   limit the model sees.
@@ -165,6 +167,12 @@ Preconditions:
   a change found between those points waits for the next one.
 - In member mode Claude Code reads `AGENTS.md` and skills only as they were
   when its process started; an edit reaches it with its next process.
+- Claude Code 2.1.312 still tells a member-mode model the home's working
+  folder, platform, shell and OS version, in an `environment` attachment of
+  its session file. No option drops or replaces it except `--bare`, which
+  refuses OAuth sign-in, so the `append` says that block is not where the
+  tools run. The test connector's `platform` file makes a target report
+  another platform, so the two differ on one machine.
 - `$SIGMA_HOME/targets/<key>` holds the target's Claude Code sessions for the
   life of the home; sigma does not remove it. Deleting it while no conversation
   on that target runs costs their Claude Code sessions: their next runs start
