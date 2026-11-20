@@ -8,6 +8,10 @@ can interrupt any conversation's run.
 
 - `interrupt-tui` stops the run with `Esc`.
 - `interrupt-wire` stops it with `conversation/interrupt` from another client.
+- `interrupt-idle` stops the work still going on under an idle conversation:
+  `Esc` or `conversation/interrupt` with no run stops the run of every
+  subagent in its tree, and every background job Claude Code started in any
+  of them, each told to stop. Stopping a run leaves that work going.
 - `interrupt-withdraw` withdraws the prompts waiting in the queue: each leaves
   the queue without running, and the transcript gets a `sigma.withdrawn` entry
   naming its `requestId`, so a client that lost its watch learns the prompt's
@@ -63,7 +67,8 @@ Preconditions:
 
 - **Second client.** Any client can interrupt, and every client sees the run end `interrupted`.
 - **Claude.** Stopping a Claude run interrupts Claude Code's turn and keeps its process for the next prompt, in [Claude](./claude.md) `claude-stop`.
-- **Subagents.** Stopping a run stops every subagent under it. `Esc` in a subagent's own conversation stops it and any subagent under it, not its parent.
+- **Subagents.** Stopping a run stops that run only: its subagents keep working, and a second `Esc` on the idle conversation stops them (`interrupt-idle`). `Esc` in a subagent's own conversation stops its run, not its parent.
+- **Claude jobs.** Stopping a Claude run leaves the background commands Claude Code started working, and `Esc` on the idle conversation stops them through Claude Code's `stopTask`; Claude Code stops its background subagents with the run. See [Claude](./claude.md) `claude-job-cut-off`.
 
 ## Tests
 
@@ -71,6 +76,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 - interrupt-wire: interrupting keeps what sigma already said and marks the run interrupted
 - interrupt-withdraw: interrupting withdraws the prompts that wait, and the transcript names each by its requestId
+- subagent-interrupt, interrupt-idle: interrupting a conversation's run leaves its subagents working, and interrupting it again, idle, stops them, so the tree goes idle
 
 Screen, `packages/sigma/test/screen.test.ts`:
 
@@ -80,10 +86,14 @@ Provider, `packages/sigma/test/openai.test.ts`:
 
 - interrupt-wire: a ChatGPT answer streams live, and interrupting it closes the request and keeps what was said
 
+Provider, `packages/sigma/test/claude.test.ts`:
+
+- interrupt-idle, claude-job-report: stopping a Claude run leaves its background command working, and stopping the idle conversation stops the command through Claude Code
+
 ## Gotchas
 
-- `Esc` only interrupts while the TUI shows `WORKING` or `WAITING`; once
-  `READY`, it does nothing.
+- `Esc` while the TUI shows `READY` stops the conversation's background work
+  (`interrupt-idle`); with none, it does nothing.
 - Where the words stop depends on timing: the committed `pi.assistant` ends after
   some number of words, always before `ten`.
 - With the default 30 ms echo, the run ends before you can press anything.

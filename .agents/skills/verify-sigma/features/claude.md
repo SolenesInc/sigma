@@ -18,7 +18,10 @@ Claude Code compacts its own context, sigma keeps Claude's summary as a
 compaction; `/clear` starts a new context in sigma's transcript too. A
 conversation past 200,000 tokens that sits idle compacts two minutes before
 its prompt cache would expire, so the person who comes back does not pay to
-read the whole context again.
+read the whole context again. Work Claude Code runs in the background, a
+subagent or a command, outlives the run that started it: its end shows in
+the parent as a report, and when the conversation is idle the report wakes
+it into a run that serves Claude Code's own follow-up.
 
 ## Sub-features
 
@@ -34,7 +37,9 @@ read the whole context again.
   hands it the next run, told only what came after what it has seen. An edit,
   a reset, another provider's answer, a change of tools, or clearing the model
   or effort between runs closes it, and the next run starts a process at the
-  position. So does a run that fails or leaves background work running.
+  position. So does a run that fails. A run ends when Claude Code goes idle,
+  so a turn Claude Code runs on its own before then, for a job that ended,
+  is that run's answer, and never the next prompt's.
 - `claude-stop` interrupts Claude Code's turn when a run is stopped, records
   the cut-off calls as interrupted, and keeps the process live once Claude
   Code ended the turn. The next prompt goes to that process, told nothing
@@ -43,7 +48,33 @@ read the whole context again.
   told which calls were cut off.
 - `claude-idle-release` closes a live process after 30 minutes without a run;
   the next run starts one that resumes the session. A process that waits to
-  compact (`claude-idle-compaction`) stays past the 30 minutes.
+  compact (`claude-idle-compaction`) stays past the 30 minutes, and one with a
+  job working stays until 30 minutes after its last job ended.
+- `claude-job-report` shows a job's end in its parent as a `claude.report`
+  entry, whose text is what the parent is told: `The background agent "<title>" completed: <its answer>`,
+  or a command's summary as Claude Code words it. The run that reads Claude
+  Code's notification commits it; one read while no run serves waits for the
+  wake. A live Claude Code is never sent a report, since it read the
+  notification itself; a new process is told it, as anything else its
+  session missed. The `claude.jobs` document holds each job by Claude Code's
+  task id, with its `kind`, `title`, `state` (`working`, `done`, `failed`,
+  `stopped`, `cut off`) and summary.
+- `claude-wake` starts a run when Claude Code begins a turn on its own while
+  the conversation is idle, as after a background job's end. The reports read
+  before it are the run's input, by no person, and the run sends Claude Code
+  nothing: it serves the turn Claude Code began. A busy conversation places
+  them at its next step instead.
+- `claude-command-job` makes each background command Claude starts a job of
+  the conversation, as each background subagent is, so its end is reported.
+- `claude-job-cut-off` ends a job `cut off` when its process ends first: a
+  server stop, a crash, or a run that needs a new process. The parent gets
+  one report, `The background <agent|command> "<title>" was cut off: Claude Code ended before it did.`,
+  and the next run tells Claude Code. Stopping a run leaves its background
+  commands working, and `Esc` on the idle conversation stops them
+  (`interrupt-idle` in [Interrupt](./interrupt.md)); Claude Code stops its
+  background subagents with the run itself, so they end `stopped`. A report
+  Claude Code gives while no run serves waits for the next run, or joins the
+  transcript when its process closes first.
 - `claude-idle-compaction` compacts an idle conversation whose last request
   had a context of 200,000 tokens or more: two minutes before the prompt
   cache that request read or wrote expires, sigma compacts it as
@@ -334,8 +365,8 @@ Preconditions:
 - **Inside an agent.** Sigma leaves out the variables a host Claude Code
   session sets (`claude-environment`). Its `ANTHROPIC` and `CCR` variables
   still reach Claude Code, so start a real-account run without them.
-- **Server restart.** A stop closes the live processes; the next run resumes Claude Code's session where Sigma's transcript ends.
-- **No client.** A live process keeps the server up until it is released, 30 minutes after the conversation's last run, so `sigma exec` and attn, which hold no watch, still find it. One that waits to compact keeps it up until its compaction ends.
+- **Server restart.** A stop closes the live processes, and cuts their jobs off (`claude-job-cut-off`); the next run resumes Claude Code's session where Sigma's transcript ends.
+- **No client.** A live process keeps the server up until it is released, 30 minutes after the conversation's last run or its last job's end, so `sigma exec` and attn, which hold no watch, still find it. One that waits to compact keeps it up until its compaction ends.
 
 ## Tests
 
@@ -343,6 +374,8 @@ Stack, `packages/sigma/test/stack.test.ts`:
 
 - claude-exec-deny: sigma exec refuses Claude's calls that would ask
 - claude-exec-deny, claude-auto: sigma exec --auto lets Claude's calls run without asking
+- claude-job-cut-off: a Claude job working when the server is killed is cut off, its parent says so once, and the next run tells Claude Code
+- claude-job-cut-off: a Claude job working when the server is stopped with server/stop is cut off, its parent says so once, and the next run tells Claude Code
 
 Provider, `packages/sigma/test/claude.test.ts`:
 
@@ -367,6 +400,10 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - claude-stop, claude-resume: a Claude Code process that does not end its turn after a stop is closed, and the next run resumes, told which call was cut off
 - claude-resume: a run that answered before the server stopped is not run again
 - claude-read: a skill Claude Code runs shows as its call and result, and Claude answers from it
+- claude-job-report, claude-wake: a background subagent that ends during the run reports in it, Claude's turn after the report is that run's answer, and the next prompt gets its own
+- claude-wake, claude-command-job: a background command that ends after its run wakes the conversation, which shows its report and Claude's follow-up in a run nobody prompted
+- claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run
+- interrupt-idle, claude-job-report: stopping a Claude run leaves its background command working, and stopping the idle conversation stops the command through Claude Code
 - claude-sign-in: signing in to Claude runs Claude Code's own sign-in in a terminal with the provider's environment, then names the account
 - compact-rpc, claude-compact: conversation/compact compacts a Claude conversation by sending Claude Code /compact with the instructions, and answers once it has
 - claude-compact, claude-session-gone: a resume at a position Claude Code compacted away starts a fresh session told the conversation
@@ -427,6 +464,21 @@ Package, `packages/claude/test/claude.test.ts`:
   recording's `<workspace>` paths become it.
 - A call Claude Code allows on its own, by its settings or because it only
   reads, runs without `allow this call?`.
+- Sigma starts Claude Code with `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`:
+  without it the SDK swallows `session_state_changed`, and a run, which ends
+  at `idle`, never ends. A recording with `sdk_host_only` on those frames was
+  made without it; strip the flag.
+- Claude Code 2.1.312 does not go idle while a background subagent works,
+  so its parent's run lasts until the subagent ends, and Claude Code's own
+  interrupt kills it (`task_notification` `stopped`). A background command
+  outlives both, and only a wake or `interrupt-idle` reaches it after.
+- After a cut-off, Claude Code's resume says the command
+  `didn't finish before the previous session end`, but the command it
+  started may still be running, orphaned: Claude Code no longer tracks it,
+  and sigma does not end it (seed `s-53bxhk`).
+- A report held by a live process that no run took is committed when the
+  process closes, but not on a server stop, where the harness closes first:
+  that report is lost (seed `s-5rkpts`).
 
 ## With a real account
 

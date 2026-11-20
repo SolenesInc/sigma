@@ -183,12 +183,13 @@ Preconditions:
   `--conversation <fork>`: `PLUM`. The same `jq` shows spawn 1 with the same
   `append`, and `--resume=<spawn 0's session>`, `--fork-session` and a
   `--session-id` of its own.
-- **A Claude fork subagent** (`cache-claude-subagent`). `drive.ts r up --fake-claude fork_subagent`,
+- **A Claude fork subagent** (`cache-claude-subagent`). `drive.ts r up --fake-claude fork_wake`,
   `drive.ts r sigma exec --provider claude --auto 'Use the Agent tool with subagent_type "fork" to have a forked subagent reply with exactly: forked. Then reply with exactly what it said.'`:
-  stdout `Waiting on the forked agent's reply.`, stderr `› Agent`.
+  stdout `The forked agent is still running, ...` then `forked`, Claude's
+  turn after the fork's report, stderr `› Agent`.
   `drive.ts r rpc conversation/list` holds a second conversation whose
-  `lineage` is `{"parent": "<id>", "title": "Reply with exactly \"forked\"", "agentType": "fork", ...}`.
-  It ends `interrupted`, as Gotchas says.
+  `lineage` is `{"parent": "<id>", "title": "Fork reply test", "agentType": "fork", ...}`.
+  It ends `answered`, as Gotchas says.
 
 ## Contexts
 
@@ -246,10 +247,11 @@ Screen, `packages/sigma/test/screen.test.ts`:
   subscription and 5 minutes for subagents, forks and API keys.
   `claude-idle-compaction` in [Claude](./claude.md) acts on that lifetime.
 - Claude Code 2.1.312 always runs a fork subagent in the background, and its
-  parent usually ends its turn first. Sigma closes the process at the end of
-  the parent's run, so the fork's conversation ends
-  `interrupted: Claude Code ended before the subagent did`, and its usage is
-  not counted (seed `claude-background-work-across-runs`).
+  parent usually ends its turn first. Claude Code goes idle only once the
+  fork has ended, so the parent's run lasts until then, its job report lands
+  in that run, and Claude's turn after it is the run's answer (`fork_wake`,
+  `claude-wake` in [Claude](./claude.md)). The fork's own usage still does not
+  reach sigma.
 
 ## With a real account
 

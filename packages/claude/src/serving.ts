@@ -1,7 +1,8 @@
 // What one `claude.run` does with the frames of the Claude Code process serving it: the frames of its own
-// conversation, turned into commits through the run's task, and the subagents Claude Code starts in it, hosted as
-// conversations of their own. A subagent's frames and callbacks go to its `claude.job` task, which writes its
-// conversation (D1); `transcript.ts` is what both write a conversation with.
+// conversation, turned into commits through the run's task, the jobs Claude Code starts in it, and the reports of the
+// jobs that end while it serves. A subagent is hosted as a conversation of its own, whose `claude.job` task takes its
+// frames and callbacks (D1); a background command is a `claude.command` task. `transcript.ts` is what a run and a job
+// write a conversation with. A run ends when Claude Code goes idle, not at its result (D2).
 import type { HookCallback, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import {
   type Agent,
@@ -16,6 +17,7 @@ import {
 import type { EntryId, JsonObject, NextTaskState, TaskRuntime, Tx } from "@sigma/kernel"
 import type { Usage } from "@sigma/models"
 import { Effect } from "effect"
+import { appendReport, CLAUDE_REPORT_KIND, type JobReport } from "./jobs.ts"
 import type { Job } from "./links.ts"
 import { promptOf, type Said } from "./retell.ts"
 import { ClaudeSessionDoc } from "./session.ts"
@@ -88,6 +90,10 @@ export type ModelUsage = Record<
 export interface Serving extends Callbacks {
   /** Commits what a frame says; a frame that ends the run returns how. */
   readonly handle: (message: SDKMessage) => Effect.Effect<Ended | undefined, unknown>
+  /** Commits a job's end, read while the run serves or held for it (D3). */
+  readonly report: (report: JobReport) => Effect.Effect<void, unknown>
+  /** How the run ends if Claude Code goes idle now: as its newest result said. */
+  readonly ended: Ended | undefined
   readonly postCompact: HookCallback
 }
 
@@ -105,6 +111,8 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
   let partial = ""
   let flushedAt = 0
   let resetQueued = false
+  /** How the newest result ended the turn, which ends the run once Claude Code goes idle. */
+  let ended: Ended | undefined
 
   /** A commit returning nothing, or the checkpoint a moved position records as progress. */
   const commit = (body: (tx: Tx) => Effect.Effect<unknown, unknown>) =>
@@ -181,19 +189,20 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
         resetQueued = true
         return undefined
       }
+      // A job's report is placed, not sent: Claude Code read the job's end itself (D4).
       const prompts = new Map(
         boundary.inbox.items.flatMap((item) =>
-          item.mode === "steer" ? [[item.id, promptOf(item.content as unknown)] as const] : [],
+          item.mode === "steer" && item.entry?.kind !== CLAUDE_REPORT_KIND
+            ? [[item.id, promptOf(item.content as unknown)] as const]
+            : [],
         ),
       )
       const { users } = yield* applyBoundary(tx, boundary, "postTools", runtime.now())
       if (users.length === 0) return undefined
       const live = yield* tx.doc(LiveDoc, conversationId)
       if (live.run?.taskId === runtime.taskId) live.run.inputs.push(...users)
-      process.send(
-        users.flatMap((id) => prompts.get(id) ?? []),
-        "next",
-      )
+      const said = users.flatMap((id) => prompts.get(id) ?? [])
+      if (said.length > 0) process.send(said, "next")
       return undefined
     }),
   )
@@ -262,14 +271,31 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
           return resetQueued ? ({ _tag: "reset" } as const) : undefined
         }
         case "system": {
-          if (message.subtype === "task_started" && message.tool_use_id && message.task_type === "local_agent") {
-            yield* transcript.host({
+          // A turn begins after a result, as Claude Code's follow-up for a job's end or a steer: its own result ends the
+          // run, and until then a process that exits ended the run, not the result before it.
+          if (message.subtype === "init") {
+            ended = undefined
+            return undefined
+          }
+          if (message.subtype === "task_started" && message.tool_use_id) {
+            const frame = {
               task_id: message.task_id,
               tool_use_id: message.tool_use_id,
               description: message.description,
+              background: message.is_backgrounded === true,
               ...(message.subagent_type === undefined ? {} : { subagent_type: message.subagent_type }),
               ...(message.prompt === undefined ? {} : { prompt: message.prompt }),
-            })
+            }
+            // A command is the conversation's job when its own Claude Code started it; one a subagent started is the
+            // subagent's, which the process does not track as a job.
+            if (message.task_type === "local_agent") yield* transcript.host(frame)
+            else if (frame.background && message.parent_task_id === undefined) yield* transcript.hostCommand(frame)
+            return undefined
+          }
+          // Claude Code's turn is over (F1): the run ends as the turn's result said, unless a message sent in it, such
+          // as a steer, is still to come back.
+          if (message.subtype === "session_state_changed" && message.state === "idle") {
+            return process.awaitingReplay ? undefined : ended
           }
           return undefined
         }
@@ -284,6 +310,7 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
           return undefined
         }
         case "result": {
+          // A failed turn ends the run at once: a failed resume sends no idle before its process exits (F4).
           if (message.subtype !== "success" || message.is_error) {
             const errors = "errors" in message ? message.errors : []
             if (!saidAnything && errors.some((error) => SESSION_GONE.test(error))) return { _tag: "gone" }
@@ -291,17 +318,28 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
             return failure(text || `Claude Code stopped: ${message.subtype}`)
           }
           yield* spent(message.modelUsage)
-          if (process.awaitingReplay) return undefined
-          return {
+          ended = {
             _tag: "answered",
             answer: lastEntry,
             turnLimit: (message as { terminal_reason?: string }).terminal_reason === "max_turns",
           }
+          return undefined
         }
         default:
           return undefined
       }
     })
 
-  return { handle, postCompact, ...transcript.callbacks }
+  const report = (made: JobReport) =>
+    Effect.asVoid(commit((tx) => Effect.as(appendReport(tx, conversationId, made, runtime.now()), undefined)))
+
+  return {
+    handle,
+    report,
+    get ended() {
+      return ended
+    },
+    postCompact,
+    ...transcript.callbacks,
+  }
 }

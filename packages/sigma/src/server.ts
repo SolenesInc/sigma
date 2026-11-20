@@ -1,6 +1,15 @@
 // The server a home runs: one Harness over `kernel.sqlite`, served over the home's socket with the protocol
 // (`@sigma/protocol`). Conversations run on the home's providers (`./providers.ts`).
-import { claudeRunTasks, makeClaudeProcesses } from "@sigma/claude"
+import {
+  CLAUDE_REPORT_KIND,
+  claudeRunTasks,
+  ClaudeJobsDoc,
+  appendReport,
+  CONTINUED_ON_ITS_OWN,
+  JOB_KINDS,
+  type JobReport,
+  makeClaudeProcesses,
+} from "@sigma/claude"
 import { CodemodeSandbox } from "@sigma/codemode/sandbox"
 import type { ExecutionEnv } from "@sigma/env"
 import { LocalExecutionEnv } from "@sigma/env/local"
@@ -101,7 +110,7 @@ import { endRun, LastRunEndDoc, switchModel, writeRunEnd } from "./run-end.ts"
 import { committedSignIns } from "./sign-ins.ts"
 import { codeModeTools, sigmaTools } from "./tools/index.ts"
 import { attachedImages } from "./images.ts"
-import { agentTools, type AgentTypes, interruptTree } from "./agents.ts"
+import { agentTools, type AgentTypes, interrupt } from "./agents.ts"
 import { followTreeStatus, type TreeStatuses } from "./status.ts"
 import {
   attachedSkills,
@@ -181,6 +190,14 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         // An idle conversation compacts as a person's compact does, by its `/compact` input; one that is busy again by
         // then refuses it and goes on.
         let compactIdle = (_conversation: ConversationId): Effect.Effect<void, unknown> => Effect.void
+        let recordReports = (
+          _conversation: ConversationId,
+          _reports: ReadonlyArray<JobReport>,
+        ): Effect.Effect<void, unknown> => Effect.void
+        let wakeClaude = (
+          _conversation: ConversationId,
+          _reports: ReadonlyArray<JobReport>,
+        ): Effect.Effect<void, unknown> => Effect.void
         // Opened before the harness, so a server stop closes the live Claude Code processes after the runs (D3).
         const processes = yield* makeClaudeProcesses({
           ...(live.idle === undefined ? {} : { idle: live.idle }),
@@ -188,6 +205,8 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           ...(live.idleCompaction ? { compact: (conversation) => compactIdle(conversation) } : {}),
           ...(live.stop === undefined ? {} : { stop: live.stop }),
           hold: lifetime.hold,
+          wake: (conversation, reports) => wakeClaude(conversation, reports),
+          record: (conversation, reports) => recordReports(conversation, reports),
         })
         const stoppedTooOften = new Map<ConversationId, number>()
         const registry = createRegistry()
@@ -298,10 +317,10 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
                     reachingIn(() => harness, agent.conversationId),
                   ),
                 ),
-              viewDocs: [ReachingDoc],
               runEnded,
               inputWithdrawn,
               runTasks: claudeRuns.runTasks,
+              viewDocs: [ReachingDoc, ClaudeJobsDoc],
               // A prompt queued behind a run that fails runs next, as one queued behind an answer does.
               settings: { afterFailedRun: "continue" },
               readOnly,
@@ -314,6 +333,37 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
             if (handle === undefined) return Effect.fail(new Error(`conversation ${conversation} is gone`))
             return compactInRun(handle, { author: SIGMA, whenBusy: "reject" })
           })
+        // Claude Code woke by itself: its reports reach the conversation as input, which an idle one runs (D3). A busy one
+        // places them at its next step, and they are never sent to Claude Code, which read them itself (D4).
+        wakeClaude = (conversation, reports) =>
+          Effect.flatMap(harness.conversation(conversation), (handle) =>
+            Effect.forEach(
+              reports.length > 0 ? reports : [CONTINUED_ON_ITS_OWN],
+              (report) =>
+                handle === undefined
+                  ? Effect.void
+                  : handle.submit({
+                      type: "input",
+                      content: report.text,
+                      whenBusy: "steer",
+                      // No requestId: Claude Code's task id names a resumed subagent's every end, and nothing retries a wake.
+                      entry: { kind: CLAUDE_REPORT_KIND, ...(report.data === undefined ? {} : { data: report.data }) },
+                    }),
+              { discard: true },
+            ),
+          )
+        // A process closed holding reports no run took: they join the transcript without a run, and a new process is
+        // told them as anything else its session missed.
+        recordReports = (conversation, reports) =>
+          Effect.flatMap(harness.conversation(conversation), (handle) =>
+            handle === undefined
+              ? Effect.void
+              : handle.commit((tx) =>
+                  Effect.forEach(reports, (report) => appendReport(tx, conversation, report, Date.now()), {
+                    discard: true,
+                  }),
+                ),
+          )
         // Read-only, nothing runs, so no run counts a stop.
         if (!readOnly) for (const [id, stops] of yield* countStops(harness)) stoppedTooOften.set(id, stops)
         if (!readOnly) yield* forgetReaching(harness)
@@ -389,11 +439,14 @@ const Handlers = SigmaRpcs.toLayer(
     // The hold is taken before `admit` and handed to an idle wait that starts after it, so the work `admit` admits
     // is never unheld: an idle wait started earlier can return before the work exists.
     // The harness's idle leaves out work under background tasks, such as a subagent and its reporter, so the hold also
-    // waits for every task left; a blocked task waits for a person, not for the server.
+    // waits for every task left; a blocked task waits for a person, not for the server. A Claude Code job lives as long
+    // as its process, whose own hold keeps the server up, and which a stop closes, cutting the job off (D5).
     const quiet = Effect.gen(function* () {
       for (;;) {
         yield* harness.waitForIdle
-        const live = (yield* harness.inspect).tasks.filter((task) => task.state.kind !== "blocked")
+        const live = (yield* harness.inspect).tasks.filter(
+          (task) => task.state.kind !== "blocked" && !JOB_KINDS.has(task.record.kind),
+        )
         if (live.length === 0) return
         yield* Effect.forEach(live, (task) => harness.waitForTask(task.record.id), {
           concurrency: "unbounded",
@@ -854,7 +907,7 @@ const Handlers = SigmaRpcs.toLayer(
           yield* Effect.orDie(
             conversation.commit((tx) => tx.appendEntry(conversation.id, { kind: INTERRUPTED_KIND, data: { author } })),
           )
-          yield* Effect.orDie(interruptTree(harness, conversation.id))
+          yield* Effect.orDie(interrupt(harness, conversation.id))
         }),
       ),
       "approval/resolve": writing(({ conversation: id, approval, author, allow }) =>

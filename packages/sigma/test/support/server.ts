@@ -12,7 +12,7 @@ import {
   type ViewItem,
   type Window,
 } from "@sigma/protocol"
-import type { ClaudeProcessSettings } from "@sigma/claude"
+import { CLAUDE_REPORT_KIND, type ClaudeProcessSettings } from "@sigma/claude"
 import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { type Clock, type Duration, Effect, Exit, Layer, Logger, Scope } from "effect"
 import type { HomeConfig } from "../../src/config.ts"
@@ -206,7 +206,7 @@ export const settled = (count: number) => (watch: ViewWatch) =>
   runEnds(watch.seen()).length >= count &&
   (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run === undefined
 
-/** What the entries say, in order: the user's text, the model's text, and how each run ended. */
+/** What the entries say, in order: the user's text, the model's text, Claude Code's job reports, and how each run ended. */
 export const transcript = (entries: ReadonlyArray<EntryRecord>) =>
   entries.flatMap((entry): Array<string> => {
     const message = entry.model?.[0] as { content?: unknown; stopReason?: string } | undefined
@@ -226,6 +226,7 @@ export const transcript = (entries: ReadonlyArray<EntryRecord>) =>
       return [`run_end: ${end.outcome}${end.message ? ` (${end.message})` : ""}`]
     }
     if (entry.kind === WITHDRAWN_KIND) return [`withdrawn: ${(entry.data as { requestId: string }).requestId}`]
+    if (entry.kind === CLAUDE_REPORT_KIND) return [`report: ${text(message?.content)}`]
     return []
   })
 

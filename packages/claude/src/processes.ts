@@ -1,9 +1,11 @@
 // The live Claude Code processes of a server, one per conversation at most (D1). A run leases its conversation's
-// process; when the run ends well, the process stays live for the next run until it has served no run for the idle
-// period (D2). A live process is a cache of `claude.session`: losing one costs a cold start and nothing else. A live
-// process with a long context compacts shortly before the prompt cache of its last request expires, then closes (D7).
+// process; when the run ends well, the process stays live for the next run while it has a job, then until it has
+// served no run for the idle period (D5, D2 of s-evw1pn). A turn Claude Code begins by itself wakes its conversation
+// (D3). A live process is a cache of `claude.session`: losing one costs a cold start and cuts its jobs off (D6). A
+// live process with a long context compacts shortly before the prompt cache of its last request expires, then closes.
 import type { ConversationId } from "@sigma/kernel"
-import { Clock, Duration, Effect, Exit, Fiber, Scope } from "effect"
+import { Clock, Duration, Effect, Exit, Fiber, Queue, Scope } from "effect"
+import type { JobReport } from "./jobs.ts"
 import type { ClaudeProcess, Selection, Start } from "./process.ts"
 import type { Said } from "./retell.ts"
 
@@ -41,6 +43,16 @@ export interface ClaudeProcessesOptions {
   readonly compact?: (conversation: ConversationId) => Effect.Effect<void, unknown>
   /** What the live processes keep time by: the time of each request and the idle waits. Default the fiber's. */
   readonly clock?: Clock.Clock
+  /**
+   * Hands the conversation the reports its process held when Claude Code began a turn by itself (D3); none when no
+   * job's end came before it. Without it, the turn waits for the conversation's next run.
+   */
+  readonly wake?: (conversation: ConversationId, reports: ReadonlyArray<JobReport>) => Effect.Effect<void, unknown>
+  /**
+   * Commits the reports a process still holds as it closes, which no run or wake took, such as the end of a job a
+   * person stopped while the conversation was idle. Without it they are lost with the process.
+   */
+  readonly record?: (conversation: ConversationId, reports: ReadonlyArray<JobReport>) => Effect.Effect<void, unknown>
 }
 
 /** What a run tells its process first, whether it found one live or starts one. */
@@ -71,7 +83,11 @@ export interface ClaudeProcesses {
     key: string,
     selection: Selection,
     openings: Openings<E>,
-    open: (start: Start) => Effect.Effect<ClaudeProcess, never, Scope.Scope>,
+    /** Starts a process at `start`, which calls `wake` when Claude Code begins a turn by itself. */
+    open: (
+      start: Start,
+      wake: (reports: ReadonlyArray<JobReport>) => void,
+    ) => Effect.Effect<ClaudeProcess, never, Scope.Scope>,
   ) => Effect.Effect<Lease, E, Scope.Scope>
   /** How long a stopped run waits for its process to end the turn. */
   readonly stopWithin: Duration.Input
@@ -98,6 +114,21 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
     const lead = Duration.toMillis(Duration.fromInputUnsafe(IDLE_COMPACTION_LEAD))
     const live = new Map<ConversationId, Live>()
     let closed = false
+    /** The wakes the processes asked for, handed to `options.wake` in order. */
+    const wakes = yield* Queue.unbounded<{
+      readonly conversation: ConversationId
+      readonly reports: ReadonlyArray<JobReport>
+    }>()
+    if (options.wake !== undefined) {
+      const handOver = options.wake
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Effect.flatMap(Queue.take(wakes), ({ conversation, reports }) =>
+            Effect.ignore(handOver(conversation, reports)),
+          ),
+        ),
+      )
+    }
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
         closed = true
@@ -113,28 +144,33 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
         return Scope.close(one.scope, Exit.void)
       })
 
-    /** How long until `one` compacts: its last request's cache expiry less the lead, when its context is long (D7). */
+    /**
+     * How long until `one` compacts: its last request's cache expiry less the lead, when its context is long (D7). None
+     * once that time has passed, as after a job that outlasted it: the cache it would read is gone, and Claude Code may
+     * be starting its own turn for the job's end.
+     */
     const compactsIn = (one: Live) => {
       const last = one.process.lastRequest
       if (options.compact === undefined || last?.ttl === undefined || last.context < IDLE_COMPACTION_THRESHOLD) {
         return undefined
       }
-      return Math.max(0, last.at + TTL_MILLIS[last.ttl] - lead - clock.currentTimeMillisUnsafe())
+      const due = last.at + TTL_MILLIS[last.ttl] - lead - clock.currentTimeMillisUnsafe()
+      return due > 0 ? due : undefined
     }
 
     /**
-     * Makes `one` the conversation's live process until its next lease, its idle period, or its exit. A process with a
-     * long context waits for its compaction instead, past the idle period, and its next lease is its last (D7).
+     * Makes `one` the conversation's live process until its next lease, its exit, or its idle period once its last job
+     * ended (D5). A process with a long context waits for its compaction instead, past the idle period, and its next
+     * lease is its last (D7 of s-evw1pn).
      */
     const keep = (conversation: ConversationId, one: Live) =>
       Effect.gen(function* () {
-        if (closed || one.compacting || Duration.isZero(Duration.fromInputUnsafe(idle))) {
-          return yield* Scope.close(one.scope, Exit.void)
-        }
+        const lingers = !Duration.isZero(Duration.fromInputUnsafe(idle)) || one.process.busy
+        if (closed || one.compacting || !lingers) return yield* Scope.close(one.scope, Exit.void)
         live.set(conversation, one)
-        const due = compactsIn(one)
-        const spell =
-          due === undefined
+        const rest = Effect.suspend(() => {
+          const due = compactsIn(one)
+          return due === undefined
             ? Effect.sleep(idle)
             : Effect.gen(function* () {
                 yield* Effect.sleep(due)
@@ -146,6 +182,8 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
                 // The compaction's run has the idle period to lease the process; one that did not start ends the spell.
                 if (started) yield* Effect.sleep(idle)
               })
+        })
+        const spell = Effect.andThen(one.process.quiet, rest)
         one.idle = yield* Effect.forkIn(
           Effect.andThen(Effect.raceFirst(spell, one.process.exited), close(conversation, one)).pipe(
             Effect.provideService(Clock.Clock, clock),
@@ -183,9 +221,23 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
             const { start, texts } = yield* openings.cold()
             const processScope = yield* Scope.make()
             if (options.hold !== undefined) yield* Scope.provide(options.hold, processScope)
-            const process = yield* Scope.provide(open(start), processScope).pipe(
+            // Claude Code began a turn by itself: the reports go to the conversation, whose run takes the turn (D3).
+            const wake = (reports: ReadonlyArray<JobReport>) => {
+              Queue.offerUnsafe(wakes, { conversation, reports })
+            }
+            const process = yield* Scope.provide(open(start, wake), processScope).pipe(
               Effect.provideService(Clock.Clock, clock),
             )
+            if (options.record !== undefined) {
+              const record = options.record
+              yield* Scope.addFinalizer(
+                processScope,
+                Effect.suspend(() => {
+                  const held = process.takeReports()
+                  return held.length === 0 ? Effect.void : Effect.ignore(record(conversation, held))
+                }),
+              )
+            }
             const one: Live = { key, process, scope: processScope, seen: 0 }
             return { one, texts, live: false, kept: false }
           }),

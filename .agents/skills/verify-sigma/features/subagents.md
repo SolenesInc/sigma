@@ -47,10 +47,13 @@ subagent's requests keep of the prompt cache is in
   input that starts a run.
 - `subagent-followup` wakes an idle subagent with `followup_task`, and each of
   its answers reaches the parent.
-- `subagent-interrupt` stops the parent's run and every run under it with
-  `Esc` or `conversation/interrupt`; the card shows `interrupted`. Stopping
-  just a subagent, from its own conversation, stops it and the subagents
-  under it, not its parent.
+- `subagent-interrupt` stops the parent's run with `Esc` or
+  `conversation/interrupt`, and leaves its subagents working; a second `Esc`,
+  on the idle parent, stops every run under it, and the card shows
+  `interrupted` (`interrupt-idle` in [Interrupt](./interrupt.md)). Stopping
+  just a subagent, from its own conversation, stops its run, not its parent.
+  The subagents Claude Code starts in the background differ: Claude Code
+  stops them with its parent's run.
 - `subagent-exec` makes `sigma exec` without `--auto` deny the calls its
   subagents would ask about, as it does its own; `exec` follows every
   conversation of its tree.
@@ -489,7 +492,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - subagent-limits: a tree runs at most as many subagents at once as config.toml allows
 - subagent-limits: with max_threads 0 in config.toml the root conversation is not offered spawn_agent
 - subagent-limits, child-tools: under the default config a subagent starts a subagent of its own, told only its own task
-- subagent-interrupt: interrupting a conversation stops the runs of its subagents too, and the tree goes idle
+- subagent-interrupt, interrupt-idle: interrupting a conversation's run leaves its subagents working, and interrupting it again, idle, stops them, so the tree goes idle
 - subagent-spawn, subagent-model: conversation/list shows each subagent with its lineage, on its parent's model or the one its spawn_agent names, and an unlisted model fails the call
 - subagent-answer: a subagent's answer reaches its idle parent as input that starts a run, so the parent acts on it
 
@@ -517,6 +520,8 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - subagent-claude: a call a Claude subagent wants to make waits for a person in the subagent's conversation
 - subagent-interrupt: stopping a Claude subagent stops only it, and its parent's run carries on
 - subagent-interrupt: stopping a run ends the Claude subagents working under it
+- subagent-interrupt, claude-job-report: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, and its report joins the transcript when the idle process closes
+- claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run
 - subagent-spawn: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own
 - subagent-claude: a Claude subagent that hands back its report answers with the report, not Claude Code's placeholder
 - subagent-claude: a Claude subagent's approval waits and is answered in its own job, which writes its conversation instead of its parent's run
