@@ -133,6 +133,10 @@ Steps:
 - `agy` 1.5.13 fires its Stop hook at the end of a turn it began by itself and
   of an ordinary one, but not of a turn ended by a denial or `session/cancel`:
   sigma ends a prompted turn at the prompt's result, and a wake at the hook.
+- The Stop hook reaches sigma through a FIFO, not `agy`'s stdout, so it can
+  arrive before the updates `agy` wrote ahead of it. The hook holds `agy`, and
+  sigma handles the Stop at the answer to a `sigma/place_stop` request (-32601);
+  a wake run that never ends points here.
 - `usage_update` says only the context's size; a wake turn has no prompt result,
   so what it spent is not counted.
 - An idle `Esc` on a job runs `session/cancel`, which in a turn would also

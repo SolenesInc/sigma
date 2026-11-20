@@ -8,7 +8,10 @@ an `agy` instance's account. Measured against `agy` 1.5.13.
   process's exit with the tail of its stderr. Sigma tells `agy` it has no file system and no terminal, so `agy` uses
   its own.
 - `src/hook.ts`: the Stop hook sigma gives every session, a folder of its own passed as `additionalDirectories`, whose
-  `.agents/hooks.json` runs a script that writes the session id of each Stop to a FIFO the adapter reads. `agy` fires
+  `.agents/hooks.json` runs a script that writes the session id of each Stop to a FIFO the adapter reads, and then holds
+  `agy` until the adapter is done with that Stop. The FIFO is not `agy`'s stdout and can be read first, so the
+  adapter asks `agy` a method it does not know (`sigma/place_stop`) and handles the Stop at the answer, which follows
+  everything `agy` said before it; the hold keeps what `agy` says after the Stop from coming before that answer. `agy` fires
   Stop at the end of an ordinary turn and of one it began by itself, but not of a turn ended by a denial or
   `session/cancel`, and its own subagents' Stops carry their own session ids.
 - `src/process.ts`: one `agy` process as the hosted run's connection. It opens a fresh session (`session/new`, with

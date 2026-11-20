@@ -9,7 +9,9 @@
 //                                 tool's is allowed at once, since its tool task asks (F18)
 //   tool_call_update completed    results; for a call still in_progress at a turn's end, that job's end (D12)
 //   a prompt's result             what the turn spent; with no prompt left outstanding, the turn is over
-//   Stop hook for the session     the end of a turn `agy` began by itself, which no prompt's result ends (D12)
+//   Stop hook for the session     the end of a turn `agy` began by itself, which no prompt's result ends (D12), at
+//                                 the answer to a request sent once the Stop is read, which follows all `agy` said
+//                                 before it (`hook.ts`)
 //   the first update outside a turn that is not a job's end    woke
 // A turn ended by a denial or by `session/cancel` fires no Stop (measured on 1.5.13), so a prompt's result is a
 // turn-over too; the Stop hook is what ends a wake.
@@ -36,7 +38,7 @@ import type { ToolCall, Usage } from "@sigma/models"
 import { Effect } from "effect"
 import { type Acp, type Answer, type Incoming, INITIALIZE, type Json, SIGN_IN, signedOut, startAcp } from "./acp.ts"
 import { type BridgeCall, type BridgeOptions, openBridge } from "./bridge.ts"
-import { openStopHook } from "./hook.ts"
+import { openStopHook, type Stop } from "./hook.ts"
 
 /** How an `agy` instance is started: its executable, environment and extra arguments to `agy acp`. */
 export interface AgySettings {
@@ -51,6 +53,12 @@ const CLOSE_PATIENCE_MS = 5_000
 
 /** The name `agy` is shown by. */
 const NAME = "agy"
+
+/**
+ * What a read Stop asks `agy`, to learn where the Stop falls in what it says: a method `agy` does not know, which it
+ * answers at once with -32601, also while it waits for its Stop hook (measured on 1.5.13).
+ */
+const PLACE_STOP = "sigma/place_stop"
 
 /** The prefix `agy` gives the tools of sigma's MCP server, which it names `sigma` (F17). */
 const OWN_TOOL = "mcp_sigma_"
@@ -99,7 +107,7 @@ type Call = {
 
 type Event =
   | { readonly type: "acp"; readonly item: Incoming }
-  | { readonly type: "stop"; readonly session: string }
+  | { readonly type: "stop"; readonly stop: Stop }
   | { readonly type: "exit"; readonly why: string }
   | { readonly type: "prompt"; readonly id: string; readonly said: ReadonlyArray<Said> }
   | { readonly type: "decided"; readonly request: number | string; readonly allow: boolean | undefined }
@@ -184,13 +192,19 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       events.close()
     }
     let closing = false
+    /** Whether the session opened: undefined while it opens. */
+    let isOpen: boolean | undefined
 
     void (async () => {
       for await (const item of acp.incoming) events.push({ type: "acp", item })
       events.push({ type: "exit", why: await acp.exited })
     })()
     void (async () => {
-      for await (const stopped of hook.stops) events.push({ type: "stop", session: stopped })
+      for await (const stop of hook.stops) {
+        // A Stop while the session opens ends no turn sigma knows of, and agy may wait on it to answer the open.
+        if (isOpen === undefined) stop.done()
+        else events.push({ type: "stop", stop })
+      }
     })()
 
     /** Opens the session; the id of the request whose answer ends `agy`'s replay of a loaded session (F22). */
@@ -226,6 +240,7 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
     async function* frames(): AsyncGenerator<Frame> {
       const { failure, replayEnds } = await open()
       opened(failure)
+      isOpen = failure === undefined
       if (failure !== undefined) {
         yield failure
         acp.kill()
@@ -248,6 +263,8 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       let responses = 0
       let positions = 0
       let spent = { ...ZERO }
+      /** The Stops of the session read and not yet placed, by the id of the request that places each. */
+      const placing = new Map<number, Stop>()
       /** The permission requests not answered yet, by their ids. */
       const asking = new Map<number | string, { readonly params: Json; readonly aborted: AbortController }>()
 
@@ -505,6 +522,15 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
         switch (event.type) {
           case "acp": {
             const item = event.item
+            const placed = item.type === "answer" ? placing.get(item.id) : undefined
+            if (item.type === "answer" && placed !== undefined) {
+              // All `agy` said before the Stop is read: the end of a turn it began by itself. One sigma prompted
+              // ends at its result, which `agy` sends once the hook lets it go on.
+              placing.delete(item.id)
+              if (turn && prompts.size === 0) yield* turnOver(false)
+              placed.done()
+              continue
+            }
             if (replaying !== undefined) {
               if (item.type === "answer" && item.id === replaying) replaying = undefined
               continue
@@ -544,8 +570,10 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
             break
           }
           case "stop":
-            // The end of a turn agy began by itself. One sigma prompted ends at its result, which follows.
-            if (event.session === session && turn && prompts.size === 0) yield* turnOver(false)
+            // agy waits in the hook until the Stop is placed. A subagent's Stop ends nothing of the session's.
+            if (event.stop.session === session)
+              placing.set(acp.request(PLACE_STOP, { sessionId: session }).id, event.stop)
+            else event.stop.done()
             break
           case "prompt": {
             const sent = acp.request("session/prompt", { sessionId: session, prompt: promptOf(event.said) })
