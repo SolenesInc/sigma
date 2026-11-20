@@ -22,6 +22,8 @@ import {
   runEnds,
   runningServer,
   servingUntilIdle,
+  idleGrace,
+  stillServing,
   settled,
   submit,
   tempHome,
@@ -342,7 +344,14 @@ test("claude-idle-compaction, claude-idle-release: a short context, or claude_id
 test("server-idle-exit, claude-idle-release: a live Claude Code process keeps the server up after its client leaves, until the process closes", async () => {
   using claude = new FakeClaude("text")
   const home = tempHome()
-  const served = await servingUntilIdle(home, "500 millis", [], { claude: claude.options, claudeIdle: "3 seconds" })
+  const clock = await testClock()
+  const grace = idleGrace()
+  const served = await servingUntilIdle(home, "1 hour", [], {
+    claude: claude.options,
+    claudeIdle: "3 seconds",
+    clock,
+    idleClock: grace.clock,
+  })
   const client = await RawClient.connect(home.socket)
   // The client holds the server from its first call until it leaves, so only the process's hold is left to measure.
   client.watch("status/watch")
@@ -350,13 +359,13 @@ test("server-idle-exit, claude-idle-release: a live Claude Code process keeps th
   await submit(client, conversation, "Reply with exactly: fixture text ok")
   const view = watchView(client, conversation)
   await view.until(settled(1))
-  const answered = performance.now()
   client.close()
+  // Without the process's hold the server would stop as the grace passes, closing the process with it.
+  grace.pass()
+  await stillServing(home)
+  expect(claude.spawns()).toHaveLength(1)
+  await advance(clock, "3 seconds")
   await deadline(served.exited, DEADLINE, "server exit")
-  // Without the process's hold the server would have gone 500 ms after the client did, closing the process with it. The
-  // hold's 3 s start on the server when the run ends, before this client sees it, so the bound leaves room for that lag:
-  // with a 500 ms hold and a 500 ms bound, a busy machine (load average 28) measured 495 ms.
-  expect(performance.now() - answered).toBeGreaterThanOrEqual(2000)
   await claude.logged((fake) => fake.exited(0))
   rmSync(home.dir, { recursive: true, force: true })
 })

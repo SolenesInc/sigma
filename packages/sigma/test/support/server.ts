@@ -161,6 +161,7 @@ export const servingUntilIdle = async (
           providers: testProviders(home, script, options),
           ...(options.claudeIdle === undefined ? {} : { claudeIdle: options.claudeIdle }),
           ...(options.claudeStop === undefined ? {} : { claudeStop: options.claudeStop }),
+          ...(options.clock === undefined ? {} : { clock: options.clock }),
         }).pipe(Layer.provide(stderr.layer)),
       ),
       Effect.scoped,
@@ -198,6 +199,17 @@ export const hold = () => {
     release: () => writeFileSync(path, ""),
     [Symbol.dispose]: () => rmSync(dir, { recursive: true, force: true }),
   }
+}
+
+/**
+ * Answers once from a server still serving `home`: a server that took a passed idle grace for idle has begun to stop
+ * before this round trip ends.
+ */
+export const stillServing = async (home: Home) => {
+  const client = await RawClient.connect(home.socket)
+  const reply = await client.call("conversation/list")
+  client.close()
+  if (reply.error !== undefined) throw new Error(`the server stopped serving: ${JSON.stringify(reply.error)}`)
 }
 
 /** Reads `stream` until what it printed includes `text`; returns all it printed. */

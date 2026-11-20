@@ -8,6 +8,7 @@ import { DEADLINE, deadline, errorTag, hangUpMidAnswer, RawClient } from "./supp
 import {
   hold,
   idleGrace,
+  stillServing,
   person,
   runEnds,
   runningServer,
@@ -33,18 +34,6 @@ const opened = (watch: ViewWatch) => watch.until(() => true)
 const speaking = (watch: ViewWatch) => {
   const live = watch.view().docs["pi.live"] as { generation?: { message?: { content?: unknown[] } } } | undefined
   return (live?.generation?.message?.content?.length ?? 0) > 0
-}
-
-/**
- * Answers once from a server still serving `home`: a server that took the passed grace for idle has begun to stop
- * before this round trip ends.
- */
-const stillServing = async (home: { readonly socket: string }) => {
-  const client = await RawClient.connect(home.socket)
-  expect(
-    (await client.call("initialize", { client: "test", version: "0", protocol: PROTOCOL_VERSION })).result,
-  ).toBeDefined()
-  client.close()
 }
 
 test("answer-wire, answer-shared: every client of a conversation sees the prompt, the answer and how the run ended", async () => {
