@@ -308,7 +308,7 @@ person `--timeout 300000`, and keep `evidence/`.
   Run `drive.ts r2 serve` and
   `drive.ts r2 rpc providers/list '{}' --timeout 60000`: `claude` is `ready`,
   and `claude-alt` is `signed_out`. Where
-  Claude Code is signed in by its environment, as in a hosted session,
+  Claude Code is signed in by its environment, as in a cloud session that runs sigma,
   `claude-alt` is `ready` too; report that and skip this step. Run
   `drive.ts r2 tui start login claude-alt` and
   `drive.ts r2 tui wait --timeout 20000 http`: Claude Code's own sign-in asks

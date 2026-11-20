@@ -1,79 +1,38 @@
 # @sigma/claude
 
-Claude Code as a run task on `@sigma/harness`. A conversation whose model a Claude Code instance serves runs each run as
-the `claude.run` task, served by the conversation's Claude Code process, started through the Claude Agent SDK. The
-process stays live after a run for the conversation's next one, and closes after 30 minutes without a run. Claude Code
-keeps its own session and runs its own tools; sigma's transcript stays the truth, and every frame Claude Code sends
-becomes a commit.
+Claude Code as a harness of the hosted run (`@sigma/hosted`): the only package that imports the Claude Agent SDK.
+`claudeAdapter(settings)` is the adapter, whose runs are `claude.run` tasks; `claudeAccount` is a Claude Code
+instance's account.
 
 A conversation on a target other than `local` runs in member mode: Claude Code's own tools, settings, connectors and
 MCP servers are off, and it acts only through sigma's tools, served on the in-process `sigma` MCP server with
-`alwaysLoad`, each call run as a `pi.tool` task of the run, on the target. Its processes use the target's own Claude
-Code folders, which `ClaudeRunOptions.member.folder` names, and their system prompt's `append` is the conversation's
-prompt sections, rendered through its env. `member.notice` says what the model must read of its target, before each
-run and after each of sigma's calls.
+`alwaysLoad`. Each call, `mcp__sigma__<name>`, is framed under sigma's name and handed to the run's `runOwn`, which
+runs it as a `pi.tool` task of the run, on the target. Its processes use the target's own Claude Code folders, and
+their system prompt's `append` is the conversation's prompt sections, rendered through its env (`@sigma/hosted`'s
+member mode).
 
-`claudeRunTasks(options)` returns the task definitions (`claude.run`, `claude.job` and `claude.job-anchor`), to install
-in the registry, and the `RunTasks` to open the
-harness with, which choose `claude.run` for a model whose provider `options.settings` knows. `options.processes` is the
-server's `makeClaudeProcesses`, opened with the idle period and the hold that keeps the server up while a process is
-live.
-
-- `src/run.ts`: `claude.run`. An invocation starts by recording, as interrupted, the calls a previous process left
-  without results, which only a crash or a stop leaves; a stop is not counted as a restart. It then leases the conversation's live process, told only the entries after the newest one it has seen,
-  when the process key matches and those entries are continuable. Otherwise it starts a process (a cold start) where
-  Claude Code's session starts: a resume at the conversation's position, a fork of it when the position belongs to the
-  conversation this one forked from, or a fresh session when there is none, another provider's Claude Code held it, or
-  a reset, a compaction or another model's answer came after it. A fresh session is named with the conversation's title, which
-  `ClaudeRunOptions.title` gives, so Claude Code does not ask a model for one. A live process that exited while it
-  waited costs a cold start. A session Claude Code no longer has, or no longer holds the position of (as after its
-  compaction), is dropped and the run starts over in a fresh one, once. A run ends at Claude Code's idle, and one that answers
-  leaves its process live, kept while its jobs work; one that fails or hits the turn limit closes it, cutting its jobs
-  off. A run woken by Claude Code's own turn sends it nothing and serves that turn. A stopped run interrupts Claude
-  Code's turn and leaves the process live once Claude Code ends that turn, within `STOP_TIMEOUT` (5 s), with nothing
-  left queued or running; otherwise it closes it. The live process's session holds the stop, so the next run on it is
-  not told what the stop recorded.
-- `src/processes.ts`: the server's live processes, at most one per conversation: the lease, the idle release after
-  `IDLE_RELEASE` (30 minutes), the release of a process that exited while it waited, the wake of a conversation whose
-  process began a turn by itself, and closing them all when the server stops. A process with a job working is held
-  until the job ends, and its idle release counts from then. Each process holds the server's lifetime from its start to its close. Nothing about them is durable: a
-  restart cold starts every conversation from `claude.session`.
 - `src/process.ts`: one Claude Code process, started through the Claude Agent SDK at a resume, a fork or a fresh
-  session. It owns the query, the inbox its messages go through, the frame pump, the callbacks Claude Code makes, its
+  session. It owns the query, the inbox its messages go through, the reader, the callbacks Claude Code makes, its
   session id across `/clear`, its usage (`modelUsage` reports running totals of the process's own, so a second run
   counts only what came after the first), and the tasks Claude Code started and has not ended. Its reader observes
-  every frame as it arrives and routes it: a subagent's frames, by `parent_tool_use_id`, and its end go to its job,
-  and its callbacks, by `agent_id`, to its job's task; the rest go to the run `serve` serves, or wait for the next
-  run while it serves none, when a main-loop callback fails. Its jobs end with it. `processKey` names what a process is spawned with and cannot change: the provider,
-  executable, environment, arguments, directory, target, turn limit, root conversation, and in member mode the tools
-  sigma serves it. In member mode it starts with only `ToolSearch` of Claude Code's tools, `strictMcpConfig`, no
-  setting sources, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, and `MCP_TOOL_TIMEOUT` past sigma's longest bash timeout, so a
-  tool's own limit is the one the model sees.
-- `src/serving.ts`: what one run does with the frames of its own conversation. Steers placed at a round of results are
-  sent with priority `next`. Claude Code's compaction is kept as a compaction entry holding its summary, `/clear` as a
-  reset.
-- `src/transcript.ts`: how a conversation the process writes to is committed, through its own task: the run's, or a
-  job's. A call Claude Code makes is committed as an assistant entry and a live slot before its PreToolUse hook is
-  answered; a call it would ask about waits on `sigma.approvals`, keyed `<task>/<call>`, where the first answer
-  counts. In member mode a call of sigma's tools, `mcp__sigma__<name>`, is committed under sigma's name when Claude
-  Code makes it over MCP, with a `pi.tool` task that runs it, asks a person when the tool asks, and commits its result. Each subagent Claude Code starts is hosted as a conversation of
-  its own: a run's are owned by a background `claude.job-anchor` in its conversation, so the run can end while they
-  work, and a subagent's own by its job, so stopping it stops them too.
-- `src/job.ts`: `claude.job`, the run of a hosted subagent's conversation. It commits its subagent's frames and
-  answers its callbacks through itself, not through the run that started it, until Claude Code says the subagent
-  ended or its process ends; and `claude.command`, a background command's task in its parent. A job its process
-  outlived ends `cut off` and appends that report to its parent; an abort stops a live job through `stopTask`.
-- `src/jobs.ts`: the `claude.jobs` document, each background job of a conversation as its parent knows it, and the
-  `claude.report` entry that tells the parent a job ended.
+  every message as it arrives, routes it and turns it into the hosted run's frames: a subagent's messages, by
+  `parent_tool_use_id`, and its end go to its job, and its callbacks, by `agent_id`, to its job's task; a background
+  command the main loop started is a job too, which only its end reaches. The rest go to the run `serve` serves, or
+  wait for the next run while it serves none. A `result` says what the turn spent and how it ended, and Claude Code's
+  idle signal (`session_state_changed`, which `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` turns on) ends the run, unless a
+  message the process was sent has not come back yet. A background job's end is its parent's report, handed to the run
+  served or held for the next one; a turn Claude Code begins while no run serves wakes the conversation. PreToolUse and `canUseTool` become the run's `beforeRun` and `approve`, and
+  PostCompact its `compacted`. The conversation's instructions, after the sections of the extensions Claude Code is
+  offered, are appended to Claude Code's own system prompt. `processKey` (in
+  `@sigma/hosted`) names what a process is spawned with, in member mode the tools sigma serves it too. In member mode
+  it starts with only `ToolSearch` of Claude Code's tools, `strictMcpConfig`, no setting sources,
+  `ENABLE_CLAUDEAI_MCP_SERVERS=false`, and `MCP_TOOL_TIMEOUT` past sigma's longest bash timeout, so a tool's own limit
+  is the one the model sees; a run it fails signed out is told how a target signs in.
 - `src/environment.ts`: how every Claude Code process starts, a run's, the account probe's and `claude auth`'s: the
   server's environment without the variables a host Claude Code session sets, then the provider instance's `env`. A
   run's settings also turn tool search on where the person's Claude Code settings leave it at `auto`.
-- `src/session.ts`: `claude.session`, the conversation's position in Claude Code's session: the session, the newest
-  message sigma committed, and the newest entry Claude Code was shown. Rewindable, so a fork sees it as of its fork.
-- `src/retell.ts`: what a session is told of the conversation: the entries a resumed one missed, or, for a fresh one,
-  the conversation so far within about 64,000 characters.
-- `src/links.ts`: a job as its process and its task share it in memory: its frames in order, its callbacks, how it
-  ended and how to stop it.
+- `src/account.ts`: how a Claude Code instance is signed in and which models it offers, from a probe of Claude Code,
+  and signing in and out with its own commands.
 
 The tests in `test/` drive `claude.run` through a Harness with sigma's fake `claude` replaying `fixtures/claude`;
 `packages/sigma/test/claude.test.ts` drives it over the wire.

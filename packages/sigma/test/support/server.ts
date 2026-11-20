@@ -12,7 +12,8 @@ import {
   type ViewItem,
   type Window,
 } from "@sigma/protocol"
-import { CLAUDE_REPORT_KIND, type ClaudeProcessSettings } from "@sigma/claude"
+import type { ClaudeProcessSettings } from "@sigma/claude"
+import { REPORT_KIND } from "@sigma/hosted"
 import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { type Clock, type Duration, Effect, Exit, Layer, Logger, Scope } from "effect"
 import type { HomeConfig } from "../../src/config.ts"
@@ -226,7 +227,7 @@ export const transcript = (entries: ReadonlyArray<EntryRecord>) =>
       return [`run_end: ${end.outcome}${end.message ? ` (${end.message})` : ""}`]
     }
     if (entry.kind === WITHDRAWN_KIND) return [`withdrawn: ${(entry.data as { requestId: string }).requestId}`]
-    if (entry.kind === CLAUDE_REPORT_KIND) return [`report: ${text(message?.content)}`]
+    if (entry.kind === REPORT_KIND) return [`report: ${text(message?.content)}`]
     return []
   })
 

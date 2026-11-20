@@ -100,6 +100,9 @@ it into a run that serves Claude Code's own follow-up.
 - `claude-system-prompt` keeps Claude Code's own system prompt and appends the
   conversation's start instructions to it; Claude Code's commands see
   `SIGMA_ROOT_CONVERSATION`.
+- `claude-offered-sections` [kernel] puts the prompt sections of the
+  extensions Claude Code is offered as its own tools before the conversation's
+  instructions. Sigma offers it none yet, so nothing is added today.
 - `claude-model` hands Claude Code the conversation's model and effort. After
   a switch to another Claude model or effort, the next run switches the live
   process (`set_model`, then `apply_flag_settings` with `effortLevel`) before
@@ -425,6 +428,7 @@ Package, `packages/claude/test/claude.test.ts`:
 - claude-resume: a fork of a Claude conversation forks Claude Code's session at the fork's position
 - claude-resume: what each run spent is added to the conversation's usage, once, when each run starts its own process
 - claude-switch, claude-live: switching to Claude from another provider retells the conversation to a new Claude Code session
+- claude-offered-sections: Claude Code's system prompt gets the sections of the extensions it is offered, before the instructions, and no others
 
 ## Gotchas
 
@@ -567,6 +571,6 @@ sonnet (claude-sonnet-...)`, and the answer `two` from a
   which starts the server with that key: exit 1 and Claude Code's own message,
   today `Invalid API key · Fix external API key`. `drive.ts r2 down`.
 
-Where Claude Code is signed in by its environment, as in a hosted session, it
+Where Claude Code is signed in by its environment, as in a cloud session that runs sigma, it
 stays `ready` after `sigma logout claude`, and `^L` has no Claude sign-in to
 start.

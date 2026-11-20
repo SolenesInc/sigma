@@ -1,19 +1,19 @@
-// The live Claude Code processes of a server, one per conversation at most (D1). A run leases its conversation's
+// The live harness processes of a server, one per conversation at most (D1). A run leases its conversation's
 // process; when the run ends well, the process stays live for the next run while it has a job, then until it has
-// served no run for the idle period (D5, D2 of s-evw1pn). A turn Claude Code begins by itself wakes its conversation
-// (D3). A live process is a cache of `claude.session`: losing one costs a cold start and cuts its jobs off (D6). A
+// served no run for the idle period (D5, D2 of s-evw1pn). A turn the harness begins by itself wakes its conversation
+// (D3). A live process is a cache of `hosted.session`: losing one costs a cold start and cuts its jobs off (D6). A
 // live process with a long context compacts shortly before the prompt cache of its last request expires, then closes.
 import type { ConversationId } from "@sigma/kernel"
 import { Clock, Duration, Effect, Exit, Fiber, Queue, Scope } from "effect"
+import type { HostedProcess, Selection, Start } from "./adapter.ts"
 import type { JobReport } from "./jobs.ts"
-import type { ClaudeProcess, Selection, Start } from "./process.ts"
 import type { Said } from "./retell.ts"
 
 /** How long a live process waits for its conversation's next run; Victor chose it, and t3code uses the same (D2). */
 export const IDLE_RELEASE: Duration.Input = "30 minutes"
 
 /**
- * How long a stopped run waits for Claude Code to end its turn before closing the process (D5). A real Claude Code ends
+ * How long a stopped run waits for the harness to end its turn before closing the process (D5). A real Claude Code ends
  * it 3 to 18 ms after the interrupt, during text, a call, a call waiting for approval and a subagent (F14); this is past
  * any of those, so only a process that ignores the interrupt reaches it.
  */
@@ -29,7 +29,7 @@ export const IDLE_COMPACTION_LEAD: Duration.Input = "2 minutes"
 /** The smallest context an idle conversation compacts; Claude Code's own idle compaction and t3code use it (F10). */
 export const IDLE_COMPACTION_THRESHOLD = 200_000
 
-export interface ClaudeProcessesOptions {
+export interface HostedProcessesOptions {
   /** Default `IDLE_RELEASE`; 0 closes each process when its run ends. */
   readonly idle?: Duration.Input
   /** Default `STOP_TIMEOUT`. */
@@ -44,8 +44,9 @@ export interface ClaudeProcessesOptions {
   /** What the live processes keep time by: the time of each request and the idle waits. Default the fiber's. */
   readonly clock?: Clock.Clock
   /**
-   * Hands the conversation the reports its process held when Claude Code began a turn by itself (D3); none when no
-   * job's end came before it. Without it, the turn waits for the conversation's next run.
+   * Hands the conversation the reports its process held when the harness began a turn by itself (D3), or the report
+   * that it continued on its own when no job's end came before it. Without it, the turn waits for the conversation's
+   * next run.
    */
   readonly wake?: (conversation: ConversationId, reports: ReadonlyArray<JobReport>) => Effect.Effect<void, unknown>
   /**
@@ -64,7 +65,7 @@ export interface Openings<E> {
 }
 
 export interface Lease {
-  readonly process: ClaudeProcess
+  readonly process: HostedProcess
   readonly texts: ReadonlyArray<Said>
   /** The process was live before this run: it served an earlier one. */
   readonly live: boolean
@@ -72,7 +73,7 @@ export interface Lease {
   readonly keep: (seen: number) => void
 }
 
-export interface ClaudeProcesses {
+export interface HostedProcesses {
   /**
    * The conversation's live process when its key is `key`, it can switch to `selection`, and `openings.live` says it
    * can go on; otherwise a new one `open` starts where `openings.cold` says, after closing the live one. The lease ends
@@ -83,11 +84,11 @@ export interface ClaudeProcesses {
     key: string,
     selection: Selection,
     openings: Openings<E>,
-    /** Starts a process at `start`, which calls `wake` when Claude Code begins a turn by itself. */
+    /** Starts a process at `start`, which calls `wake` when the harness begins a turn by itself. */
     open: (
       start: Start,
       wake: (reports: ReadonlyArray<JobReport>) => void,
-    ) => Effect.Effect<ClaudeProcess, never, Scope.Scope>,
+    ) => Effect.Effect<HostedProcess, never, Scope.Scope>,
   ) => Effect.Effect<Lease, E, Scope.Scope>
   /** How long a stopped run waits for its process to end the turn. */
   readonly stopWithin: Duration.Input
@@ -95,7 +96,7 @@ export interface ClaudeProcesses {
 
 type Live = {
   readonly key: string
-  readonly process: ClaudeProcess
+  readonly process: HostedProcess
   readonly scope: Scope.Closeable
   seen: number
   idle?: Fiber.Fiber<void>
@@ -106,7 +107,7 @@ type Live = {
 const TTL_MILLIS = { "5m": 5 * 60_000, "1h": 60 * 60_000 } as const
 
 /** The server's live processes; closing the scope closes every one, as a server stop does (D3). */
-export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
+export const makeHostedProcesses = (options: HostedProcessesOptions = {}) =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope
     const clock = options.clock ?? (yield* Clock.Clock)
@@ -146,7 +147,7 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
 
     /**
      * How long until `one` compacts: its last request's cache expiry less the lead, when its context is long (D7). None
-     * once that time has passed, as after a job that outlasted it: the cache it would read is gone, and Claude Code may
+     * once that time has passed, as after a job that outlasted it: the cache it would read is gone, and the harness may
      * be starting its own turn for the job's end.
      */
     const compactsIn = (one: Live) => {
@@ -203,7 +204,7 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
         return one
       })
 
-    const lease: ClaudeProcesses["lease"] = (conversation, key, selection, openings, open) =>
+    const lease: HostedProcesses["lease"] = (conversation, key, selection, openings, open) =>
       Effect.map(
         Effect.acquireRelease(
           Effect.gen(function* () {
@@ -221,7 +222,7 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
             const { start, texts } = yield* openings.cold()
             const processScope = yield* Scope.make()
             if (options.hold !== undefined) yield* Scope.provide(options.hold, processScope)
-            // Claude Code began a turn by itself: the reports go to the conversation, whose run takes the turn (D3).
+            // The harness began a turn by itself: the reports go to the conversation, whose run takes the turn (D3).
             const wake = (reports: ReadonlyArray<JobReport>) => {
               Queue.offerUnsafe(wakes, { conversation, reports })
             }
@@ -254,5 +255,5 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
         }),
       )
 
-    return { lease, stopWithin: options.stop ?? STOP_TIMEOUT } satisfies ClaudeProcesses
+    return { lease, stopWithin: options.stop ?? STOP_TIMEOUT } satisfies HostedProcesses
   })

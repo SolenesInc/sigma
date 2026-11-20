@@ -1,8 +1,9 @@
 // One Claude Code process, started through the Claude Agent SDK: its query, the inbox it reads its messages from, the
-// reader that observes each frame it sends as it arrives and routes it, and the callbacks Claude Code makes. A job's
-// frames and callbacks go to the job (D1, F7); the rest go to the run it serves, or wait for the next run while it
-// serves none. A job's end it reads while no run serves waits as a report, and a turn Claude Code starts by itself
-// wakes the conversation (D3). What a run does with its frames is `serving.ts`, what a job does is `job.ts`.
+// reader that observes each message it sends as it arrives, routes it and turns it into the hosted run's frames, and
+// the callbacks Claude Code makes. A job's frames and callbacks go to the job (D1, F7); the rest go to the run it
+// serves, or wait for the next run while it serves none. A job's end it reads while no run serves waits as a report,
+// and a turn Claude Code starts by itself wakes the conversation (D3). What a run and a job do with their frames is
+// `@sigma/hosted`.
 import {
   createSdkMcpServer,
   type EffortLevel,
@@ -14,25 +15,39 @@ import {
   type SDKUserMessage,
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk"
-import type { Agent } from "@sigma/harness"
-import type { Usage } from "@sigma/models"
+import {
+  type Adapter,
+  type Callbacks,
+  DENIED,
+  type Ended,
+  ENDED_WITH_PROCESS,
+  failure,
+  type Frame,
+  type HostedProcess,
+  Inbox,
+  Job,
+  type JobEnd,
+  type JobReport,
+  type LastRequest,
+  makeServing,
+  ownTools,
+  type OwnResult,
+  type Part,
+  endReport,
+  type ProcessConfig,
+  type RunContext,
+  type Said,
+  type Selection,
+  selectionOf,
+  type Serving,
+  type ServingProcess,
+  type Start,
+  textOf,
+} from "@sigma/hosted"
+import type { ToolCall, Usage } from "@sigma/models"
 import { Cause, Clock, Deferred, type Duration, Effect, Exit, Option, Semaphore } from "effect"
 import { z } from "zod"
 import { claudeEnvironment, toolSearchSettings } from "./environment.ts"
-import { Inbox } from "./inbox.ts"
-import { ENDINGS, type JobReport, reportOf, summaryOf } from "./jobs.ts"
-import { ENDED_WITH_PROCESS, Job, type JobEnd } from "./links.ts"
-import type { Said } from "./retell.ts"
-import {
-  type Ended,
-  failure,
-  makeServing,
-  type ModelUsage,
-  type RunContext,
-  type Serving,
-  type ServingProcess,
-} from "./serving.ts"
-import type { Callbacks } from "./transcript.ts"
 
 /** How a Claude Code instance is started: its executable, environment and extra arguments. */
 export interface ClaudeProcessSettings {
@@ -42,39 +57,8 @@ export interface ClaudeProcessSettings {
   readonly args?: ReadonlyArray<string>
 }
 
-/** Where a process starts in Claude Code's session. */
-export type Start =
-  /** A new session, named `title` so Claude Code does not ask a model for a name. */
-  | { readonly _tag: "fresh"; readonly session: string; readonly title?: string }
-  | { readonly _tag: "resume"; readonly session: string; readonly at: string }
-  /** A fork of a conversation whose parent held the session: a new session continuing the parent's at `at`. */
-  | { readonly _tag: "fork"; readonly from: string; readonly at: string; readonly session: string }
-
-/** What a process is started with. */
-export type ProcessConfig = {
-  readonly agent: Agent
-  readonly settings: ClaudeProcessSettings
-  /** The id of the conversation people started, for the `SIGMA_ROOT_CONVERSATION` its commands see. */
-  readonly rootConversation: string
-  /** A remote conversation's process, in member mode (D9); absent for a local conversation's. */
-  readonly member?: MemberProcess
-}
-
-/**
- * What a process in member mode starts with: the target's Claude Code folders (D10), and the system prompt's `append`,
- * the conversation's sections as sigma renders them (D11).
- */
-export type MemberProcess = {
-  readonly folder: { readonly config: string; readonly cwd: string }
-  /** Rendered when a process starts, so a live process costs no render. */
-  readonly append: Effect.Effect<string | undefined>
-}
-
-/**
- * Whether a conversation with this agent runs in member mode: its tools act on a target that is not the server's
- * machine, so Claude Code must not use its own tools, which act on the machine it runs on (D9).
- */
-export const isMember = (agent: Agent) => agent.target !== undefined && agent.target !== "local"
+/** The name Claude Code is told and shown by. */
+const NAME = "Claude Code"
 
 /**
  * How long Claude Code waits for a call of sigma's tools in member mode: as long as sigma's bash may run (its largest
@@ -86,61 +70,146 @@ export const isMember = (agent: Agent) => agent.target !== undefined && agent.ta
  */
 const MEMBER_TOOL_TIMEOUT_MS = 2_147_483_647
 
-/** The tools sigma offers Claude Code in member mode: the conversation's, but code mode, which Claude takes no part in. */
-export const ownTools = (agent: Agent) => agent.tools.filter((tool) => tool.codeMode !== true)
+/** The prefix Claude Code gives the tools of sigma's MCP server, which a process in member mode reaches alone. */
+const OWN_TOOL = "mcp__sigma__"
 
-/** The model and effort a process answers with; `""` and `undefined` leave them to the person's Claude Code settings. */
-export type Selection = { readonly modelId: string; readonly effort: EffortLevel | undefined }
+/** Sigma's name of a tool a member-mode Claude Code calls: one of sigma's own loses its MCP prefix. */
+const ownName = (name: string) => (name.startsWith(OWN_TOOL) ? name.slice(OWN_TOOL.length) : name)
 
-export const selectionOf = (agent: Agent): Selection => ({
-  modelId: agent.model?.modelId ?? "",
-  effort:
-    agent.thinkingLevel === "off" || agent.thinkingLevel === undefined
-      ? undefined
-      : (agent.thinkingLevel as EffortLevel),
+/** What Claude Code 2.1.312 ends a signed-out run with: `Not logged in · Please run /login`, or an API key's refusal. */
+const SIGNED_OUT = /Please run \/login/
+
+/** How a member-mode process is signed in where its target's folder holds none. */
+export const MEMBER_SIGN_IN =
+  "Claude Code on a target signs in from the server's environment: set CLAUDE_CODE_OAUTH_TOKEN, made with `claude setup-token`"
+
+type McpPart = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+
+/** An own tool's result as MCP carries it: its texts and its images, whose shape MCP shares with sigma's. */
+const mcpResult = (result: OwnResult): { content: McpPart[]; isError: boolean } => ({
+  content: result.content.map((part) =>
+    part.type === "text"
+      ? { type: "text", text: part.text }
+      : { type: "image", data: part.data, mimeType: part.mimeType },
+  ),
+  isError: result.isError,
 })
 
-export interface ClaudeProcess {
-  /**
-   * Serves the run `run`: switches to the run's model and effort, commits the reports the process holds, sends it
-   * `opening`, then hands every frame to it until Claude Code goes idle (D2). An empty opening sends nothing: the run
-   * serves the turn Claude Code began by itself (F8). A process that exits before Claude Code took the opening ends the
-   * run `exited`.
-   */
-  readonly serve: (run: RunContext, opening: ReadonlyArray<Said>) => Effect.Effect<Ended, unknown>
-  /**
-   * Whether `serve` can switch the process to `selection`. Claude Code clears a model or effort to its own default,
-   * not to the person's settings, so a run that clears either needs a new process (D4).
-   */
-  readonly canSelect: (selection: Selection) => boolean
-  /**
-   * Stops the turn of the run it served (D5): interrupts Claude Code and takes the run's frames, handing them to no run,
-   * until Claude Code goes idle. Succeeds with whether the process can serve another run: it ended the turn within
-   * `within`, with nothing left queued. Its jobs keep working (D7).
-   */
-  readonly stop: (within: Duration.Input) => Effect.Effect<boolean>
-  /** Work Claude Code started and has not said ended, such as a background command or subagent: its jobs (D5). */
-  readonly busy: boolean
-  /** Completes once the process has no job. */
-  readonly quiet: Effect.Effect<void>
-  /** Claude Code began a turn by itself, which waits for a run to serve it (D3). */
-  readonly waking: boolean
-  /** The reports of the jobs that ended while no run served, oldest first; taken once. */
-  readonly takeReports: () => ReadonlyArray<JobReport>
-  /** Completes once the process has exited. */
-  readonly exited: Effect.Effect<void>
-  /** The cache facts of the newest main-loop request, once one was made (F13). */
-  readonly lastRequest: LastRequest | undefined
+/** The call id Claude Code gives an MCP tool's handler. */
+const toolUseOf = (extra: unknown) => {
+  const meta = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta
+  return meta?.["claudecode/toolUseId"] as string | undefined
 }
 
-/** What the newest main-loop request left in the prompt cache: when it was made, its context and the cache's TTL. */
-export interface LastRequest {
-  /** When its response started, by the clock the process was opened with, in milliseconds. */
-  readonly at: number
-  /** Its whole context in tokens: uncached input, cache reads and cache writes. */
-  readonly context: number
-  /** How long the cache it wrote lives, from the newest request that wrote one; `undefined` while none has. */
-  readonly ttl: "5m" | "1h" | undefined
+/** Claude Code's errors for a session it does not have, or a position its session does not hold (F12). */
+const SESSION_GONE = /No conversation found|No message found with message\.uuid/
+
+/** One model's running totals since a Claude Code process's previous result, as it reports them (`modelUsage`). */
+type ModelUsage = Record<
+  string,
+  {
+    inputTokens: number
+    outputTokens: number
+    cacheReadInputTokens: number
+    cacheCreationInputTokens: number
+    costUSD: number
+  }
+>
+
+/** How a job's `task_notification` statuses end it. */
+const endings = { completed: "completed", failed: "failed", stopped: "stopped", killed: "stopped" } as const
+
+/** The texts and calls of a message's content; its other blocks, such as thinking, are Claude Code's own. */
+const partsOf = (content: ReadonlyArray<any>, member: boolean): Part[] =>
+  content.flatMap((block): Part[] => {
+    if (block.type === "text") return [{ type: "text", text: block.text }]
+    if (block.type !== "tool_use") return []
+    const name = member ? ownName(block.name) : block.name
+    return [{ type: "toolCall", id: block.id, name, arguments: block.input as ToolCall["arguments"] }]
+  })
+
+/** How a job's `task_notification` ends it, with a subagent's final answer or a command's summary. */
+const endOf = (message: SDKMessage): Exclude<JobEnd, { status: "cut off" }> | undefined => {
+  if (message.type !== "system" || message.subtype !== "task_notification") return undefined
+  const status = endings[message.status as keyof typeof endings] ?? "failed"
+  // A subagent that hands back its report through `SubagentHandback` leaves only a placeholder in `summary`;
+  // the report is `handback_report`, which the SDK's types do not declare yet.
+  const handback = (message as { handback_report?: { text?: string } }).handback_report?.text
+  const summary = handback || message.summary
+  return { status, ...(summary === undefined ? {} : { summary }) }
+}
+
+/**
+ * The frames of a message of Claude Code's main loop (`main`) or of a subagent's, as the hosted run reads them. What
+ * ends a run, its `result`, is the caller's: it depends on the process. A `member` process names sigma's own tools
+ * with their MCP prefix.
+ */
+const framesOf = (message: SDKMessage, main: boolean, member = false): Frame[] => {
+  const own = !("parent_tool_use_id" in message) || (message.parent_tool_use_id === null) === main
+  switch (message.type) {
+    case "stream_event": {
+      const event = message.event
+      if (!main || !own || event.type !== "content_block_delta" || event.delta.type !== "text_delta") return []
+      return [{ type: "text", delta: event.delta.text }]
+    }
+    case "assistant": {
+      // A subagent the process routed to no job: a run hosts each one it was told of.
+      if (!own) return []
+      const content = message.message.content
+      if (main && message.error) {
+        const text = content.map((block) => (block.type === "text" ? block.text : "")).join("")
+        return [{ type: "failed", message: text || `Claude Code failed: ${message.error}` }]
+      }
+      return [{ type: "said", response: message.message.id, at: message.uuid, content: partsOf(content, member) }]
+    }
+    case "user": {
+      if (!own) return []
+      const content = Array.isArray(message.message.content) ? message.message.content : []
+      // An Agent call whose subagent handed back its report gets a placeholder as its result; the frame's
+      // `tool_use_result` holds the report, which the SDK's types do not declare yet. Keeping the report means
+      // a retelling of the conversation, to a new session or another provider, still has it.
+      const handback = (message as { tool_use_result?: { handbackReport?: { text?: string } } }).tool_use_result
+        ?.handbackReport?.text
+      const results = content.flatMap((block) =>
+        block.type === "tool_result"
+          ? [{ call: block.tool_use_id, text: handback || textOf(block.content), isError: block.is_error === true }]
+          : [],
+      )
+      return [{ type: "results", ...(message.uuid ? { at: message.uuid } : {}), results }]
+    }
+    case "system": {
+      if (message.subtype === "task_started" && message.tool_use_id) {
+        const background = message.is_backgrounded === true
+        if (message.task_type === "local_agent") {
+          return [
+            {
+              type: "subagent",
+              call: message.tool_use_id,
+              task: message.task_id,
+              description: message.description,
+              background,
+              ...(message.subagent_type === undefined ? {} : { agentType: message.subagent_type }),
+              ...(message.prompt === undefined ? {} : { prompt: message.prompt }),
+            },
+          ]
+        }
+        // A command is the conversation's job when its own Claude Code started it; one a subagent started is the
+        // subagent's, which the process does not track as a job.
+        if (main && background && message.parent_task_id === undefined) {
+          return [
+            { type: "command", call: message.tool_use_id, task: message.task_id, description: message.description },
+          ]
+        }
+        return []
+      }
+      return []
+    }
+    case "conversation_reset":
+      // `/clear`: the session goes on under the id the next frames carry (F13); a new context starts.
+      return main ? [{ type: "reset" }] : []
+    default:
+      return []
+  }
 }
 
 /**
@@ -203,35 +272,18 @@ const userMessage = (parts: ReadonlyArray<Said>, priority?: "next"): SDKUserMess
 })
 
 /**
- * The process key: what a process of `config` is spawned with, which a live one cannot change. A run whose key
- * differs from its live process's gets a new process. The model and effort are not in it: `serve` switches them.
- */
-export const processKey = (config: ProcessConfig) => {
-  const { agent } = config
-  return JSON.stringify({
-    provider: agent.model?.provider,
-    settings: config.settings,
-    cwd: agent.cwd,
-    target: agent.target,
-    maxTurns: agent.maxTurns,
-    rootConversation: config.rootConversation,
-    ...(isMember(agent)
-      ? { own: ownTools(agent).map(({ name, description, parameters }) => ({ name, description, parameters })) }
-      : {}),
-  })
-}
-
-/**
  * Starts a Claude Code process at `start`; it is closed with the scope. `wake` is called when Claude Code begins a turn
  * by itself while the process serves no run (D3).
  */
 export const openProcess = (
-  config: ProcessConfig,
+  config: ProcessConfig<ClaudeProcessSettings>,
   start: Start,
-  wake: (reports: ReadonlyArray<JobReport>) => void = () => undefined,
+  wake: (reports: ReadonlyArray<JobReport>) => void,
 ) =>
   Effect.gen(function* () {
-    const { agent, settings } = config
+    const { agent, settings, member } = config
+    /** Whether Claude Code's `tool` is one of sigma's own, which a process in member mode calls over sigma's MCP server. */
+    const isOwn = (tool: string) => member !== undefined && tool.startsWith(OWN_TOOL)
     const { modelId, effort } = selectionOf(agent)
     const serial = yield* Semaphore.make(1)
     const clock = yield* Clock.Clock
@@ -305,22 +357,49 @@ export const openProcess = (
     const callbacksOf = async (agentId: string | undefined, signal: AbortSignal | undefined): Promise<Callbacks> =>
       agentId === undefined ? current(signal) : jobCallbacks(jobOf(agentId), signal)
 
+    /** Each call Claude Code runs itself is committed before it runs, with the arguments it runs with. */
     const hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> = {
       PreToolUse: [
         {
           hooks: [
-            async (input, id, options) =>
-              (await callbacksOf(input.agent_id, options.signal)).preToolUse(input, id, options),
+            async (input, _id, { signal }) => {
+              if (input.hook_event_name !== "PreToolUse") return {}
+              // An own tool's call is committed as it runs, by `runOwn`.
+              if (isOwn(input.tool_name)) return {}
+              const call: ToolCall = {
+                type: "toolCall",
+                id: input.tool_use_id,
+                name: input.tool_name,
+                arguments: input.tool_input as ToolCall["arguments"],
+              }
+              await (await callbacksOf(input.agent_id, signal)).beforeRun(call, signal)
+              return {}
+            },
           ],
         },
       ],
+      // Claude Code's summary of its own compaction.
       PostCompact: [
-        { hooks: [async (input, id, options) => (await current(options.signal)).postCompact(input, id, options)] },
+        {
+          hooks: [
+            async (input, _id, { signal }) => {
+              if (input.hook_event_name !== "PostCompact") return {}
+              await (await current(signal)).compacted(input.compact_summary, input.trigger === "manual", signal)
+              return {}
+            },
+          ],
+        },
       ],
     }
-    const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, options) =>
-      (await callbacksOf(options.agentID, options.signal)).canUseTool(tool, input, options)
-    const { member } = config
+    const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, { agentID, signal, toolUseID }) => {
+      // An own tool's call asks a person through its tool task, as in sigma's own loop.
+      if (isOwn(tool)) return { behavior: "allow", updatedInput: input, toolUseID }
+      const call: ToolCall = { type: "toolCall", id: toolUseID, name: tool, arguments: input as ToolCall["arguments"] }
+      if (await (await callbacksOf(agentID, signal)).approve(call, signal)) {
+        return { behavior: "allow", updatedInput: input, toolUseID }
+      }
+      return { behavior: "deny", message: DENIED, toolUseID }
+    }
     // In member mode nothing comes from the person's Claude Code settings, and Claude Code's own tools, connectors and
     // folders are off: it acts only through sigma's tools, on the target (D9, D10, Q3).
     const settingSources: SettingSource[] = member === undefined ? ["user", "project", "local"] : []
@@ -342,7 +421,7 @@ export const openProcess = (
     }
     const toolSearch = member === undefined ? yield* toolSearchSettings(agent.cwd, settingSources, env) : undefined
     const cwd = member === undefined ? agent.cwd : member.folder.cwd
-    const append = member === undefined ? agent.instructions : yield* member.append
+    const append = member === undefined ? config.instructions : yield* member.append
     const messages = query({
       prompt: inbox,
       options: {
@@ -366,8 +445,15 @@ export const openProcess = (
                     name: tool.name,
                     description: tool.description,
                     inputSchema: z.fromJSONSchema(tool.parameters as z.core.JSONSchema.JSONSchema),
-                    handler: async (input: unknown, extra: unknown) =>
-                      (await current(undefined)).runOwn(tool.name)(input, extra),
+                    handler: async (input: unknown, extra: unknown) => {
+                      const call = toolUseOf(extra)
+                      if (call === undefined) {
+                        const text = `Claude Code called ${tool.name} without a call id`
+                        return { content: [{ type: "text" as const, text }], isError: true }
+                      }
+                      const signal = (extra as { signal?: AbortSignal } | undefined)?.signal
+                      return mcpResult(await (await current(signal)).runOwn(call, tool.name, input, signal))
+                    },
                   })),
                 }),
               },
@@ -402,7 +488,10 @@ export const openProcess = (
       return message.uuid!
     }
 
-    /** What each model spent since the previous result; a total that went down started over, as after `/clear`. */
+    /**
+     * What each model spent since the previous result, and the totals it was measured to; a total that went down
+     * started over, as after `/clear`. The totals move once the run has committed what was spent (`handle`).
+     */
     const spent = (modelUsage: ModelUsage) => {
       const before = totals ?? {}
       const now: Record<string, UsageTotals> = {}
@@ -439,23 +528,49 @@ export const openProcess = (
           },
         ])
       }
-      totals = now
-      return added
+      return { added, now }
+    }
+
+    /** The totals a `spent` frame was measured to, which become the process's once its run committed the frame. */
+    let measured: Record<string, UsageTotals> | undefined
+
+    /**
+     * The frames of a main-loop message for the run served: its `result` reports what was spent and how the turn ended,
+     * and Claude Code going idle ends the run (D2), unless a message the process was sent, such as a steer, has not come
+     * back yet, which Claude Code answers next. A failed turn ends the run at once: a failed resume sends no idle before
+     * its process exits (F4).
+     */
+    const runFrames = (message: SDKMessage): Frame[] => {
+      // A turn begins after a result, as Claude Code's follow-up for a job's end or a steer: its own result ends the run.
+      if (message.type === "system" && message.subtype === "init") return [{ type: "began" }]
+      if (message.type === "system" && message.subtype === "session_state_changed") {
+        return message.state === "idle" && awaitingReplay.size === 0 ? [{ type: "idle" }] : []
+      }
+      if (message.type !== "result") return framesOf(message, true, member !== undefined)
+      if (message.subtype !== "success" || message.is_error) {
+        const errors = "errors" in message ? message.errors : []
+        const text = "result" in message && message.result ? message.result : errors.join("; ")
+        const gone = errors.some((error) => SESSION_GONE.test(error))
+        return [{ type: "failed", message: text || `Claude Code stopped: ${message.subtype}`, gone }]
+      }
+      const { added, now } = spent(message.modelUsage)
+      measured = now
+      const turnLimit = (message as { terminal_reason?: string }).terminal_reason === "max_turns"
+      return [
+        { type: "spent", usage: added },
+        { type: "answered", turnLimit },
+      ]
     }
 
     const view: ServingProcess = {
       get session() {
         return session
       },
-      get resetting() {
-        return resetting
-      },
-      get awaitingReplay() {
-        return awaitingReplay.size > 0
+      get holdsPosition() {
+        return awaitingReplay.size === 0 && !resetting
       },
       send,
       serially: (effect) => serial.withPermits(1)(effect),
-      spent,
       started: (call) => {
         const job = starts.get(call)!
         starts.delete(call)
@@ -485,6 +600,8 @@ export const openProcess = (
       }
     }
 
+    // Claude Code clears a model or effort to its own default, not to the person's settings, so a run that clears
+    // either needs a new process (D4).
     const canSelect = (wanted: Selection) =>
       (wanted.modelId !== "" || selected.modelId === "") &&
       (wanted.effort !== undefined || selected.effort === undefined)
@@ -497,7 +614,7 @@ export const openProcess = (
           selected = { ...selected, modelId: wanted.modelId }
         }
         if (wanted.effort !== selected.effort) {
-          await messages.applyFlagSettings({ effortLevel: wanted.effort! })
+          await messages.applyFlagSettings({ effortLevel: wanted.effort as EffortLevel })
           selected = { ...selected, effort: wanted.effort }
         }
       })
@@ -579,17 +696,9 @@ export const openProcess = (
     }
 
     /** Hands a report to the run served, or holds it for a wake or the next run (D3). */
-    const report = (job: Job, notification: { status: string; summary?: string }) => {
-      const start = job.start!
-      const made = reportOf({
-        task: job.task,
-        kind: start.kind,
-        title: start.title,
-        call: start.call,
-        ...(job.conversation === undefined ? {} : { conversation: job.conversation }),
-        state: ENDINGS[notification.status as keyof typeof ENDINGS] ?? "failed",
-        ...(summaryOf(notification) === undefined ? {} : { summary: summaryOf(notification)! }),
-      })
+    const report = (job: Job, end: JobEnd) => {
+      if (end.status === "cut off") return Effect.void
+      const made = endReport(NAME, job, end)
       if (taker?.report !== undefined) return taker.report(made)
       reports.push(made)
       return Effect.void
@@ -656,10 +765,13 @@ export const openProcess = (
               wake(takeReports())
             }
             if (job === undefined) return take(message)
-            job.inbox.push({ frame: message })
-            if (message.type === "system" && message.subtype === "task_notification" && job.start?.reported) {
-              return report(job, message)
+            const end = endOf(message)
+            if (end === undefined) {
+              for (const frame of framesOf(message, false)) job.inbox.push({ frame })
+              return Effect.void
             }
+            job.inbox.push({ end })
+            if (job.start?.reported) return report(job, end)
             return Effect.void
           }),
         )
@@ -686,9 +798,19 @@ export const openProcess = (
           const now = makeServing(run, view)
           const done = Deferred.makeUnsafe<Ended, unknown>()
           let opened: string | undefined
+          /** Hands the run the frames of a message, until one ends it. */
+          const handle = (frames: ReadonlyArray<Frame>) =>
+            Effect.gen(function* () {
+              for (const frame of frames) {
+                const ended = yield* now.handle(frame)
+                if (frame.type === "spent") totals = measured
+                if (ended !== undefined) return ended
+              }
+              return undefined
+            })
           const served: Taker = {
             frame: (message) =>
-              Effect.map(Effect.exit(now.handle(message)), (handled) => {
+              Effect.map(Effect.exit(handle(runFrames(message))), (handled) => {
                 if (Exit.isSuccess(handled) && handled.value === undefined) return false
                 Deferred.doneUnsafe(done, handled as Exit.Exit<Ended, unknown>)
                 return true
@@ -772,5 +894,20 @@ export const openProcess = (
       get lastRequest() {
         return lastRequest
       },
-    } satisfies ClaudeProcess
+    } satisfies HostedProcess
   })
+
+/** The task kind of a Claude Code conversation's runs. */
+export const CLAUDE_RUN_KIND = "claude.run"
+
+/** Claude Code as a harness of the hosted run; `settings` says how the Claude Code of a provider instance starts. */
+export const claudeAdapter = (
+  settings: (provider: string) => ClaudeProcessSettings | undefined,
+): Adapter<ClaudeProcessSettings> => ({
+  kind: CLAUDE_RUN_KIND,
+  name: NAME,
+  api: "claude-code",
+  settings,
+  open: openProcess,
+  signIn: (message) => (SIGNED_OUT.test(message) ? MEMBER_SIGN_IN : undefined),
+})

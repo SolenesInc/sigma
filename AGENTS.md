@@ -15,6 +15,9 @@ design over compatibility with what exists.
 The binary runs on a durable kernel written on Effect, following pi-durable's
 model: `packages/kernel` stores state and runs tasks, `packages/harness` runs
 conversations on it, and `packages/sigma` serves them over `packages/protocol`.
+A conversation whose model a harness such as Claude Code serves runs as a
+hosted run (`packages/hosted`), through that harness's adapter
+(`packages/claude`).
 The kernel's features with no client path are marked `[kernel]` in the feature
 map, and are proven by package tests or pi-durable's own suite.
 

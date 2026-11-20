@@ -32,7 +32,7 @@ import {
   type NextTaskState,
   type TaskId,
 } from "@sigma/kernel"
-import { ClaudeJobsDoc } from "@sigma/claude"
+import { JobsDoc } from "@sigma/hosted"
 import type { AssistantMessage } from "@sigma/models"
 import { int, obj, oneOf, opt, str } from "@sigma/schema"
 import { rootConversation } from "@sigma/tools"
@@ -661,7 +661,7 @@ export const interrupt = (harness: Harness, root: ConversationId) =>
 /** Aborts the tasks of the jobs Claude Code started in the conversation that still work. */
 const stopJobs = (harness: Harness, id: ConversationId) =>
   Effect.gen(function* () {
-    const jobs = Object.values((yield* harness.session.snapshot(ClaudeJobsDoc, id))?.jobs ?? {})
+    const jobs = Object.values((yield* harness.session.snapshot(JobsDoc, id))?.jobs ?? {})
     for (const job of jobs) if (job.state === "working") yield* harness.abortTask(idFromNumber<TaskId>(job.taskId))
   })
 

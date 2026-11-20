@@ -1,8 +1,9 @@
-// The `claude.run` task: one run of a conversation whose model Claude Code serves, from its inputs to its run_end. It
-// starts or resumes Claude Code's session where the conversation's position says, tells it what the session missed, and
-// lets `converse` commit what it does. A host restart leaves calls without results; the next invocation records them
-// as interrupted and goes on from the position. Each job Claude Code starts has a task of its own (`job.ts`), and
-// outlives the run: a job's end that wakes the conversation starts a run that sends Claude Code nothing (D3).
+// The hosted run: one run of a conversation whose model a harness serves, from its inputs to its run_end, as the task
+// its adapter names (`claude.run`). It starts or resumes the harness's session where the conversation's position says,
+// tells it what the session missed, and lets `converse` commit what it does. A host restart leaves calls without
+// results; the next invocation records them as interrupted and goes on from the position. Each job the harness starts
+// has a task of its own (`job.ts`), and outlives the run: a job's end that wakes the conversation starts a run that
+// sends the harness nothing (D3).
 import {
   applyBoundary,
   appendToolResult,
@@ -17,11 +18,14 @@ import {
   prepareBoundary,
   prepareFailure,
   renderSections,
+  sectionExtension,
+  type Agent,
+  type Extension,
+  INSTRUCTIONS_KEY,
   type RunCtx,
   type RunTasks,
   startRun,
   salvageable,
-  type Agent,
   type TaskApi,
   TaskServices,
 } from "@sigma/harness"
@@ -40,48 +44,42 @@ import {
 } from "@sigma/kernel"
 import type { Message } from "@sigma/models"
 import { Effect } from "effect"
-import { CLAUDE_JOB_KIND, JobAnchor, makeCommandTask, makeJobTask } from "./job.ts"
-import { CLAUDE_REPORT_KIND } from "./jobs.ts"
+import { type Adapter, isMember, ownTools, type ProcessConfig, processKey, selectionOf, type Start } from "./adapter.ts"
+import { JOB_KIND, JobAnchor, makeCommandTask, makeJobTask } from "./job.ts"
+import { continuedOnItsOwn, REPORT_KIND } from "./jobs.ts"
 import { JobLinks } from "./links.ts"
-import {
-  type ClaudeProcessSettings,
-  isMember,
-  ownTools,
-  openProcess,
-  type ProcessConfig,
-  processKey,
-  selectionOf,
-  type Start,
-} from "./process.ts"
-import type { ClaudeProcesses, Openings } from "./processes.ts"
-import { history, INTERRUPTED, JOINING, type Retell, type Said, textOf, unseen } from "./retell.ts"
-import type { ClaudeRunCheckpoint, Ended, RunContext } from "./serving.ts"
-import { ClaudeSessionDoc } from "./session.ts"
+import type { HostedProcesses, Openings } from "./processes.ts"
+import { history, INTERRUPTED, joining, type Retell, type Said, textOf, unseen } from "./retell.ts"
+import type { Ended, HostedRunCheckpoint, RunContext } from "./serving.ts"
+import { HostedSessionDoc } from "./session.ts"
 import { expireApprovals, type Hosting } from "./transcript.ts"
-
-export const CLAUDE_RUN_KIND = "claude.run"
 
 /** What a resumed session is sent when nothing happened since its position, as after a restart that lost nothing. */
 export const CONTINUE = "Continue."
 
-export type ClaudeRunResult = { entryId?: EntryId }
-type Runtime = TaskRuntime<Record<string, never>, ClaudeRunCheckpoint, ClaudeRunResult>
-type Next = NextTaskState<ClaudeRunCheckpoint, ClaudeRunResult>
-type Running = RunningTask<Record<string, never>, ClaudeRunCheckpoint, ClaudeRunResult>
+export type HostedRunResult = { entryId?: EntryId }
+type Runtime = TaskRuntime<Record<string, never>, HostedRunCheckpoint, HostedRunResult>
+type Next = NextTaskState<HostedRunCheckpoint, HostedRunResult>
+type Running = RunningTask<Record<string, never>, HostedRunCheckpoint, HostedRunResult>
 
-export interface ClaudeRunOptions {
-  /** How the Claude Code of a provider instance is started; `undefined` for a provider Claude Code does not serve. */
-  readonly settings: (provider: string) => ClaudeProcessSettings | undefined
-  /** The conversation's title, which names a fresh session so Claude Code does not ask a model for one. */
+export interface HostedRunOptions {
+  /** The harnesses conversations can run on; a conversation runs on the first that serves its provider. */
+  readonly adapters: ReadonlyArray<Adapter>
+  /** The conversation's title, which names a fresh session so the harness does not ask a model for one. */
   readonly title?: (conversation: ConversationId) => Effect.Effect<string | undefined>
-  /** The live processes the runs lease, from `makeClaudeProcesses`. */
-  readonly processes: ClaudeProcesses
+  /** The live processes the runs lease, from `makeHostedProcesses`. */
+  readonly processes: HostedProcesses
+  /**
+   * The selected extensions whose tools the harness is offered as its own (F65): their prompt sections go to its
+   * system prompt, before the agent's instructions. Default none.
+   */
+  readonly offered?: (agent: Agent) => ReadonlyArray<Extension>
   /** How a remote conversation's runs reach sigma in member mode (D9). */
   readonly member: MemberOptions
 }
 
 export interface MemberOptions {
-  /** The Claude Code config folder and working folder of a target's processes, made if missing (D10). */
+  /** The harness's config folder and working folder for a target's processes, made if missing (D10). */
   readonly folder: (target: string) => Effect.Effect<{ readonly config: string; readonly cwd: string }>
   /**
    * What the model must read now of its target, such as an instance that changed since it was last told (D6), or
@@ -94,7 +92,7 @@ export interface MemberOptions {
   ) => Effect.Effect<string | undefined>
   /**
    * What a session is told of an entry sigma recorded with no model content, such as a change behind its target: told
-   * among what the session missed, so a run that ended before Claude Code read the notice leaves it to the next (D6).
+   * among what the session missed, so a run that ended before the harness read the notice leaves it to the next (D6).
    */
   readonly retell: Retell
 }
@@ -128,7 +126,7 @@ const interruptCalls = (tx: Tx, runtime: Runtime) =>
   })
 
 /**
- * Ends the calls of sigma's own tools whose tool tasks still run though no Claude Code waits for them, as after its
+ * Ends the calls of sigma's own tools whose tool tasks still run though no harness waits for them, as after its
  * process exited or the server restarted, so each call has its one result, from its task, before the run goes on.
  */
 const endOwnCalls = (runtime: Runtime) =>
@@ -170,7 +168,7 @@ const continuable = (entries: readonly EntryRecord[], provider: string) =>
   })
 
 /**
- * Whether `entry` is what a stop recorded of the turn it cut off: the text Claude was writing, or a call's result. A live
+ * Whether `entry` is what a stop recorded of the turn it cut off: the text the model was writing, or a call's result. A live
  * process kept through a stop ended that turn itself, and its session holds both (F14).
  */
 const stopped = (entry: EntryRecord) =>
@@ -190,16 +188,16 @@ const afterSeen = (runtime: Runtime, provider: string, seen: number, retell: Ret
   Effect.map(entriesAfter(runtime, seen), (missed) => {
     if (!continuable(missed, provider)) return undefined
     const told = missedText(
-      missed.filter((entry) => !stopped(entry) && entry.kind !== CLAUDE_REPORT_KIND),
+      missed.filter((entry) => !stopped(entry) && entry.kind !== REPORT_KIND),
       retell,
     )
     if (told.length > 0) return told
-    return missed.some((entry) => entry.kind === CLAUDE_REPORT_KIND) ? [] : [CONTINUE]
+    return missed.some((entry) => entry.kind === REPORT_KIND) ? [] : [CONTINUE]
   })
 
 /**
  * What a session is told of the entries it missed, which may be nothing. A compaction's `/compact` stays the whole
- * prompt, since Claude Code reads only that as its command, so what `retell` names waits for a later run.
+ * prompt, since the harness reads only that as its command, so what `retell` names waits for a later run.
  */
 const missedText = (missed: readonly EntryRecord[], retell: Retell): ReadonlyArray<Said> => {
   const all = unseen(missed, retell)
@@ -209,10 +207,10 @@ const missedText = (missed: readonly EntryRecord[], retell: Retell): ReadonlyArr
 /** The id of the conversation's newest entry. */
 const newest = (runtime: Runtime) => Effect.map(runtime.entries({}, 1), (page) => Number(page.items[0]?.id ?? 0))
 
-/** Where Claude Code's session starts for this run, and what it is told first. */
-const opening = (runtime: Runtime, api: TaskApi, provider: string, title: Title, retell: Retell) =>
+/** Where the harness's session starts for this run, and what it is told first. */
+const opening = (runtime: Runtime, api: TaskApi, harness: string, provider: string, title: Title, retell: Retell) =>
   Effect.gen(function* () {
-    const current = (yield* runtime.snapshot(ClaudeSessionDoc, runtime.conversationId))?.current
+    const current = (yield* runtime.snapshot(HostedSessionDoc, runtime.conversationId))?.current
     if (current !== undefined && current.provider === provider) {
       const missed = yield* entriesAfter(runtime, current.seen)
       if (continuable(missed, provider)) {
@@ -225,14 +223,21 @@ const opening = (runtime: Runtime, api: TaskApi, provider: string, title: Title,
         return { start, texts }
       }
     }
-    return yield* fresh(runtime, api, title, retell, current?.seen)
+    return yield* fresh(runtime, api, harness, title, retell, current?.seen)
   })
 
 /**
  * A new session, told the conversation's context; one that already has answers is told it joins it. What `retell`
  * names after `since`, the position of the session it replaces, that session never read, so it is told first.
  */
-const fresh = (runtime: Runtime, api: TaskApi, title: Title, retell: Retell, since: number | undefined) =>
+const fresh = (
+  runtime: Runtime,
+  api: TaskApi,
+  harness: string,
+  title: Title,
+  retell: Retell,
+  since: number | undefined,
+) =>
   Effect.gen(function* () {
     const { messages } = yield* api.context(runtime.conversationId)
     const named = yield* title(runtime.conversationId)
@@ -246,13 +251,13 @@ const fresh = (runtime: Runtime, api: TaskApi, title: Title, retell: Retell, sin
       session: crypto.randomUUID(),
       ...(named === undefined || named === "" ? {} : { title: named }),
     }
-    return { start, texts: [...retold, ...(joins ? [JOINING] : []), ...told] }
+    return { start, texts: [...retold, ...(joins ? [joining(harness)] : []), ...told] }
   })
 
 /** What a run tells its process before `texts`, the opening it was given. */
 type Told = (texts: ReadonlyArray<Said>) => Effect.Effect<ReadonlyArray<Said>>
 
-/** Whether an opening is a compaction's: Claude Code reads a `/compact` prompt as its command. */
+/** Whether an opening is a compaction's: the harness reads a `/compact` prompt as its command. */
 const isCompaction = (texts: ReadonlyArray<Said>) => {
   const last = texts.findLast((part) => typeof part === "string")
   return last !== undefined && /^\/compact(\s|$)/.test(last)
@@ -261,8 +266,8 @@ const isCompaction = (texts: ReadonlyArray<Said>) => {
 /**
  * Serves the run with the conversation's live process, or a new one `openings` starts. A run that answers leaves the
  * process live, having seen every entry before the run's end, with any jobs still working (D5). A stopped run leaves it
- * live too, once Claude Code ended the turn it cut off (D5 of s-evw1pn). A live process told nothing serves the turn
- * Claude Code began by itself (F8); one with no such turn has nothing to answer, as for reports a turn already read.
+ * live too, once the harness ended the turn it cut off (D5 of s-evw1pn). A live process told nothing serves the turn
+ * the harness began by itself (F8); one with no such turn has nothing to answer, as for reports a turn already read.
  */
 const converse = <E>(shared: Shared, config: ProcessConfig, run: RunContext, openings: Openings<E>, told: Told) =>
   Effect.scoped(
@@ -273,7 +278,10 @@ const converse = <E>(shared: Shared, config: ProcessConfig, run: RunContext, ope
         processKey(config),
         selectionOf(config.agent),
         openings,
-        (start, wake) => openProcess(config, start, wake),
+        (start, wake) =>
+          run.adapter.open(config, start, (reports) =>
+            wake(reports.length > 0 ? reports : [continuedOnItsOwn(run.adapter.name)]),
+          ),
       )
       if (lease.texts.length === 0 && !lease.process.waking) {
         const answer = yield* newest(runtime)
@@ -301,7 +309,7 @@ const converse = <E>(shared: Shared, config: ProcessConfig, run: RunContext, ope
   )
 
 /** Ends the run as `ended` says. */
-const finish = (ctx: RunCtx & { readonly runtime: Runtime }, ended: Ended) =>
+const finish = (ctx: RunCtx & { readonly runtime: Runtime }, harness: string, ended: Ended) =>
   ctx.runtime.commit((tx) =>
     Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, Next, never> {
       const { runtime, api } = ctx
@@ -332,21 +340,21 @@ const finish = (ctx: RunCtx & { readonly runtime: Runtime }, ended: Ended) =>
         ended._tag === "failed" || ended._tag === "exited"
           ? (["model_error", ended.message] as const)
           : ended._tag === "gone"
-            ? (["model_error", "Claude Code lost its session twice"] as const)
+            ? (["model_error", `${harness} lost its session twice`] as const)
             : ended.turnLimit
-              ? (["turn_limit", "Claude Code reached the conversation's turn limit"] as const)
-              : (["nothing_to_answer", "Claude Code ended without an answer"] as const)
+              ? (["turn_limit", `${harness} reached the conversation's turn limit`] as const)
+              : (["nothing_to_answer", `${harness} ended without an answer`] as const)
       yield* endFailedRun(tx, ctx, live, failure!, { status: "unanswered", reason, detail })
       return failed(detail, reason)
     }),
   )
 
 /** Ends a run whose invocations were cut off `restartLimit` times in a row (spec 5.4). */
-const endCutOff = (ctx: RunCtx & { readonly runtime: Runtime }, task: Running) =>
+const endCutOff = (ctx: RunCtx & { readonly runtime: Runtime }, harness: string, task: Running) =>
   ctx.runtime.commit((tx) =>
     Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, Next, never> {
       const { runtime, api } = ctx
-      const text = `The Claude Code run was interrupted ${cutOffCount(task)}`
+      const text = `The ${harness} run was interrupted ${cutOffCount(task)}`
       const failure = yield* prepareFailure(tx, ctx)
       const live = salvageable(task, api.settings().restartLimit)
         ? yield* interruptCalls(tx, runtime)
@@ -356,19 +364,9 @@ const endCutOff = (ctx: RunCtx & { readonly runtime: Runtime }, task: Running) =
     }),
   )
 
-type Title = NonNullable<ClaudeRunOptions["title"]>
+type Title = NonNullable<HostedRunOptions["title"]>
 
-/** What Claude Code 2.1.312 ends a signed-out run with: `Not logged in · Please run /login`, or an API key's refusal. */
-const SIGNED_OUT = /Please run \/login/
-
-/** How a member-mode process is signed in where its target's folder holds none. */
-export const MEMBER_SIGN_IN =
-  "Claude Code on a target signs in from the server's environment: set CLAUDE_CODE_OAUTH_TOKEN, made with `claude setup-token`"
-
-type Shared = {
-  readonly options: ClaudeRunOptions
-  readonly hosting: Hosting
-}
+type Shared = { readonly options: HostedRunOptions; readonly hosting: Hosting }
 
 /**
  * The system prompt's `append` of a member-mode process: the conversation's sections, rendered through its env as
@@ -386,9 +384,39 @@ const appendOf = (runtime: Runtime, api: TaskApi, served: Agent) =>
     return rendered.size === 0 ? undefined : [...rendered.values()].join("\n\n")
   })
 
-const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheckpoint, ClaudeRunResult, TaskServices> =>
-  defineTask<Record<string, never>, ClaudeRunCheckpoint, ClaudeRunResult, TaskServices>({
-    name: CLAUDE_RUN_KIND,
+/**
+ * What the harness adds to its own system prompt: the sections of the extensions it is offered, then the agent's
+ * instructions as they are.
+ */
+const instructionsOf = (runtime: Runtime, api: TaskApi, agent: Agent, offered: ReadonlyArray<Extension>) =>
+  Effect.gen(function* () {
+    const keys = new Set(offered.flatMap((extension) => (extension.sections ?? []).map((section) => section.key)))
+    const sections = agent.sections.filter((section) => section.key !== INSTRUCTIONS_KEY && keys.has(section.key))
+    const rendered = yield* renderSections(
+      sections,
+      {
+        conversationId: runtime.conversationId,
+        agent,
+        env: undefined,
+        shown: {},
+        read: { snapshot: (token, ...address) => runtime.snapshot(token, ...address) },
+      },
+      new Map(),
+      (error, section) => {
+        const extension = sectionExtension(agent, section.key)
+        api.report(error, { kind: "extension", ...(extension === undefined ? {} : { extension }) })
+      },
+    )
+    const parts = [...rendered.values(), ...(agent.instructions === undefined ? [] : [agent.instructions])]
+    return parts.length === 0 ? undefined : parts.join("\n\n")
+  })
+
+const makeRunTask = (
+  shared: Shared,
+  adapter: Adapter,
+): Task<Record<string, never>, HostedRunCheckpoint, HostedRunResult, TaskServices> =>
+  defineTask<Record<string, never>, HostedRunCheckpoint, HostedRunResult, TaskServices>({
+    name: adapter.kind,
     version: 1,
     initial: () => ({ phase: "converse" }),
     phases: {
@@ -396,7 +424,7 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
         Effect.gen(function* () {
           const api = yield* TaskServices
           const ctx = { runtime, api }
-          if (cutOffTooOften(task, api.settings().restartLimit)) return yield* endCutOff(ctx, task)
+          if (cutOffTooOften(task, api.settings().restartLimit)) return yield* endCutOff(ctx, adapter.name, task)
           // A call the last invocation left without a result was cut off, whether by a crash or by a stop, which the
           // kernel does not count as a restart; either ended its process. A call of sigma's own tools gets its result
           // from its tool task.
@@ -407,17 +435,20 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
           }
           const agent = yield* api.agent
           const provider = agent.model?.provider ?? ""
-          const settings = shared.options.settings(provider)
+          const settings = adapter.settings(provider)
           if (settings === undefined) {
-            return yield* finish(ctx, { _tag: "failed", message: `Claude Code does not serve provider ${provider}` })
+            const message = `${adapter.name} does not serve provider ${provider}`
+            return yield* finish(ctx, adapter.name, { _tag: "failed", message })
           }
           const { member } = shared.options
           const target = isMember(agent) ? agent.target! : undefined
           const folder = target === undefined ? undefined : yield* member.folder(target)
+          const instructions = yield* instructionsOf(runtime, api, agent, shared.options.offered?.(agent) ?? [])
           const config: ProcessConfig = {
             agent,
             settings,
             rootConversation: String(runtime.conversationId),
+            ...(instructions === undefined ? {} : { instructions }),
             ...(folder === undefined ? {} : { member: { folder, append: appendOf(runtime, api, agent) } }),
           }
           const notice = target === undefined ? undefined : member.notice(runtime.conversationId, target, "run")
@@ -425,16 +456,17 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
             runtime,
             api,
             agent,
+            adapter,
             hosting: shared.hosting,
             ...(target === undefined
               ? {}
               : { member: { notice: member.notice(runtime.conversationId, target, "call") } }),
           }
           const title: Title = shared.options.title ?? (() => Effect.succeed(undefined))
-          const cold = () => opening(runtime, api, provider, title, member.retell)
+          const cold = () => opening(runtime, api, adapter.name, provider, title, member.retell)
           // The computer behind a remote conversation may have changed since its last run: it is told first, once for
           // the run however many processes serve it. A compaction is not told, and reaches no target, so its
-          // `/compact` stays the whole prompt Claude Code reads as its command; the run after it is told. The change's
+          // `/compact` stays the whole prompt the harness reads as its command; the run after it is told. The change's
           // entry is retold to a session that has not seen it, so a process started after the change was recorded
           // already holds it in its opening.
           const changed = notice === undefined ? undefined : yield* Effect.cached(notice)
@@ -455,9 +487,9 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
           }
           if (ended._tag === "gone") {
             // The session is gone, or no longer holds the position (F12): start over, told the conversation.
-            const since = (yield* runtime.snapshot(ClaudeSessionDoc, runtime.conversationId))?.current?.seen
+            const since = (yield* runtime.snapshot(HostedSessionDoc, runtime.conversationId))?.current?.seen
             yield* runtime.commit((tx) =>
-              Effect.map(tx.doc(ClaudeSessionDoc, runtime.conversationId), (doc) => {
+              Effect.map(tx.doc(HostedSessionDoc, runtime.conversationId), (doc) => {
                 delete doc.current
                 return undefined as never
               }),
@@ -466,15 +498,16 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
               shared,
               config,
               run,
-              { cold: () => fresh(runtime, api, title, member.retell, since) },
+              { cold: () => fresh(runtime, api, adapter.name, title, member.retell, since) },
               told,
             )).ended
           }
-          // A target's own Claude Code folder holds no sign-in where Claude Code keeps it there, as on Linux (C45).
-          if (folder !== undefined && ended._tag === "failed" && SIGNED_OUT.test(ended.message)) {
-            ended = { ...ended, message: `${ended.message}. ${MEMBER_SIGN_IN}` }
+          // A target's own folder may hold no sign-in, where the harness keeps it there, as Claude Code does on Linux (C45).
+          const signIn = folder !== undefined && ended._tag === "failed" ? adapter.signIn?.(ended.message) : undefined
+          if (ended._tag === "failed" && signIn !== undefined) {
+            ended = { ...ended, message: `${ended.message}. ${signIn}` }
           }
-          return yield* finish(ctx, ended)
+          return yield* finish(ctx, adapter.name, ended)
         }),
     },
     abort: (_task, runtime) =>
@@ -494,24 +527,25 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
   })
 
 /**
- * The run tasks of conversations whose model Claude Code serves: `claude.run`, and `claude.job` for the conversations
- * of the subagents it starts, each owned by a background `claude.job-anchor`. `runTasks` is what the harness is
- * opened with; `tasks` are what the registry installs.
+ * The run tasks of conversations whose model a harness serves: each adapter's run task, and `hosted.job` for the
+ * conversations of the subagents a harness starts, each owned by a background `hosted.job-anchor`. `runTasks` is what
+ * the harness is opened with; `tasks` are what the registry installs.
  */
-export function claudeRunTasks(options: ClaudeRunOptions): {
+export function hostedRunTasks(options: HostedRunOptions): {
   readonly tasks: ReadonlyArray<AnyTask<TaskServices>>
   readonly runTasks: RunTasks
 } {
   const links = new JobLinks()
   const job = makeJobTask(links)
   const command = makeCommandTask(links)
-  const run = makeRunTask({ options, hosting: { job, command, anchor: JobAnchor, links } })
+  const shared: Shared = { options, hosting: { job, command, anchor: JobAnchor, links } }
+  const runs = options.adapters.map((adapter) => [adapter, makeRunTask(shared, adapter)] as const)
   return {
-    tasks: [run, job, JobAnchor, command],
+    tasks: [...runs.map(([, run]) => run), job, JobAnchor, command],
     runTasks: {
-      kinds: new Set([CLAUDE_RUN_KIND, CLAUDE_JOB_KIND]),
+      kinds: new Set([...options.adapters.map((adapter) => adapter.kind), JOB_KIND]),
       choose: (model: ModelRef | undefined) =>
-        model !== undefined && options.settings(model.provider) !== undefined ? run : undefined,
+        model === undefined ? undefined : runs.find(([adapter]) => adapter.settings(model.provider) !== undefined)?.[1],
     },
   }
 }
