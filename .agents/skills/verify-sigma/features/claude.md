@@ -84,6 +84,14 @@ it into a run that serves Claude Code's own follow-up.
   over a scripted connection with no harness, since no second adapter has a
   client path yet; Claude Code's client path is `claude-wake` and
   `claude-job-report`.
+- `claude-job-card` draws each background job in the TUI where Claude
+  started it: a command on its call as
+  `▸ Bash(<command>) in background · running`, then `done`, `failed`,
+  `stopped` or `cut off`, in place of the call's result; a subagent as its
+  `⧉` card, which reads `stopped` or `cut off` when its job ended so. Each
+  report shows under the job's title in violet, as a subagent's mail does,
+  before Sigma's reply to it; a report with no job, which says Claude Code
+  continued on its own, shows under `background`.
 - `claude-idle-compaction` compacts an idle conversation whose last request
   had a context of 200,000 tokens or more: two minutes before the prompt
   cache that request read or wrote expires, sigma compacts it as
@@ -186,7 +194,8 @@ Preconditions:
   ``drive.ts r tui type 'Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made'``,
   `drive.ts r tui key Enter`, `drive.ts r tui wait 'allow this call?'`,
   `drive.ts r tui screen asking`: `▸ Bash(touch made.txt)`,
-  `allow this call?  ^Y  allow  ^N  deny` and `◆ WAITING`. Run
+  `allow this call? · answer below`, the panel row
+  `SIGMA allow Bash(touch made.txt)?  ^Y  allow  ^N  deny` and `◆ WAITING`. Run
   `drive.ts r tui key C-y`, `drive.ts r tui wait READY`,
   `drive.ts r tui screen allowed`: `✓ allowed by ada`,
   `(Bash completed with no output)` and `made`. The log holds
@@ -368,6 +377,45 @@ Preconditions:
 - **Sign-in error** (`auth_failed`). Run
   `drive.ts r sigma exec --provider claude hello`: exit 1, empty stdout,
   stderr `Invalid API key · Please run /login`.
+- **Background command** (`bash_background_wake`). The fake plays the
+  command's end at once; to see it running, hold it before Claude Code's
+  notification: `FAKE_CLAUDE_HOLD_BEFORE=task_notification drive.ts r tui start --provider claude --auto`,
+  wait for `READY`, send
+  `Use the Bash tool with run_in_background set to true to run: sleep 8; echo done. Do not wait for it. Reply with exactly: started`,
+  wait for `in background · running` and `READY`: the call reads
+  `▸ Bash(sleep 8; echo done) in background · running` with no result
+  under it, the status bar `■ READY   ⧉ 1 in background`, and the prompt's
+  bottom border `esc  stop 1 background job`. Release the hold with
+  `kill -USR1 <pid>`, the `pid` of the spawn whose log line holds `"held"`
+  in `evidence/fake-claude/log.ndjson`. Wait for `finished with exit code 0`:
+  the call reads `in background · done`, then
+  `Start background sleep-then-echo command` says
+  `Background command "Start background sleep-then-echo command" completed (exit code 0)`,
+  then `SIGMA` says `The background command finished with exit code 0.`,
+  and the count and the hint are gone.
+- **Background subagent** (`fork_wake`). `drive.ts r tui start --provider claude --auto`,
+  send
+  `Use the Agent tool with subagent_type "fork" to have a forked subagent reply with exactly: forked. Then reply with exactly what it said.`,
+  wait for `Fork reply test  ─` and `READY`: `⧉ Fork reply test (fork) done`
+  over `forked`, then the report under `Fork reply test`, then `SIGMA`'s
+  turns in the same run, ending `forked`.
+- **Background subagent asks** (`subagent_background_asks`).
+  `drive.ts r tui start --provider claude`, send
+  ``Use the Agent tool with run_in_background set to true to start a general-purpose subagent that runs the bash command `touch made.txt` with the Bash tool and reports when it is done. Do not wait for it, and do not run it yourself. Reply with exactly: started``,
+  wait for `WAITING ON YOU · 1`: the card reads `waiting on you` over
+  `allow Bash(touch made.txt)? · answer below`, the panel row
+  `⧉ Create made.txt file allow Bash(touch made.txt)?  ^Y  allow  ^N  deny`,
+  the status bar `◆ WAITING <n>s   ⧉ 1 in background` and the prompt
+  `QUEUE · tab` over `esc  stop the run`: the parent's run stays open while
+  its background subagent works. `C-y`, wait for `READY`: the card reads
+  `done`, the report under `Create made.txt file`, and `SIGMA`'s reply.
+- **Job cut off** (`bash_background_cut_off`). `drive.ts r serve`,
+  `drive.ts r tui start --provider claude --auto`, send
+  `Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started`,
+  wait for `in background · running` and `READY`, then
+  `drive.ts r kill-server`. The TUI starts a server again; wait for
+  `in background · cut off`: under `Sleep 600 seconds in background` the
+  line `The background command "Sleep 600 seconds in background" was cut off: Claude Code ended before it did.`
 
 ## Contexts
 
@@ -387,6 +435,11 @@ Preconditions:
 - **No client.** A live process keeps the server up until it is released, 30 minutes after the conversation's last run or its last job's end, so `sigma exec` and attn, which hold no watch, still find it. One that waits to compact keeps it up until its compaction ends.
 
 ## Tests
+
+Screen, `packages/sigma/test/screen.test.ts`:
+
+- claude-job-card, background-count: a background command's card reads running while it works and done after, the status bar counts it, and its report shows under its name before Sigma's follow-up
+- claude-job-card: a background command cut off by a server stop reads cut off on its card, and a line under its name says so
 
 Stack, `packages/sigma/test/stack.test.ts`:
 

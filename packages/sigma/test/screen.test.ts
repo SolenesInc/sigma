@@ -528,6 +528,130 @@ test("subagent-claude: a Claude subagent shows as a card in place of its call's 
   await quit(own)
 }, 40_000)
 
+const BACKGROUND_WAKE =
+  "Use the Bash tool with run_in_background set to true to run: sleep 8; echo done. Do not wait for it. Reply with exactly: started"
+const BACKGROUND_SLEEP =
+  "Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started"
+
+/** The screen's rows from the one holding `text`, down to the bottom. */
+const rowsFrom = (screen: string, text: string) => {
+  const lines = screen.split("\n")
+  return lines.slice(lines.findIndex((line) => line.includes(text)))
+}
+
+test("claude-job-card, background-count: a background command's card reads running while it works and done after, the status bar counts it, and its report shows under its name before Sigma's follow-up", async () => {
+  using claude = new FakeClaude("bash_background_wake").holdBefore("task_notification")
+  const session = await open([], ["--provider", "claude"], home(), claude.options.env)
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type(`${BACKGROUND_WAKE}\r`)
+  const running = await session.waitFor(
+    (screen) => screen.includes("READY") && screen.includes("started") && claude.holding(),
+    20_000,
+  )
+  expect(running).toContain("▸ Bash(sleep 8; echo done) in background · running")
+  expect(running).toMatch(/READY +⧉ 1 in background/)
+  expect(running).toContain("esc  stop 1 background job")
+  // The call's own result, that the command went to the background, is what the card says.
+  expect(running).not.toContain("Command running in background")
+
+  claude.release()
+  const done = await session.waitFor(
+    (screen) => screen.includes("finished with exit code 0") && screen.includes("READY"),
+    20_000,
+  )
+  expect(done).toContain("▸ Bash(sleep 8; echo done) in background · done")
+  expect(done).not.toContain("in background · running")
+  expect(done).not.toContain("⧉ 1 in background")
+  expect(done).not.toContain("esc  stop")
+  // The report speaks under the job's name, then Sigma answers it.
+  const rows = rowsFrom(done, "Start background sleep-then-echo command  ─")
+  expect(rows[1]).toContain('Background command "Start background sleep-then-echo command" completed (exit code 0)')
+  expect(rows.findIndex((row) => row.includes("SIGMA"))).toBeGreaterThan(1)
+  await quit(session)
+}, 40_000)
+
+test("claude-job-card: a background command cut off by a server stop reads cut off on its card, and a line under its name says so", async () => {
+  using claude = new FakeClaude("bash_background_cut_off")
+  const sigmaHome = home()
+  const env = { ...(await scriptEnv(sigmaHome)), ...claude.options.env }
+  const server = await serving(env)
+  const session = screenSession(["--provider", "claude", "--auto"], env)
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type(`${BACKGROUND_SLEEP}\r`)
+  await session.waitFor(
+    (screen) => screen.includes("in background · running") && screen.includes("READY") && screen.includes("started"),
+    20_000,
+  )
+  server.kill("SIGKILL")
+  await server.exited
+  // The TUI brings a server back, which cuts off the job its last one held.
+  const screen = await session.waitFor(
+    (screen) => screen.includes("in background · cut off") && screen.includes("was cut off"),
+    20_000,
+  )
+  // The line wraps at the screen's edge.
+  expect(screen.replace(/\s+/g, " ")).toContain("Sleep 600 seconds in background ─")
+  expect(screen.replace(/\s+/g, " ")).toContain(
+    'The background command "Sleep 600 seconds in background" was cut off: Claude Code ended before it did.',
+  )
+  expect(screen).not.toContain("⧉ 1 in background")
+  await quit(session)
+}, 40_000)
+
+test("approval-panel: with the conversation and two subagents asking, the panel lists every ask in its own rows, its own first, and ctrl+y answers them in that order", async () => {
+  const session = await open([
+    {
+      tools: [
+        { name: "start_worker", input: { task_name: "docs", message: "update the docs", fork_turns: "none" } },
+        { name: "start_worker", input: { task_name: "deps", message: "bump the dependencies", fork_turns: "none" } },
+      ],
+    },
+    call("bash", { command: "echo docs" }, "/root/docs"),
+    call("bash", { command: "echo deps" }, "/root/deps"),
+    call("bash", { command: "echo parent" }),
+    { text: "the parent is done" },
+    { agent: "/root/docs", text: "docs updated" },
+    { agent: "/root/deps", text: "deps bumped" },
+  ])
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type("delegate\r")
+  const asking = await session.waitFor((screen) => screen.includes("WAITING ON YOU · 3"))
+  expect(asking).toContain("◆ WAITING · 3 asks")
+  const panel = rowsFrom(asking, "WAITING ON YOU · 3")
+  // Its own ask first with the keys; each subagent's after it, next.
+  expect(panel[1]).toMatch(/^│ SIGMA allow bash\(echo parent\)\? +\^Y +allow +\^N +deny +│$/)
+  expect(panel[2]).toMatch(/^│ ⧉ (docs|deps) allow bash\(echo (docs|deps)\)\? · next +│$/)
+  expect(panel[3]).toMatch(/^│ ⧉ (docs|deps) allow bash\(echo (docs|deps)\)\? · next +│$/)
+  expect(panel[2]).not.toBe(panel[3])
+  // Nothing is drawn over anything else: the panel's own borders, the prompt below it and the transcript above it.
+  expect(panel[4]).toMatch(/^╰─+╯$/)
+  expect(panel[5]).toMatch(/^╭─ QUEUE · tab ─+╮$/)
+  const lines = asking.split("\n")
+  const above = lines.slice(0, lines.indexOf(panel[0]!)).findLast((line) => line.trim() !== "")
+  expect(above).toMatch(/^ +allow this call\? · answer below +$/)
+  // Only the panel shows the keys; the call and the cards point to it.
+  expect(asking.match(/\^Y/g)).toHaveLength(1)
+  expect(asking.match(/allow bash\(echo (docs|deps)\)\? · answer below/g)).toHaveLength(2)
+  const oldest = /⧉ (docs|deps)/.exec(panel[2]!)![1]!
+  const other = oldest === "docs" ? "deps" : "docs"
+
+  session.type("\x19")
+  const second = await session.waitFor((screen) => screen.includes("WAITING ON YOU · 2"))
+  expect(second).toContain("✓ allowed by")
+  const left = rowsFrom(second, "WAITING ON YOU · 2")
+  expect(left[1]).toMatch(new RegExp(`^│ ⧉ ${oldest} allow bash\\(echo ${oldest}\\)\\? +\\^Y`))
+  expect(left[2]).toContain(`⧉ ${other} allow bash(echo ${other})? · next`)
+
+  session.type("\x19")
+  const last = await session.waitFor((screen) => screen.includes("WAITING ON YOU · 1"))
+  expect(rowsFrom(last, "WAITING ON YOU · 1")[1]).toMatch(new RegExp(`^│ ⧉ ${other} .*\\^Y`))
+  expect(last).toMatch(/◆ WAITING( \d+s)? /)
+  expect(last).not.toContain("asks")
+  session.type("\x19")
+  await session.waitFor((screen) => !screen.includes("WAITING ON YOU") && screen.includes("the parent is done"))
+  await quit(session)
+}, 40_000)
+
 test("skills-tui: a message that names a skill shows which skills came with it, also after a reopen", async () => {
   await using fake = new FakeOpenAi()
   fake.play("text_answer")

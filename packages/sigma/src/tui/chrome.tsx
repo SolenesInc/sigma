@@ -66,8 +66,10 @@ export interface Screen {
   readonly readOnly: boolean
   /** Nothing to show yet: the splash shows instead of the transcript. */
   readonly empty: boolean
-  /** A subagent under it waits on a person. */
-  readonly subagentAsks: boolean
+  /** Every call of it and its subagents waiting on a person, in the order `^Y` and `^N` answer them. */
+  readonly asks: ReadonlyArray<Ask>
+  /** How much work goes on under it beside its runs: its subagents working, and Claude Code's background jobs. */
+  readonly background: number
   /** What the last command or input came to, such as why it was refused, until the next one. */
   readonly notice?: Notice | undefined
   /** What the run in flight and the compactions are doing, from the conversation's live state. */
@@ -79,6 +81,9 @@ export interface Screen {
 }
 
 export type Notice = { readonly text: string; readonly warning: boolean }
+
+/** A call waiting on a person: `by` names the subagent that asks, absent for the conversation shown. */
+export type Ask = { readonly by?: string | undefined; readonly call: string }
 
 export type LiveStatus = {
   readonly compacting: boolean
@@ -117,7 +122,7 @@ export interface ConversationActions {
   readonly submit: (text: string, steer: boolean) => void
   /** The names of the images `text` attaches, for a wire that carries images. */
   readonly attachments?: (text: string) => ReadonlyArray<string>
-  /** Answers the first call that waits on a person, in the conversation or a subagent under it. */
+  /** Answers the first of the screen's asks. */
   readonly answer: (allow: boolean) => void
   readonly interrupt: () => void
   readonly selectModel: (selection: ModelSelection) => void
@@ -207,21 +212,26 @@ const StatusBar = (props: { screen: Screen }) => {
     onCleanup(() => clearInterval(timer))
   })
   const working = () => props.screen.status !== "idle"
-  const waiting = () => props.screen.status === "waiting" || props.screen.subagentAsks
+  const asks = () => props.screen.asks.length
   const spinner = () => SPINNER[Math.floor(now() / SPINNER_INTERVAL) % SPINNER.length]
+  // A subagent can ask while the conversation shown is idle: then nothing has worked long enough to count.
+  const since = () => (working() ? ` ${elapsed(props.screen.workingSince, now())}` : "")
   return (
     <box flexDirection="row" height={1} backgroundColor={color.panel}>
       <Show
-        when={working()}
+        when={working() || asks() > 0}
         fallback={
           <text fg={color.background} bg={color.magenta}>
             {" ■ READY "}
           </text>
         }
       >
-        <text fg={color.background} bg={waiting() ? color.yellow : color.cyan}>
-          {` ${waiting() ? "◆ WAITING" : `${spinner()} WORKING`} ${elapsed(props.screen.workingSince, now())} `}
+        <text fg={color.background} bg={asks() > 0 ? color.yellow : color.cyan}>
+          {` ${asks() > 0 ? `◆ WAITING${asks() > 1 ? ` · ${asks()} asks` : ""}` : `${spinner()} WORKING`}${since()} `}
         </text>
+      </Show>
+      <Show when={props.screen.background > 0}>
+        <text fg={color.violet}>{`  ⧉ ${props.screen.background} in background`}</text>
       </Show>
       <Show when={props.screen.live.compacting}>
         <text fg={color.cyan}> ◆ compacting</text>
@@ -278,6 +288,48 @@ const Header = (props: { screen: Screen }) => (
   </box>
 )
 
+/** What `Esc` stops now: the run, or else the work going on under the idle conversation. */
+const escHint = (screen: Screen) =>
+  screen.hosted || screen.readOnly
+    ? ""
+    : screen.status !== "idle"
+      ? " esc  stop the run "
+      : screen.background > 0
+        ? ` esc  stop ${screen.background} background job${screen.background === 1 ? "" : "s"} `
+        : ""
+
+/**
+ * Every call waiting on a person, in rows of its own above the prompt, so none is lost up the transcript (D8, D9 of
+ * s-cjk9k6). Only the first row shows the keys, which answer it.
+ */
+const AsksPanel = (props: { asks: ReadonlyArray<Ask> }) => (
+  <box
+    border
+    borderStyle="rounded"
+    borderColor={color.yellow}
+    title={` WAITING ON YOU · ${props.asks.length} `}
+    titleColor={color.yellow}
+    flexDirection="column"
+    paddingLeft={1}
+    flexShrink={0}
+  >
+    <For each={props.asks}>
+      {(ask, at) => (
+        <box flexDirection="row" gap={1}>
+          <text fg={ask.by === undefined ? color.cyan : color.violet} flexShrink={0}>
+            {ask.by === undefined ? "SIGMA" : `⧉ ${ask.by}`}
+          </text>
+          <text fg={color.yellow} flexShrink={1}>{`allow ${ask.call}?`}</text>
+          <Show when={at() === 0} fallback={<text fg={color.dim}>· next</text>}>
+            <KeyCap cap="^Y" what="allow" />
+            <KeyCap cap="^N" what="deny" />
+          </Show>
+        </box>
+      )}
+    </For>
+  </box>
+)
+
 const Prompt = (props: {
   screen: Screen
   setup: SetupView
@@ -325,6 +377,8 @@ const Prompt = (props: {
                 : " QUEUE · tab "
       }
       titleColor={color.magenta}
+      bottomTitle={escHint(props.screen)}
+      bottomTitleAlignment="right"
       flexDirection="column"
       paddingLeft={1}
       minHeight={3}
@@ -435,6 +489,9 @@ export const Shell = (props: {
               {`${notice().warning ? "✗" : "◆"} ${notice().text}`}
             </text>
           )}
+        </Show>
+        <Show when={props.screen.asks.length > 0}>
+          <AsksPanel asks={props.screen.asks} />
         </Show>
         <Prompt
           screen={props.screen}

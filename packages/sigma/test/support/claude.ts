@@ -28,6 +28,7 @@ export class FakeClaude {
   })
 
   readonly #fixture: string
+  #holdBefore: string | undefined
 
   /** Plays the fixtures' Claude Code processes one per spawn, in order: several chain one journey after another. */
   constructor(...fixtures: [string, ...string[]]) {
@@ -42,8 +43,34 @@ export class FakeClaude {
   get options(): ClaudeOptions {
     return {
       executable: EXECUTABLE,
-      env: { FAKE_CLAUDE_FIXTURE: this.#fixture, FAKE_CLAUDE_DIR: this.dir },
+      env: {
+        FAKE_CLAUDE_FIXTURE: this.#fixture,
+        FAKE_CLAUDE_DIR: this.dir,
+        ...(this.#holdBefore === undefined ? {} : { FAKE_CLAUDE_HOLD_BEFORE: this.#holdBefore }),
+      },
     }
+  }
+
+  /**
+   * Holds each process before the first frame of `subtype` it would write, such as a background job's
+   * `task_notification`, as the time a real job takes, until `release`. Set before the server starts.
+   */
+  holdBefore(subtype: string) {
+    this.#holdBefore = subtype
+    return this
+  }
+
+  /** Whether a process holds, waiting for `release`. */
+  holding() {
+    return this.log().some((entry) => entry.held !== undefined)
+  }
+
+  /** Lets the held process go on. */
+  release() {
+    const log = this.log()
+    const held = log.find((entry) => entry.held !== undefined)
+    const started = log.find((entry) => entry.argv && entry.probe === undefined && entry.spawn === held?.spawn)
+    process.kill(started.pid, "SIGUSR1")
   }
 
   log(): Array<any> {

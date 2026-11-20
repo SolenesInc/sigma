@@ -12,6 +12,14 @@ conversation was started with `--auto`, which runs every call without asking.
 - `tool-grep-lines` `grep` reports only the lines a file has, whatever its line endings.
 - `tool-read-only` runs a read-only call without asking and shows its output.
 - `approval-ask` shows `allow this call?` and `◆ WAITING` while a call waits.
+- `approval-panel` lists every call of the tree waiting on a person in the
+  `WAITING ON YOU · <n>` panel above the prompt, in rows of its own: the
+  conversation's own asks first (`SIGMA allow <call>?`), then its subagents'
+  (`⧉ <subagent> allow <call>?`), oldest first. `^Y` and `^N` answer the
+  first row, the only one that shows them; the rest read `· next`, and each
+  call and card in the transcript reads `· answer below`. The status bar
+  reads `◆ WAITING · <n> asks` when more than one waits, also while the
+  conversation itself is idle.
 - `approval-allow-tui` allows with `^Y`: `✓ allowed by ada`, then the call's
   output.
 - `approval-deny-tui` denies with `^N`: `✗ denied by ada` and the denial as
@@ -61,8 +69,9 @@ Preconditions:
   `drive.ts r tui type 'check it'`, `drive.ts r tui key Enter`,
   `drive.ts r tui wait 'allow this call?'`, `drive.ts r tui screen asking`.
   Under `SIGMA`: `checking`, `▸ bash(echo approved)`,
-  `allow this call?  ^Y  allow  ^N  deny`, and the status bar reads
-  `◆ WAITING 0s`, and the prompt panel is titled `QUEUE · tab`. `drive.ts r watch <id> --save asking` shows
+  `allow this call? · answer below`, the `WAITING ON YOU · 1` panel above the
+  prompt holds `SIGMA allow bash(echo approved)?  ^Y  allow  ^N  deny`, the
+  status bar reads `◆ WAITING 0s`, and the prompt panel is titled `QUEUE · tab`. `drive.ts r watch <id> --save asking` shows
   the request in `docs.sigma.approvals.requests`, keyed by its approval id,
   with `"tool": "bash"`.
 - **Allow.** Run `drive.ts r tui key C-y`, `drive.ts r tui wait 'all done'`,
@@ -134,6 +143,15 @@ Preconditions:
   of the two is accepted. The watch shows one `sigma.approval` entry with
   `"allow": true`, a `pi.tool-result` with `approved`, and a `sigma.run_end`
   `answered`.
+- **Several ask** (`approval-panel`). A run whose script is
+  `[{"tools": [{"name": "start_worker", "input": {"task_name": "docs", "message": "update the docs", "fork_turns": "none"}}, {"name": "start_worker", "input": {"task_name": "deps", "message": "bump the dependencies", "fork_turns": "none"}}]}, {"agent": "/root/docs", "tool": {"name": "bash", "input": {"command": "echo docs"}}}, {"agent": "/root/deps", "tool": {"name": "bash", "input": {"command": "echo deps"}}}, {"tool": {"name": "bash", "input": {"command": "echo parent"}}}, {"text": "the parent is done"}, {"agent": "/root/docs", "text": "docs updated"}, {"agent": "/root/deps", "text": "deps bumped"}]`.
+  `drive.ts r tui start`, type `delegate` and `Enter`, wait for
+  `WAITING ON YOU · 3`: the panel above the prompt holds
+  `SIGMA allow bash(echo parent)?  ^Y  allow  ^N  deny`, then each
+  subagent's ask, oldest first, as `⧉ docs allow bash(echo docs)? · next`;
+  the call and both cards read `· answer below`; the status bar reads
+  `◆ WAITING · 3 asks`. Each `C-y` answers the first row, and the next moves
+  up: `WAITING ON YOU · 2`, then `· 1`, then the panel is gone.
 - **Interrupt while asking.** In a fresh run, ask as above, then
   `drive.ts r tui key Escape`, `drive.ts r tui wait interrupted`.
   `allow this call?` is gone, `◆ interrupted` shows, and the command never
@@ -168,6 +186,7 @@ Screen, `packages/sigma/test/screen.test.ts`:
 - approval-ask, approval-allow-tui: sigma asks before a command runs, ctrl+y allows it and its output shows under the call
 - approval-ask, codemode-nested-policy: a script's call that waits for a person shows its command under the script before ctrl+y allows it
 - approval-deny-tui: ctrl+n denies a call, the denial shows as its result and the run goes on
+- approval-panel: with the conversation and two subagents asking, the panel lists every ask in its own rows, its own first, and ctrl+y answers them in that order
 
 Stack, `packages/sigma/test/stack.test.ts`:
 
