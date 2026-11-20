@@ -297,8 +297,7 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       const runOwn = (id: string, { request, done }: Extract<Event, { type: "own" }>) => {
         calls.get(id)!.own = "paired"
         void host
-          .callbacks(undefined, request.signal)
-          .then((callbacks) => callbacks.runOwn(id, calls.get(id)!.call.name, request.arguments, request.signal))
+          .runOwn(undefined, id, calls.get(id)!.call.name, request.arguments, request.signal)
           .then(done, (error) => done({ content: [{ type: "text", text: String(error) }], isError: true }))
       }
 

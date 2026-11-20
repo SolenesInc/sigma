@@ -357,8 +357,7 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
                       // A subagent's call is its job's, which writes the subagent's conversation.
                       const job = ownCallers.get(call)
                       ownCallers.delete(call)
-                      const callbacks = await host.callbacks(job, signal)
-                      return mcpResult(await callbacks.runOwn(call, tool.name, input, signal))
+                      return mcpResult(await host.runOwn(job, call, tool.name, input, signal))
                     },
                   })),
                 }),

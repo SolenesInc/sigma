@@ -40,7 +40,7 @@ export type ProcessConfig<S = unknown> = {
   /** What the harness adds to its own system prompt: the sections of the extensions it is offered, then the agent's instructions. */
   readonly instructions?: string
   /**
-   * Sigma's own tools the harness is offered beside or instead of its own, each call run through `Callbacks.runOwn`:
+   * Sigma's own tools the harness is offered beside or instead of its own, each call run through `Host.runOwn`:
    * with remote hands every tool of the conversation but code mode, otherwise the tools of the extensions the hosted run
    * offers it (D17). A live process keeps the tools it started with, so they are part of its key.
    */
@@ -150,6 +150,19 @@ export interface Host {
    * that serves its turn, which a turn the harness began by itself is served by only once a run attaches (F10).
    */
   readonly callbacks: (job: string | undefined, signal?: AbortSignal) => Promise<Callbacks>
+  /**
+   * Runs the call `call` of one of sigma's own tools, `name`, which the harness made through sigma, in the conversation
+   * of the job `job`, or of the main loop when `undefined`, as `Callbacks.recordOwn` and `Callbacks.runOwn` say. The
+   * harness made the call, so once a run or job takes it, it is committed before that run or job ends, even when the
+   * harness gives up on it (`signal`), as its process's end does. A call waiting for its run gives up with `signal`.
+   */
+  readonly runOwn: (
+    job: string | undefined,
+    call: string,
+    name: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ) => Promise<OwnResult>
   /** The harness compacted its context into `summary`, by a person's request (`manual`) or at its threshold. */
   readonly compacted: (summary: string, manual: boolean, signal?: AbortSignal) => Promise<void>
 }
@@ -272,13 +285,17 @@ export interface Callbacks {
   /** Whether the call may run: at once in a conversation that runs without asking, otherwise once a person answers. */
   readonly approve: (call: ToolCall, signal?: AbortSignal) => Promise<boolean>
   /**
-   * Runs the call `call` of one of sigma's own tools, `name` (`ProcessConfig.own`), which the harness made through
-   * sigma: it is committed with its tool task, as in sigma's own loop, which asks a person when the tool asks, and
-   * answered with the result that task committed, followed, with remote hands, by what the model must read now
-   * (`RemoteHands.notice`). An own tool's call takes neither `beforeRun` nor `approve`: the adapter allows the harness's own
-   * permission request for it at once, so a person is asked once (F18).
+   * Commits the call `call` of one of sigma's own tools (`ProcessConfig.own`), which the harness made through sigma, with
+   * `input` and the tool task that runs it, once its frame is sighted, or gives it up when the run ends first unsighted; as in sigma's own loop, which asks a person when the tool asks. An own tool's
+   * call takes neither `beforeRun` nor `approve`: the adapter allows the harness's own permission request for it at
+   * once, so a person is asked once (F18).
    */
-  readonly runOwn: (call: string, name: string, input: unknown, signal?: AbortSignal) => Promise<OwnResult>
+  readonly recordOwn: (call: string, input: unknown) => Promise<void>
+  /**
+   * Waits for the tool task of the own call `call`, of the tool `name`, that `recordOwn` committed, and answers with the
+   * result it committed, followed, with remote hands, by what the model must read now (`RemoteHands.notice`).
+   */
+  readonly runOwn: (call: string, name: string, signal?: AbortSignal) => Promise<OwnResult>
 }
 
 /** What a call of sigma's own tools answers the harness with. */

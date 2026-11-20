@@ -2,8 +2,9 @@
 // its `hosted.job` task writes (D1). Each commits through its own task: its texts, its calls and their results, the
 // questions it asks a person, and the jobs it starts. A call the harness runs itself is committed before its
 // `beforeRun` callback returns, so the intent is durable before the effect; a question for a person waits on
-// `sigma.approvals`, keyed `<task>/<call>`. A call of sigma's own tools, which the harness makes through sigma
-// (`runOwn`), runs as a `pi.tool` task of the run or job, as in sigma's own loop.
+// `sigma.approvals`, keyed `<task>/<call>`. A call of sigma's own tools, which the harness makes through sigma, is
+// committed by `recordOwn` and runs as a `pi.tool` task of the run or job, as in sigma's own loop, whose result `runOwn`
+// answers with; `settleOwn` commits the sighted ones before the run or job ends.
 import { copyJson } from "@sigma/delta/json"
 import type { Draft } from "@sigma/delta"
 import {
@@ -480,15 +481,43 @@ export const makeTranscript = (scope: TranscriptScope) => {
       })
     })
 
+  /** The commits of the own calls the harness made, by call, until each is committed or the run gives it up. */
+  const owning = new Map<string, Promise<void>>()
+  /** The run is over: an own call it never sighted is not its to commit. */
+  const closed = Deferred.makeUnsafe<void>()
+
   /**
-   * Runs an own tool's call: commits it with its tool task, waits for the task, and answers with the result it
-   * committed, followed by what the model must read now (`RemoteHands.notice`).
+   * Commits an own tool's call with its tool task once its frame is sighted; nothing the harness gives up on stops it,
+   * since it made the call. Only the run's end does, for a call it never sighted (`settleOwn`).
    */
-  const runOwn: Callbacks["runOwn"] = (id, name, input, signal) =>
+  const recordOwn: Callbacks["recordOwn"] = (id, input) => {
+    const committed = run(
+      Effect.raceFirst(
+        Effect.asVoid(Effect.flatMap(Deferred.await(sighting(id)), (seen) => record(seen, input, true))),
+        Effect.andThen(Deferred.await(closed), Effect.fail(new Error(`the run ended before the call ${id}`))),
+      ),
+      undefined,
+    )
+    owning.set(id, committed)
+    void committed.catch(() => undefined).then(() => owning.delete(id))
+    return committed
+  }
+
+  /**
+   * Ends the run's own calls: those it sighted are committed first, as their frames came before the run's end, and the
+   * rest are given up. A call that comes while this waits misses the snapshot and is given up, mid-commit at worst,
+   * which the commit's atomicity keeps whole.
+   */
+  const settleOwn = Effect.gen(function* () {
+    const sighted = [...owning].flatMap(([id, committed]) => (Deferred.isDoneUnsafe(sighting(id)) ? [committed] : []))
+    yield* Effect.promise(() => Promise.allSettled(sighted))
+    yield* Deferred.succeed(closed, undefined)
+  })
+
+  /** Waits for the tool task of an own call, and answers with the result it committed, then what the model must read now. */
+  const runOwn: Callbacks["runOwn"] = (id, name, signal) =>
     run(
       Effect.gen(function* () {
-        const seen = yield* Deferred.await(sighting(id))
-        yield* record(seen, input, true)
         const tool = tools.get(id)
         tools.delete(id)
         if (tool === undefined) {
@@ -518,9 +547,9 @@ export const makeTranscript = (scope: TranscriptScope) => {
     )
 
   /** The callbacks for this conversation's calls. */
-  const callbacks: Callbacks = { beforeRun, approve, runOwn }
+  const callbacks: Callbacks = { beforeRun, approve, recordOwn, runOwn }
 
-  return { callbacks, said, results, host, hostCommand, recordText }
+  return { callbacks, said, results, host, hostCommand, recordText, settleOwn }
 }
 
 export type Transcript = ReturnType<typeof makeTranscript>

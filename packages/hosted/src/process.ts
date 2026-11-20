@@ -86,11 +86,22 @@ export const openHostedProcess = <S>(
       return job
     }
 
+    /** The run the process serves now, while it serves: it takes a main-loop own call at once (`Host.runOwn`). */
+    let current: Serving | undefined
+
     const host: Host = {
       callbacks: (job, signal): Promise<Callbacks> =>
         job === undefined
           ? until(Deferred.await(serving), signal)
           : until(Deferred.await(jobOf(job).callbacks), signal),
+      runOwn: async (job, call, name, input, signal) => {
+        // The run that serves takes a main-loop call at once, so it commits the call before it ends
+        // (`Serving.settleOwn`), whatever the harness gives up meanwhile: giving up on a call does not unmake it. A call
+        // that waits for its run has nothing committed yet, so it waits under `signal`.
+        const callbacks = job === undefined && current !== undefined ? current : await host.callbacks(job, signal)
+        await callbacks.recordOwn(call, input)
+        return callbacks.runOwn(call, name, signal)
+      },
       compacted: async (summary, manual, signal) =>
         (await until(Deferred.await(serving), signal)).compacted(summary, manual, signal),
     }
@@ -280,12 +291,17 @@ export const openHostedProcess = <S>(
             },
           }
           Deferred.doneUnsafe(serving, Exit.succeed(now))
+          current = now
           yield* Effect.addFinalizer(() =>
             Effect.andThen(
               detach(served),
-              Effect.sync(() => {
-                serving = Deferred.makeUnsafe<Serving>()
-              }),
+              Effect.andThen(
+                now.settleOwn,
+                Effect.sync(() => {
+                  if (current === now) current = undefined
+                  serving = Deferred.makeUnsafe<Serving>()
+                }),
+              ),
             ),
           )
           const switched = yield* Effect.result(opened.select(selectionOf(run.agent)))

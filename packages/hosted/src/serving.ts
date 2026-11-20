@@ -78,6 +78,8 @@ export interface Serving extends Callbacks {
   readonly ended: Ended | undefined
   /** The harness compacted its context into `summary`, by a person's request (`manual`) or at its threshold. */
   readonly compacted: (summary: string, manual: boolean, signal?: AbortSignal) => Promise<void>
+  /** Commits the own calls the run sighted that are not committed yet, and gives up the rest: the run is ending. */
+  readonly settleOwn: Effect.Effect<void>
 }
 
 /** The run `ctx` served by `process`. */
@@ -284,6 +286,7 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
       return ended
     },
     compacted,
+    settleOwn: transcript.settleOwn,
     ...transcript.callbacks,
   }
 }

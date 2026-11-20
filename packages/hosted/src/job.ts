@@ -147,7 +147,7 @@ export const makeJobTask = (links: JobLinks) =>
             serially,
           })
           yield* Deferred.succeed(job.callbacks, transcript.callbacks)
-          const ended = yield* work(job, transcript, serially)
+          const ended = yield* Effect.ensuring(work(job, transcript, serially), transcript.settleOwn)
           const answer = yield* latest(runtime)
           yield* runtime.commit((tx) =>
             Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, JobNext, never> {
