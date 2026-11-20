@@ -320,7 +320,7 @@ test("claude-idle-compaction, claude-idle-release: a short context, or claude_id
 test("server-idle-exit, claude-idle-release: a live Claude Code process keeps the server up after its client leaves, until the process closes", async () => {
   using claude = new FakeClaude("text")
   const home = tempHome()
-  const served = await servingUntilIdle(home, "10 millis", [], { claude: claude.options, claudeIdle: "500 millis" })
+  const served = await servingUntilIdle(home, "10 millis", [], { claude: claude.options, claudeIdle: "2 seconds" })
   const client = await RawClient.connect(home.socket)
   const conversation = await startClaude(client, home.dir)
   await submit(client, conversation, "Reply with exactly: fixture text ok")
@@ -329,8 +329,10 @@ test("server-idle-exit, claude-idle-release: a live Claude Code process keeps th
   const answered = performance.now()
   client.close()
   await deadline(served.exited, DEADLINE, "server exit")
-  // Without the process's hold the server would have gone 10 ms after the client did, closing the process with it.
-  expect(performance.now() - answered).toBeGreaterThanOrEqual(500)
+  // Without the process's hold the server would have gone 10 ms after the client did, closing the process with it. The
+  // hold's 2 s start on the server when the run ends, before this client sees it, so the bound leaves room for that lag:
+  // with a 500 ms hold and a 500 ms bound, a busy machine (load average 28) measured 495 ms.
+  expect(performance.now() - answered).toBeGreaterThanOrEqual(1000)
   await claude.logged((fake) => fake.exited(0))
   rmSync(home.dir, { recursive: true, force: true })
 })
