@@ -9,7 +9,17 @@ import { FakeClaude } from "./support/claude.ts"
 import { TestTargets } from "./support/targets.ts"
 import { FakeOpenAi, signIn } from "./support/openai.ts"
 import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
-import { scriptEnv, runningServer, serving, settled, start, submit, watchView, tempHome } from "./support/server.ts"
+import {
+  hold,
+  scriptEnv,
+  runningServer,
+  serving,
+  settled,
+  start,
+  submit,
+  watchView,
+  tempHome,
+} from "./support/server.ts"
 import { png } from "./support/png.ts"
 import { screenSession, stopServer } from "./support/terminal.ts"
 
@@ -249,7 +259,9 @@ test("start-with-id: a launcher opens sigma on an id it chose with a first promp
 })
 
 test("interrupt-tui: escape stops sigma mid-answer and the answer shows it was interrupted", async () => {
-  const session = await open([{ text: "one two three four five six seven eight nine ten", delayMs: 300 }])
+  // Held until escape ends it.
+  using held = hold()
+  const session = await open([{ text: "one two three four five six seven eight nine ten", hold: held.path }])
   await session.waitFor((screen) => screen.includes("READY"))
   session.type("count\r")
   await session.waitFor((screen) => screen.includes("WORKING") && screen.includes("one"))
@@ -260,7 +272,8 @@ test("interrupt-tui: escape stops sigma mid-answer and the answer shows it was i
 })
 
 test("queue-show: a prompt sent while sigma works waits in the queue, then runs", async () => {
-  const session = await open([{ text: "slow one two three", delayMs: 300 }, { text: "fast reply" }])
+  using held = hold()
+  const session = await open([{ text: "slow one two three", hold: held.path }, { text: "fast reply" }])
   await session.waitFor((screen) => screen.includes("READY"))
   session.type("first\r")
   await session.waitFor((screen) => screen.includes("WORKING") && screen.includes("STEER · tab"))
@@ -268,6 +281,7 @@ test("queue-show: a prompt sent while sigma works waits in the queue, then runs"
   await session.waitFor((screen) => screen.includes("QUEUE · tab"))
   session.type("second\r")
   await session.waitFor((screen) => screen.includes("queued · second"))
+  held.release()
   const screen = await session.waitFor((screen) => screen.includes("fast reply"))
   expect(screen).not.toContain("queued · second")
   await quit(session)
@@ -785,14 +799,18 @@ test("image-attach: an image the server cannot decode is refused on screen by na
 
 test("crash-tui: the open TUI finishes the answer after the server is killed mid-answer", async () => {
   const sigmaHome = home()
-  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight nine ten", delayMs: 100 }])
+  using held = hold()
+  const env = await scriptEnv(sigmaHome, [
+    { text: "one two three four five six seven eight nine ten", hold: held.path },
+  ])
   const server = await serving(env)
   const session = screenSession([], env)
   await session.waitFor((screen) => screen.includes("READY"))
   session.type("count\r")
-  await session.waitFor((screen) => screen.includes("WORKING") && screen.includes("one two"))
+  await session.waitFor((screen) => screen.includes("WORKING") && screen.includes("one"))
   server.kill("SIGKILL")
   await server.exited
+  held.release()
   // The TUI brings a server back; the run picks up where it was cut off and answers once.
   const screen = await session.waitFor(
     (screen) => screen.includes("one two three four five six seven eight nine ten") && screen.includes("READY"),
@@ -1007,12 +1025,13 @@ test("reset-rpc, reset-handoff: /reset draws a new context with its handoff, and
 })
 
 test("compact-rpc, compaction-live-status: /compact says when there is nothing to compact, shows a compaction running, and why one failed", async () => {
+  using held = hold()
   // Past the 20,000 tokens a summary keeps by default, so the run before it is summarized.
   const long = "word ".repeat(20_000)
   const { session, client } = await openTalk([
     { text: "answer one" },
     { text: "answer two" },
-    { text: "the summary of it all", delayMs: 300 },
+    { text: "the summary of it all", hold: held.path },
     { text: "answer three" },
     { fail: "the summary model is gone" },
   ])
@@ -1025,6 +1044,7 @@ test("compact-rpc, compaction-live-status: /compact says when there is nothing t
   }
   session.type("/compact keep the numbers\r")
   await session.waitFor((screen) => screen.includes("◆ compacting"))
+  held.release()
   await session.waitFor((screen) => screen.includes("compacted the context") && !screen.includes("◆ compacting"))
   await submit(client, "talk", long)
   await view.until(settled(3))
@@ -1178,7 +1198,9 @@ test("queue-edit: emptying the prompt you opened withdraws it, esc closes an edi
 }, 20_000)
 
 test("interrupt-restore: escape mid-run gives the text of your pending prompts back to the composer, oldest first, before what you were typing", async () => {
-  const session = await open([{ text: "one two three four five six seven eight nine ten", delayMs: 300 }])
+  // Held until escape ends it.
+  using held = hold()
+  const session = await open([{ text: "one two three four five six seven eight nine ten", hold: held.path }])
   await session.waitFor((screen) => screen.includes("READY"))
   session.type("count\r")
   await session.waitFor((screen) => screen.includes("WORKING") && screen.includes("one"))

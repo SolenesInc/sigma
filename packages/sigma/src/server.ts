@@ -1034,8 +1034,13 @@ const Handlers = SigmaRpcs.toLayer(
         }),
       ),
       "status/watch": () => Stream.unwrap(Effect.as(lifetime.hold, status.watch(connectionQueue))),
-      // Stops once the runs in flight settle; a run is never cut off by a stop.
-      "server/stop": () => Effect.andThen(Effect.ignore(quiet), afterReply(lifetime.stop)),
+      // Stops once the runs in flight settle; a run is never cut off by a stop. The line tells whoever watches the
+      // server's stderr that the stop arrived.
+      "server/stop": () =>
+        Console.error("sigma stopping once its runs settle").pipe(
+          Effect.andThen(Effect.ignore(quiet)),
+          Effect.andThen(afterReply(lifetime.stop)),
+        ),
       "providers/list": ({ refresh }) => setup.providers(refresh ?? false),
       "models/list": ({ refresh }) => setup.models(refresh ?? false),
       "auth/start": writing(({ provider, method }) => setup.start(provider, method)),

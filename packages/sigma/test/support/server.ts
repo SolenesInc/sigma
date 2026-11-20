@@ -15,8 +15,9 @@ import {
 import type { AgySettings } from "@sigma/agy"
 import type { ClaudeProcessSettings } from "@sigma/claude"
 import { REPORT_KIND } from "@sigma/hosted"
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
-import { Clock, type Duration, Effect, Exit, Layer, Logger, Scope } from "effect"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import { Clock, Console, type Duration, Effect, Exit, Layer, Logger, Scope } from "effect"
 import type { HomeConfig } from "../../src/config.ts"
 import { homeAt, type Home } from "../../src/home.ts"
 import { openAiOptions, type OpenAiOptions, type ProviderOptions } from "../../src/providers.ts"
@@ -24,7 +25,7 @@ import { serverLayer } from "../../src/server.ts"
 import { Lifetime } from "../../src/lifetime.ts"
 import { defaultAgy } from "./agy.ts"
 import { defaultClaude } from "./claude.ts"
-import { deadline, RawClient, type Reply } from "./raw.ts"
+import { DEADLINE, deadline, RawClient, type Reply } from "./raw.ts"
 import { sigma, sigmaEnv } from "./terminal.ts"
 
 export { homeAt }
@@ -39,6 +40,37 @@ export const logRecorder = () => {
     logged.push({ level: logLevel, message })
   })
   return { logged, recorder: Logger.layer([recorder], { mergeWithExisting: true }) }
+}
+
+/**
+ * What an in-process server prints to stderr, kept beside the stderr it still prints to, as a test watching the
+ * `sigma serve` process reads it: `printed` resolves once a line includes `text`.
+ */
+export const stderrRecorder = () => {
+  const lines: Array<string> = []
+  const waiters = new Set<() => void>()
+  const recording: Console.Console = Object.assign(Object.create(console), {
+    error: (...args: ReadonlyArray<unknown>) => {
+      console.error(...args)
+      lines.push(args.map(String).join(" "))
+      for (const waiter of waiters) waiter()
+    },
+  })
+  const printed = (text: string) =>
+    deadline(
+      new Promise<void>((resolve) => {
+        const check = () => {
+          if (!lines.some((line) => line.includes(text))) return
+          waiters.delete(check)
+          resolve()
+        }
+        waiters.add(check)
+        check()
+      }),
+      DEADLINE,
+      `the server printed ${JSON.stringify(text)}`,
+    )
+  return { printed, layer: Layer.succeed(Console.Console, recording) }
 }
 
 export interface ServerOptions {
@@ -77,6 +109,7 @@ export const runningServer = async (
   const home = options.home ?? tempHome()
   const scope = Effect.runSync(Scope.make())
   const { logged, recorder } = logRecorder()
+  const stderr = stderrRecorder()
   await Effect.runPromise(
     Layer.buildWithScope(
       serverLayer(home, {
@@ -88,7 +121,7 @@ export const runningServer = async (
         ...(options.claudeStop === undefined ? {} : { claudeStop: options.claudeStop }),
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.bashTimeout === undefined ? {} : { bashTimeout: options.bashTimeout }),
-      }).pipe(Layer.provide(recorder)),
+      }).pipe(Layer.provide(recorder), Layer.provide(stderr.layer)),
       scope,
     ),
   )
@@ -96,6 +129,7 @@ export const runningServer = async (
   return {
     home,
     logged,
+    printed: stderr.printed,
     stop,
     [Symbol.asyncDispose]: async () => {
       await stop()
@@ -112,6 +146,7 @@ export const servingUntilIdle = async (
   options: ServerOptions & { readonly idleClock?: Clock.Clock } = {},
 ) => {
   const listening = Promise.withResolvers<void>()
+  const stderr = stderrRecorder()
   const exited = Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Lifetime
@@ -126,13 +161,13 @@ export const servingUntilIdle = async (
           providers: testProviders(home, script, options),
           ...(options.claudeIdle === undefined ? {} : { claudeIdle: options.claudeIdle }),
           ...(options.claudeStop === undefined ? {} : { claudeStop: options.claudeStop }),
-        }),
+        }).pipe(Layer.provide(stderr.layer)),
       ),
       Effect.scoped,
     ),
   )
   await Promise.race([listening.promise, exited])
-  return { exited }
+  return { exited, printed: stderr.printed }
 }
 
 /**
@@ -149,6 +184,39 @@ export const idleGrace = () => {
     },
   })
   return { clock, pass: () => passed.resolve() }
+}
+
+/**
+ * A file a script step's `hold` waits on: the step's answer stops after its first word until `release` makes the file,
+ * so a run stays live for as long as the test needs it, however slow the machine. `using` removes it.
+ */
+export const hold = () => {
+  const dir = mkdtempSync("/tmp/sigma-hold-")
+  const path = join(dir, "go")
+  return {
+    path,
+    release: () => writeFileSync(path, ""),
+    [Symbol.dispose]: () => rmSync(dir, { recursive: true, force: true }),
+  }
+}
+
+/** Reads `stream` until what it printed includes `text`; returns all it printed. */
+export const untilPrinted = async (stream: ReadableStream<Uint8Array>, text: string, what: string) => {
+  const reader = stream.getReader()
+  let printed = ""
+  const read = async () => {
+    while (!printed.includes(text)) {
+      const { value, done } = await reader.read()
+      if (done) throw new Error(`${what}: the stream ended first: ${JSON.stringify(printed)}`)
+      printed += new TextDecoder().decode(value)
+    }
+  }
+  try {
+    await deadline(read(), DEADLINE, what)
+  } finally {
+    reader.releaseLock()
+  }
+  return printed
 }
 
 /** The environment of a `sigma` binary answering from `script`. */

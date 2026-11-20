@@ -1,7 +1,10 @@
 // The `script` provider: answers from a list of steps, the format of `SIGMA_MODEL_SCRIPT`. Each request takes the
 // next unused step for its agent; with none left, it answers `You said: <the last user text>`. It streams word by
-// word, with `delayMs` before each word.
+// word, with `delayMs` before each word, and a step with `hold` stops after its first word until a file exists at that
+// path.
 import { Duration, Effect, Schema, Stream } from "effect"
+import { existsSync, watch } from "node:fs"
+import { dirname } from "node:path"
 import { nothingToSignIn, type ProviderInstance } from "./kind.ts"
 import type { Provider } from "./models.ts"
 import { failure, replay } from "./replay.ts"
@@ -15,7 +18,13 @@ export const ScriptStep = Schema.Struct({
   /** Several calls in one response, after `tool`'s. */
   tools: Schema.optionalKey(Schema.Array(Schema.Struct({ name: Schema.String, input: Schema.Unknown }))),
   fail: Schema.optionalKey(Schema.String),
+  /** A pace for a person watching live text; a test orders by `hold` instead. */
   delayMs: Schema.optionalKey(Schema.Int),
+  /**
+   * A file path: after its first word the answer waits until a file exists there, however long that takes. A test
+   * makes the file when it is done with the live run, or never, when an interrupt or a restart ends the run.
+   */
+  hold: Schema.optionalKey(Schema.String),
   agent: Schema.optionalKey(Schema.String),
   /** The tokens the answer reports it used; none by default. `input` is the part not read from the prompt cache. */
   usage: Schema.optionalKey(
@@ -71,6 +80,21 @@ const usageOf = (reported: NonNullable<ScriptStep["usage"]>): Usage => {
 }
 
 const words = (text: string) => text.match(/\S+\s*|\s+/g) ?? []
+
+/** Waits until a file exists at `path`, woken by the directory's changes. */
+const fileAt = (path: string) =>
+  Effect.callback<void>((resume) => {
+    const watcher = watch(dirname(path), () => {
+      if (!existsSync(path)) return
+      watcher.close()
+      resume(Effect.void)
+    })
+    if (existsSync(path)) {
+      watcher.close()
+      resume(Effect.void)
+    }
+    return Effect.sync(() => watcher.close())
+  })
 
 const lastUserText = (context: TranscriptContext) => {
   const message = context.messages.findLast((candidate) => candidate.role === "user")
@@ -135,10 +159,18 @@ export function scriptProvider(
           text: `You said: ${lastUserText(context)}`,
           delayMs: 30,
         }
+        if (step.hold !== undefined && words(step.text ?? "").length < 2) {
+          return Stream.die(new Error(`a script step's hold needs a text of two words or more: ${step.hold}`))
+        }
         const delay = step.delayMs ?? 0
+        let sent = 0
         return replay(answer(step, model), {
           split: words,
-          pause: () => (delay > 0 ? Effect.sleep(Duration.millis(delay)) : Effect.void),
+          pause: () =>
+            Effect.gen(function* () {
+              if (step.hold !== undefined && sent++ === 1) yield* fileAt(step.hold)
+              if (delay > 0) yield* Effect.sleep(Duration.millis(delay))
+            }),
         })
       }),
   }

@@ -112,7 +112,7 @@ cannot start: .../config.toml: TOML Parse error ...`. Count
 
 ## Contexts
 
-- **Running work.** `serve --restart` and `server/stop` wait for runs to settle.
+- **Running work.** `serve --restart` and `server/stop` wait for runs to settle. The server prints `sigma stopping once its runs settle` on stderr when a stop reaches it.
 - **Open clients.** A stop ends every open call and watch the way a lost connection does, so an open TUI watches the next server. A client that loses its server starts one, and while `serve --restart` replaces the server, the one the client started gives way (`another server already serves` in the home's `sigma.log`), so the restart always becomes the home's server. A server that took the home just before the restart and does not answer yet is stopped once it answers: the restart prints `waiting for the server that holds <home> to stop`, stops again on each attempt at the home, and gives up with `another server already serves` 30 s after its last stop reached a server, or after its start when none answered.
 
 ## Tests

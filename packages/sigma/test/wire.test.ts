@@ -6,6 +6,7 @@ import { TestTargets } from "./support/targets.ts"
 import type { ScriptStep } from "@sigma/models"
 import { DEADLINE, deadline, errorTag, hangUpMidAnswer, RawClient } from "./support/raw.ts"
 import {
+  hold,
   idleGrace,
   person,
   runEnds,
@@ -32,6 +33,18 @@ const opened = (watch: ViewWatch) => watch.until(() => true)
 const speaking = (watch: ViewWatch) => {
   const live = watch.view().docs["pi.live"] as { generation?: { message?: { content?: unknown[] } } } | undefined
   return (live?.generation?.message?.content?.length ?? 0) > 0
+}
+
+/**
+ * Answers once from a server still serving `home`: a server that took the passed grace for idle has begun to stop
+ * before this round trip ends.
+ */
+const stillServing = async (home: { readonly socket: string }) => {
+  const client = await RawClient.connect(home.socket)
+  expect(
+    (await client.call("initialize", { client: "test", version: "0", protocol: PROTOCOL_VERSION })).result,
+  ).toBeDefined()
+  client.close()
 }
 
 test("answer-wire, answer-shared: every client of a conversation sees the prompt, the answer and how the run ended", async () => {
@@ -77,13 +90,16 @@ test("queue-idempotent: submitting again with the same request id is answered on
 })
 
 test("queue-run: prompts sent while sigma is working wait and run in order, each to its own end", async () => {
-  await using server = await runningServer([{ text: "the first answer", delayMs: 100 }, { text: "second answer" }])
+  using held = hold()
+  await using server = await runningServer([{ text: "the first answer", hold: held.path }, { text: "second answer" }])
   const client = await RawClient.connect(server.home.socket)
   const conversation = await start(client)
   const view = watchView(client, conversation)
   await submit(client, conversation, "one")
   await view.until(speaking)
   await submit(client, conversation, "two")
+  await view.until((watch) => (watch.view().docs["pi.inbox"] as { items: Array<unknown> }).items.length === 1)
+  held.release()
   await view.until(settled(2))
   expect(transcript(view.view().entries)).toEqual([
     "user: one",
@@ -97,8 +113,9 @@ test("queue-run: prompts sent while sigma is working wait and run in order, each
 })
 
 test("queue-run: a prompt sent while sigma works runs after the run fails, instead of waiting for another prompt", async () => {
+  using held = hold()
   await using server = await runningServer([
-    { text: "half an answer", delayMs: 100, fail: "provider went away" },
+    { text: "half an answer", hold: held.path, fail: "provider went away" },
     { text: "second answer" },
   ])
   const client = await RawClient.connect(server.home.socket)
@@ -109,6 +126,7 @@ test("queue-run: a prompt sent while sigma works runs after the run fails, inste
   await submit(client, conversation, "two")
   // Queued behind the run that is about to fail, not started after it.
   await view.until((watch) => (watch.view().docs["pi.inbox"] as { items: Array<unknown> }).items.length === 1)
+  held.release()
   await view.until(settled(2))
   expect(transcript(view.view().entries)).toEqual([
     "user: one",
@@ -123,7 +141,9 @@ test("queue-run: a prompt sent while sigma works runs after the run fails, inste
 })
 
 test("interrupt-wire: interrupting keeps what sigma already said and marks the run interrupted", async () => {
-  await using server = await runningServer([{ text: "one two three four five six seven eight", delayMs: 100 }])
+  // Held until the interrupt ends it.
+  using held = hold()
+  await using server = await runningServer([{ text: "one two three four five six seven eight", hold: held.path }])
   const client = await RawClient.connect(server.home.socket)
   const conversation = await start(client)
   const view = watchView(client, conversation)
@@ -142,7 +162,9 @@ test("interrupt-wire: interrupting keeps what sigma already said and marks the r
 })
 
 test("interrupt-withdraw: interrupting withdraws the prompts that wait, and the transcript names each by its requestId", async () => {
-  await using server = await runningServer([{ text: "one two three four five six seven eight", delayMs: 100 }])
+  // Held until the interrupt ends it.
+  using held = hold()
+  await using server = await runningServer([{ text: "one two three four five six seven eight", hold: held.path }])
   const client = await RawClient.connect(server.home.socket)
   const conversation = await start(client)
   const view = watchView(client, conversation)
@@ -164,7 +186,9 @@ test("interrupt-withdraw: interrupting withdraws the prompts that wait, and the 
 })
 
 test("interrupt-withdraw: the interrupt answers which prompts it withdrew, each with its id, requestId, author and text, oldest first", async () => {
-  await using server = await runningServer([{ text: "one two three four five six seven eight", delayMs: 100 }])
+  // Held until the interrupt ends it.
+  using held = hold()
+  await using server = await runningServer([{ text: "one two three four five six seven eight", hold: held.path }])
   const client = await RawClient.connect(server.home.socket)
   const conversation = await start(client)
   const view = watchView(client, conversation)
@@ -277,8 +301,9 @@ test("server-idle-exit: the server exits once no client is connected and nothing
 test("server-idle-exit: a submission's run keeps the server up after its client leaves, past the idle grace", async () => {
   const home = tempHome()
   const grace = idleGrace()
+  using held = hold()
   const served = await deadline(
-    servingUntilIdle(home, "1 hour", [{ text: "one two three four", delayMs: 100 }], { idleClock: grace.clock }),
+    servingUntilIdle(home, "1 hour", [{ text: "one two three four", hold: held.path }], { idleClock: grace.clock }),
     DEADLINE,
     "server listening",
   )
@@ -288,6 +313,8 @@ test("server-idle-exit: a submission's run keeps the server up after its client 
   await submit(client, conversation, "count")
   client.close()
   grace.pass()
+  await stillServing(home)
+  held.release()
   await deadline(served.exited, DEADLINE, "server exit")
 
   // A server that went idle mid-run would have left no answer and no run_end.
@@ -307,6 +334,7 @@ test("server-idle-exit: a submission's run keeps the server up after its client 
 test("server-idle-exit, child-tools: a subagent's work keeps the server up after its client leaves, past the idle grace", async () => {
   const home = tempHome()
   const grace = idleGrace()
+  using held = hold()
   const served = await deadline(
     servingUntilIdle(
       home,
@@ -314,7 +342,7 @@ test("server-idle-exit, child-tools: a subagent's work keeps the server up after
       [
         call("start_worker", { task_name: "writer", message: "count", fork_turns: "none" }),
         { text: "spawned" },
-        { text: "one two three four", delayMs: 100, agent: "/root/writer" },
+        { text: "one two three four", hold: held.path, agent: "/root/writer" },
         { text: "heard it" },
       ],
       { idleClock: grace.clock },
@@ -327,6 +355,8 @@ test("server-idle-exit, child-tools: a subagent's work keeps the server up after
   await submit(client, conversation, "delegate")
   client.close()
   grace.pass()
+  await stillServing(home)
+  held.release()
   await deadline(served.exited, DEADLINE, "server exit")
 
   // A server that went idle while the subagent worked would have mailed nothing back to the parent.
@@ -342,11 +372,12 @@ test("server-idle-exit, child-tools: a subagent's work keeps the server up after
 
 test("server-stop, child-tools: stopping the server lets a working subagent finish and report first", async () => {
   const home = tempHome()
+  using held = hold()
   const served = await deadline(
     servingUntilIdle(home, "1 hour", [
       call("start_worker", { task_name: "writer", message: "count", fork_turns: "none" }),
       { text: "spawned" },
-      { text: "one two three four", delayMs: 100, agent: "/root/writer" },
+      { text: "one two three four", hold: held.path, agent: "/root/writer" },
       { text: "heard it" },
     ]),
     DEADLINE,
@@ -357,7 +388,10 @@ test("server-stop, child-tools: stopping the server lets a working subagent fini
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate")
   await view.until(settled(1))
-  expect(await client.call("server/stop", null)).toMatchObject({ result: null })
+  const stopping = client.call("server/stop", null)
+  await served.printed("sigma stopping once its runs settle")
+  held.release()
+  expect(await stopping).toMatchObject({ result: null })
   client.close()
   await deadline(served.exited, DEADLINE, "server exit")
 
@@ -428,8 +462,9 @@ test("watch-rpc: a window that is not one is refused by name, and the connection
 
 test("server-stop: stopping the server while sigma answers lets the answer finish first", async () => {
   const home = tempHome()
+  using held = hold()
   const served = await deadline(
-    servingUntilIdle(home, "1 hour", [{ text: "one two three four", delayMs: 100 }]),
+    servingUntilIdle(home, "1 hour", [{ text: "one two three four", hold: held.path }]),
     DEADLINE,
     "server listening",
   )
@@ -438,7 +473,10 @@ test("server-stop: stopping the server while sigma answers lets the answer finis
   const view = watchView(client, conversation)
   await submit(client, conversation, "count")
   await view.until(speaking)
-  expect(await client.call("server/stop", null)).toMatchObject({ result: null })
+  const stopping = client.call("server/stop", null)
+  await served.printed("sigma stopping once its runs settle")
+  held.release()
+  expect(await stopping).toMatchObject({ result: null })
   await deadline(served.exited, DEADLINE, "server exit")
   client.close()
 
@@ -1234,7 +1272,8 @@ test("status-subagent, status-snapshot: a subagent waiting on a person shows as 
 }, 30_000)
 
 test("submit-author, queue-shared: every client sees who wrote each prompt, while it waits and once it runs", async () => {
-  await using server = await runningServer([{ text: "the first answer", delayMs: 100 }, { text: "second answer" }])
+  using held = hold()
+  await using server = await runningServer([{ text: "the first answer", hold: held.path }, { text: "second answer" }])
   const ada = await RawClient.connect(server.home.socket)
   const bo = await RawClient.connect(server.home.socket)
   const conversation = await start(ada)
@@ -1246,6 +1285,7 @@ test("submit-author, queue-shared: every client sees who wrote each prompt, whil
   expect((view.view().docs["pi.inbox"] as { items: unknown[] }).items).toEqual([
     expect.objectContaining({ entry: { kind: USER_KIND, data: expect.objectContaining({ author: person("bo") }) } }),
   ])
+  held.release()
   await view.until(settled(2))
   const users = view.seen().filter((entry) => entry.kind === USER_KIND)
   expect(users.map((entry) => (entry.data as { author: unknown }).author)).toEqual([person("ada"), person("bo")])
@@ -2036,10 +2076,11 @@ test("reset-rpc, reset-handoff: a reset starts an empty context with the handoff
 test("compact-rpc, compaction-live-status: compacting shows live, then a summary replaces the context; a failed one says why", async () => {
   // Past the 20,000 tokens a summary keeps by default, so the run before it is summarized.
   const long = "word ".repeat(20_000)
+  using held = hold()
   await using server = await runningServer([
     { text: "a" },
     { text: "b" },
-    { text: "summary of one", delayMs: 100 },
+    { text: "summary of one", hold: held.path },
     { text: "c" },
     { fail: "the summary model is gone" },
   ])
@@ -2062,6 +2103,7 @@ test("compact-rpc, compaction-live-status: compacting shows live, then a summary
   expect(liveOf(view)!.compactions!.map((status) => status.trigger)).toEqual(["manual"])
   const summary = view.seen().find((entry) => entry.kind === "pi.compaction")
   expect(summary).toBe(undefined)
+  held.release()
   expect((await compacting).result).toEqual({ outcome: "compacted" })
   await view.until((current) => current.seen().some((entry) => entry.kind === "pi.compaction"))
   expect(liveOf(view)?.compactions).toBe(undefined)
@@ -2426,7 +2468,9 @@ test("run-retry-live: a provider hiccup shows its retry and when it comes, and s
 
 test("serve-read-only: a read-only server shows a home's conversations without resuming the run left in flight, and refuses every change by name", async () => {
   const home = tempHome()
-  const slow = { text: "one two three four five six seven eight", delayMs: 200 }
+  // Held while the writable server stops with the run in flight and the viewer looks; the resumed run goes on.
+  using held = hold()
+  const slow = { text: "one two three four five six seven eight", hold: held.path }
   let conversation = ""
   try {
     {
@@ -2483,6 +2527,7 @@ test("serve-read-only: a read-only server shows a home's conversations without r
       client.close()
     }
     {
+      held.release()
       await using resumed = await runningServer([slow], { home })
       const client = await RawClient.connect(resumed.home.socket)
       const view = watchView(client, conversation)

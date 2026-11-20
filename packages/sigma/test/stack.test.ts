@@ -18,6 +18,8 @@ import {
   settled,
   start,
   submit,
+  hold,
+  untilPrinted,
   transcript,
   type ViewWatch,
   watchView,
@@ -66,7 +68,10 @@ test("server-stop: sigma serve answers server/stop, then exits 0", async () => {
 
 test("crash-committed: a run cut off by a crashed server is answered once after the server comes back", async () => {
   const sigmaHome = home()
-  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight nine ten", delayMs: 100 }])
+  using held = hold()
+  const env = await scriptEnv(sigmaHome, [
+    { text: "one two three four five six seven eight nine ten", hold: held.path },
+  ])
   const first = await serving(env)
   let client = await RawClient.connect(sigmaHome.socket)
   const conversation = await start(client)
@@ -80,6 +85,7 @@ test("crash-committed: a run cut off by a crashed server is answered once after 
   await first.exited
   client.close()
 
+  held.release()
   await serving(env)
   client = await RawClient.connect(sigmaHome.socket)
   const after = watchView(client, conversation)
@@ -503,8 +509,9 @@ test("answer-exec-fail: sigma exec exits 1 when an interrupt withdraws its queue
 
 test("answer-exec: sigma exec whose prompt waits behind a run that fails prints its answer, instead of waiting for good", async () => {
   const sigmaHome = home()
+  using held = hold()
   const env = await scriptEnv(sigmaHome, [
-    { text: "one two three four five six seven eight nine ten", delayMs: 300, fail: "provider went away" },
+    { text: "one two three four five six seven eight nine ten", hold: held.path, fail: "provider went away" },
     { text: "second answer" },
   ])
   await serving(env)
@@ -516,6 +523,7 @@ test("answer-exec: sigma exec whose prompt waits behind a run that fails prints 
   const exec = sigma(["exec", "-c", "shared", "second"], env)
   const inbox = (watch: ViewWatch) => (watch.view().docs["pi.inbox"] as { items: Array<unknown> }).items
   await view.until((watch) => inbox(watch).length === 1)
+  held.release()
   const result = await finished(exec)
   expect(result).toMatchObject({ code: 0, stdout: "second answer\n" })
   expect(await transcriptOf(sigmaHome, "shared")).toEqual([
@@ -776,8 +784,9 @@ test("provider-binary: sigma exec runs a Claude provider's binary from config.to
 
 test("server-restart: sigma serve --restart replaces the running server once its run settles", async () => {
   const sigmaHome = home()
-  // About 2.4 s of answer, so the stop arrives while the run works.
-  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight", delayMs: 300 }])
+  // Held until the old server has the stop, so the stop arrives while the run works.
+  using held = hold()
+  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight", hold: held.path }])
   const first = await serving(env)
   const client = await RawClient.connect(sigmaHome.socket)
   const conversation = await start(client, sigmaHome.dir)
@@ -785,7 +794,10 @@ test("server-restart: sigma serve --restart replaces the running server once its
   await view.until(() => true)
   await submit(client, conversation, "count")
   await view.until((watch) => (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run !== undefined)
-  const second = await serving(env, undefined, ["serve", "--restart"])
+  const replacing = serving(env, undefined, ["serve", "--restart"])
+  await untilPrinted(first.stderr, "sigma stopping once its runs settle", "the old server took the stop")
+  held.release()
+  const second = await replacing
   expect(await deadline(first.exited, DEADLINE, "old server exit")).toBe(0)
   // The old server let its run answer before it stopped: its own watch delivered the run's end.
   expect(runEnds(view.seen())).toEqual([{ outcome: "answered", answer: expect.any(Number) }])
@@ -800,9 +812,10 @@ test("server-restart: sigma serve --restart replaces the running server once its
 
 test("server-restart: sigma exec waiting on a run that serve --restart lets finish prints the answer and exits 0", async () => {
   const sigmaHome = home()
-  // About 2.4 s of answer, so the restart arrives while the run works.
-  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight", delayMs: 300 }])
-  await serving(env)
+  // Held until the old server has the stop, so the restart arrives while the run works.
+  using held = hold()
+  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight", hold: held.path }])
+  const first = await serving(env)
   const exec = sigma(["exec", "count"], env)
   const stdout = exec.stdout.getReader()
   let printed = ""
@@ -811,7 +824,10 @@ test("server-restart: sigma exec waiting on a run that serve --restart lets fini
     if (done) throw new Error(`exec ended before the restart: ${printed}`)
     printed += new TextDecoder().decode(value)
   }
-  await serving(env, undefined, ["serve", "--restart"])
+  const replacing = serving(env, undefined, ["serve", "--restart"])
+  await untilPrinted(first.stderr, "sigma stopping once its runs settle", "the old server took the stop")
+  held.release()
+  await replacing
   for (let read = await stdout.read(); !read.done; read = await stdout.read())
     printed += new TextDecoder().decode(read.value)
   expect({
@@ -1137,7 +1153,10 @@ test("answer-exec, wire-dropped: a sigma exec too slow for the run watches again
 
 test("crash-exec: a run cut off by a crashed server finishes after the server comes back, and sigma exec prints it and exits 0", async () => {
   const sigmaHome = home()
-  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight nine ten", delayMs: 100 }])
+  using held = hold()
+  const env = await scriptEnv(sigmaHome, [
+    { text: "one two three four five six seven eight nine ten", hold: held.path },
+  ])
   const server = await serving(env)
   const exec = sigma(["exec", "count"], env)
   const reader = exec.stdout.getReader()
@@ -1148,6 +1167,7 @@ test("crash-exec: a run cut off by a crashed server finishes after the server co
   }
   server.kill("SIGKILL")
   await server.exited
+  held.release()
   // exec starts a server again on its own, and follows the run there to its end.
   while (true) {
     const { value, done } = await deadline(reader.read(), 20_000, "answer after restart")
@@ -1166,9 +1186,10 @@ test("crash-exec: a run cut off by a crashed server finishes after the server co
 
 test("server-cannot-start: each sigma exec whose server cannot come back says why once, and finishes once a server starts", async () => {
   const sigmaHome = home()
+  using held = hold()
   const env = await scriptEnv(sigmaHome, [
-    { text: "one two three four five six seven eight nine ten", delayMs: 300 },
-    { text: "one two three four five six seven eight nine ten", delayMs: 300 },
+    { text: "one two three four five six seven eight nine ten", hold: held.path },
+    { text: "one two three four five six seven eight nine ten", hold: held.path },
   ])
   const server = await serving(env)
   // Two clients wait at once, each starting servers that refuse, and all of them write to the home's one log.
@@ -1190,6 +1211,7 @@ test("server-cannot-start: each sigma exec whose server cannot come back says wh
   await Bun.write(config, "[providers.claude\n")
   server.kill("SIGKILL")
   await server.exited
+  held.release()
   for (const each of execs) {
     while (!each.said.includes("\n")) {
       // A client whose server lost the home to the other client's waits up to 10 s for that one's socket before it
