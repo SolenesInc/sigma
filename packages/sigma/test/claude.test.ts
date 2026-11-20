@@ -2,7 +2,7 @@
 // Claude Code played by the fake `claude` replaying a recorded process per spawn.
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { type Duration, Effect } from "effect"
 import { TestClock } from "effect/testing"
@@ -1142,7 +1142,12 @@ test("claude-tool-search: tool search set to auto in the person's Claude Code se
 })
 
 /** A Claude conversation on the test target `box`, whose work folder holds `agents`, as its AGENTS.md. */
-const memberSession = async (claude: FakeClaude, targets: TestTargets, cwd?: (work: string) => string) => {
+const memberSession = async (
+  claude: FakeClaude,
+  targets: TestTargets,
+  cwd?: (work: string) => string,
+  more: { readonly ask?: Record<string, string>; readonly options?: ServerOptions } = {},
+) => {
   const work = targets.add("box", "box-1", "vol-1")
   writeFileSync(join(work, "AGENTS.md"), "Run the tests with make check.")
   const session = await conversationWith(
@@ -1152,8 +1157,9 @@ const memberSession = async (claude: FakeClaude, targets: TestTargets, cwd?: (wo
       cwd: cwd?.(work) ?? work,
       approvals: "auto",
       instructions: "Report with attn when done.",
+      ...more.ask,
     } as never,
-    { config: { target_connector: targets.connector } },
+    { ...more.options, config: { target_connector: targets.connector } },
   )
   return { ...session, work }
 }
@@ -1327,6 +1333,138 @@ test("target-restarted, target-member-mode: Claude Code in member mode is told i
       .filter((entry) => entry.kind === "sigma.target_changed")
       .map((entry) => entry.data),
   ).toEqual([expect.objectContaining({ target: "box", filesKept: true })])
+})
+
+test("target-lost, target-member-mode: a sigma call on a target that is down reaches for it once, so its result does not wait on a second connect", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("member_bash")
+  const first = await memberSession(claude, targets)
+  first.client.close()
+  await first.server.stop()
+  // The target is lost while no server holds a channel to it.
+  targets.lose("box")
+  await using server = await runningServer([], {
+    home: first.server.home,
+    claude: claude.options,
+    config: { target_connector: targets.connector },
+  })
+  const client = await RawClient.connect(server.home.socket)
+  const view = watchView(client, first.conversation)
+  await view.until(() => true)
+  await submit(
+    client,
+    first.conversation,
+    "Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made",
+  )
+  await view.until(settled(1))
+  const [result] = results(view.seen())
+  expect(result).toEqual(expect.objectContaining({ isError: true }))
+  expect(result!.text).toContain("target box unavailable")
+  // Claude Code reads why.
+  const answered = claude.log().find((entry) => entry.received?.response?.response?.mcp_response)
+  expect(answered.received.response.response.mcp_response.result.content[0].text).toContain("target box unavailable")
+  // The call's own connect failed before its result was committed; nothing reached for the target after it.
+  const committed = view.seen().find((entry) => entry.kind === "pi.tool-result")!
+  const at = (committed.model![0] as { timestamp: number }).timestamp
+  expect(targets.connects("box").filter((connect) => connect > at)).toEqual([])
+  client.close()
+})
+
+test("target-member-mode, claude-resume: a resume after Claude Code died right after reading a sigma call's result is not told the call was cut off", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("member_bash_exit", "text")
+  await using session = await memberSession(claude, targets)
+  await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
+  await session.view.until(settled(1))
+  expect(results(session.view.seen())).toEqual([expect.objectContaining({ isError: false })])
+  await session.submit("Reply with exactly: fixture text ok")
+  await session.view.until(settled(2))
+  expect(claude.spawns()[1]!["--resume"]).toBe(claude.spawns()[0]!["--session-id"])
+  // Its session holds the result it read, so it is told only the new prompt.
+  expect(claude.userTexts(1)[0]).toEqual(["Reply with exactly: fixture text ok"])
+})
+
+test("target-member-mode: a sigma call running when its Claude Code process exits is ended, with one result, before the run ends", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("member_sleep_exit")
+  await using session = await memberSession(claude, targets)
+  await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
+  await session.view.until(settled(1))
+  expect(calls(session.view.seen()).map((call) => call.name)).toEqual(["bash"])
+  expect(results(session.view.seen())).toEqual([expect.objectContaining({ isError: true })])
+  expect(results(session.view.seen())[0]!.text).toContain("Tool bash was")
+  expect(runEnds(session.view.seen()).map((end) => end.outcome)).toEqual(["failed"])
+})
+
+test("target-member-mode, skills-list, skills-attach: a remote Claude conversation lists its target's skills, and a skill named in a message reaches Claude Code read from the target", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("text")
+  const skill = (work: string) => {
+    mkdirSync(join(work, ".agents", "skills", "deploy"), { recursive: true })
+    writeFileSync(
+      join(work, ".agents", "skills", "deploy", "SKILL.md"),
+      "---\ndescription: Deploy it\n---\nRun make deploy.",
+    )
+    return work
+  }
+  await using session = await memberSession(claude, targets, skill)
+  const listed = await session.client.call("skills/list", { conversation: session.conversation })
+  expect(listed.result.map((found: { name: string; description: string }) => [found.name, found.description])).toEqual([
+    ["deploy", "Deploy it"],
+  ])
+  await session.submit("$deploy now. Reply with exactly: fixture text ok")
+  await session.view.until(settled(1))
+  expect(claude.userTexts(0)[0]!.join("\n")).toContain("Run make deploy.")
+})
+
+test("target-member-mode, approval-wire: a sigma call in member mode that asks a person and is denied does not run on the target, and Claude Code reads the denial", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("member_bash")
+  await using session = await memberSession(claude, targets, undefined, { ask: { approvals: "ask" } })
+  await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
+  await session.answer(false)
+  await session.view.until(settled(1))
+  expect(existsSync(join(session.work, "made"))).toBe(false)
+  const answered = claude.log().find((entry) => entry.received?.response?.response?.mcp_response)
+  const result = answered.received.response.response.mcp_response.result
+  expect(result.isError).toBe(true)
+  expect(results(session.view.seen())).toEqual([expect.objectContaining({ isError: true })])
+})
+
+test("target-member-mode, claude-compact, target-restarted: a compaction in member mode sends only /compact, and the run after it is told that the computer restarted", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("compaction_resume", "text")
+  const options = { claudeIdle: 0 } as ServerOptions
+  const first = await memberSession(claude, targets, undefined, { options })
+  await first.submit("Remember the word PLUM. Reply with exactly: noted")
+  await first.view.until(settled(1))
+  first.client.close()
+  await first.server.stop()
+  writeFileSync(join(targets.root, "box", "instance"), "box-2")
+
+  await using server = await runningServer([], {
+    ...options,
+    home: first.server.home,
+    claude: claude.options,
+    config: { target_connector: targets.connector },
+  })
+  const client = await RawClient.connect(server.home.socket)
+  const view = watchView(client, first.conversation)
+  await view.until(() => true)
+  const compacted = await client.call("conversation/compact", {
+    conversation: first.conversation,
+    author: person("ada"),
+    instructions: "keep the word",
+  })
+  expect(compacted.result).toEqual({ outcome: "compacted" })
+  expect(claude.userTexts(1)).toEqual([["/compact keep the word"]])
+  await view.until(settled(2))
+  await submit(client, first.conversation, "Reply with exactly: fixture text ok")
+  await view.until(settled(3))
+  expect(claude.userTexts(2).at(-1)![0]).toBe(
+    "The computer behind this conversation restarted (now instance box-2). Your files are as you left them; processes you started are gone.",
+  )
+  client.close()
 })
 
 test("target-member-mode, target-server-restart: a call of sigma's tools cut off by a crashed server has one result, its tool task's", async () => {

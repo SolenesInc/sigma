@@ -10,12 +10,22 @@
 // call of sigma's `bash` over sigma's MCP server, which Claude Code makes as an `mcp_message` once the call is allowed,
 // and whose answer is the result it reads. member_restart is the same with a command that restarts the target's
 // instance under the call.
+//
+// member_bash_exit: member_bash until Claude Code wrote the result of its sigma call, then the process exits.
+// member_sleep_exit: member_sleep until Claude Code made its sigma call, then the process exits while the call runs.
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 const FIXTURES = join(import.meta.dir, "../../../../fixtures/claude")
 
-type Line = { type: string; frame?: any; metadata?: Record<string, unknown>; provider?: string; scenario?: string }
+type Line = {
+  type: string
+  frame?: any
+  code?: number
+  metadata?: Record<string, unknown>
+  provider?: string
+  scenario?: string
+}
 
 const read = (name: string): Array<Line> =>
   readFileSync(join(FIXTURES, `${name}.ndjson`), "utf8")
@@ -178,3 +188,33 @@ subagentWorking()
 memberBash("member_bash", 'echo "$SIGMA_TARGET_INSTANCE" > made; pwd')
 memberBash("member_restart", "echo box-2 > ../instance; kill -9 $(cat ../pid)")
 memberBash("member_sleep", "sleep 600")
+
+/** `name`'s first process until the first line `until` names, then that process exits. */
+const exitAfter = (scenario: string, name: string, until: (line: Line) => boolean, derived: string) => {
+  const source = read(name)
+  const [first] = spawns(source)
+  const at = first!.findIndex(until)
+  if (at < 0) throw new Error(`${name}: no line to exit after`)
+  write(scenario, [
+    header(scenario, source[0]!, derived),
+    ...first!.slice(0, at + 1),
+    { type: "exit", code: 1 } as Line,
+  ])
+}
+
+exitAfter(
+  "member_bash_exit",
+  "member_bash",
+  (line) =>
+    line.type === "emit_inbound" &&
+    line.frame.type === "user" &&
+    Array.isArray(line.frame.message.content) &&
+    line.frame.message.content.some((block: any) => block.type === "tool_result"),
+  "member_bash until Claude Code wrote its sigma call's result, then the process exits",
+)
+exitAfter(
+  "member_sleep_exit",
+  "member_sleep",
+  (line) => line.type === "emit_inbound" && line.frame.request?.subtype === "mcp_message",
+  "member_sleep until Claude Code made its sigma call, then the process exits while the call runs",
+)

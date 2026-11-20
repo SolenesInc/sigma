@@ -404,6 +404,23 @@ export const makeTranscript = (scope: TranscriptScope) => {
       }
     })
 
+  /**
+   * Moves the position to `at`, through the newest result the tool tasks of own calls `ids` committed. Tasks running in
+   * parallel commit in any order, so the newest, not the last named, is the one the session holds through.
+   */
+  const ownResults = (ids: ReadonlyArray<string>, at: string) =>
+    commit((tx) =>
+      Effect.gen(function* () {
+        const live = yield* tx.doc(LiveDoc, conversationId)
+        const entries = (live.tools ?? []).flatMap((slot) =>
+          ids.includes(slot.callId) && slot.entry !== undefined ? [slot.entry] : [],
+        )
+        if (entries.length === 0 || position === undefined) return undefined
+        const newest = entries.reduce((a, b) => (Number(b) > Number(a) ? b : a))
+        return yield* position(tx, live, at, newest, "result")
+      }),
+    )
+
   /** Commits the results of a user frame; whether any of them was the result of a call of this conversation. */
   const results = (message: Extract<SDKMessage, { type: "user" }>, at: string | undefined) =>
     Effect.gen(function* () {
@@ -414,11 +431,15 @@ export const makeTranscript = (scope: TranscriptScope) => {
       const handback = (message as { tool_use_result?: { handbackReport?: { text?: string } } }).tool_use_result
         ?.handbackReport?.text
       let anyResult = false
+      // An own call's result is committed by its tool task. The session holds it once Claude Code writes it here, so
+      // the position moves past it, and a resume does not retell it as cut off.
+      const own: string[] = []
       for (const block of message.message.content) {
         if (block.type !== "tool_result") continue
         const id = block.tool_use_id
         if (answered.has(id)) {
           anyResult = true
+          own.push(id)
           continue
         }
         if (!Deferred.isDoneUnsafe(sighting(id))) continue
@@ -428,6 +449,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
         answered.add(id)
         yield* recordResult(call, handback || textOf(block.content), block.is_error === true, at)
       }
+      if (own.length > 0 && position !== undefined && at !== undefined) yield* ownResults(own, at)
       return anyResult
     })
 
@@ -511,8 +533,10 @@ export const makeTranscript = (scope: TranscriptScope) => {
         const settled = yield* runtime.waitForTask(tool)
         const outcome = settled.state.outcome
         let entry: EntryRecord | undefined
-        if (outcome.status === "completed" && outcome.result.kind === "model") {
-          const id = outcome.result.entryId
+        // A failed or aborted call has the result it committed too, which says why, as a completed one does.
+        const result = "result" in outcome ? outcome.result : undefined
+        if (result?.kind === "model") {
+          const id = result.entryId
           yield* commit((tx) => Effect.map(tx.entry(id), (found) => void (entry = found)))
         }
         const message = entry?.model?.[0] as { content?: unknown; isError?: boolean } | undefined

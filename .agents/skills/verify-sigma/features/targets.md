@@ -34,7 +34,9 @@ on. attn will use targets to run a member's work in a sandbox.
   so a hung target costs one wait, not one per section and call. Input that
   names a skill (`/name`, `$name`) while the target cannot be reached is
   refused with `TargetUnavailable` and placed nowhere; the TUI shows the
-  reason as a notice.
+  reason as a notice. A call reaches for the target once: in member mode,
+  what the model is told after the call does not connect again to a target
+  the call found unreachable.
 - `target-member-mode` runs a Claude conversation on a target in member
   mode, at start or after a model switch: Claude Code's own tools, the
   person's settings, connectors and other MCP servers are off, and it acts
@@ -149,11 +151,17 @@ Preconditions:
   `target-member-mode, claude-resume: ...`,
   `target-member-mode, target-subagent-fork: ...`,
   `target-member-mode, claude-sign-in-error: ...`,
-  `target-member-mode, target-server-restart: ...` and
+  `target-member-mode, target-server-restart: ...`,
+  `target-member-mode, skills-list, skills-attach: ...`,
+  `target-member-mode, approval-wire: ...`,
+  `target-member-mode, claude-compact, target-restarted: ...`,
+  `target-lost, target-member-mode: ...` and
   `target-restarted, target-member-mode: ...` in
   `packages/sigma/test/claude.test.ts`, on the fake `claude`'s
   `member_bash`, `member_restart` and `member_sleep`, which
-  `derive-claude-fixtures.ts` derives from `bash_allowed`.
+  `derive-claude-fixtures.ts` derives from `bash_allowed`, and
+  `member_bash_exit` and `member_sleep_exit`, which it cuts from them where
+  the process exits.
 - Provider: `target-lost, skills-attach: ...` in
   `packages/sigma/test/openai.test.ts`.
 - Package: `env-remote: a target whose connector brings no hello ...` in
@@ -166,6 +174,8 @@ Preconditions:
 
 ## Gotchas
 
+- The test connector appends the time of each connect to the target's
+  `connects` file, so a test can tell when sigma reached for it.
 - The test connector's `map` file makes one path mean another folder on the
   target, so a test can give the home and the target different files at the
   same path on one machine.

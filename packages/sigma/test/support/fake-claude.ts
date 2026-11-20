@@ -170,6 +170,11 @@ for (const step of segments[spawn] ?? []) {
         answered: asked.get(answering),
       })
     }
+  } else if (step.type === "exit") {
+    // The process dies here, as a crashed Claude Code does, once what it wrote is out.
+    log({ exited: `exit ${step.code}` })
+    await new Promise<void>((resolve) => process.stdout.write("", () => resolve()))
+    process.exit(step.code)
   } else if (step.type === "emit_inbound") {
     if (frame.type === "control_request") asked.set(frame.request_id, frame.request.subtype)
     if (frame.type === "control_request" && frame.request?.subtype === "hook_callback") {

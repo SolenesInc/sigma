@@ -133,6 +133,7 @@ type Listener = (frame: Extract<AgentFrame, { t: "event" }>) => void
 /** One channel's life: its hello, the calls waiting on it, and their event listeners. */
 class Session {
   readonly hello: Promise<AgentHello>
+  #greeting: AgentHello | undefined
   #reason: string | undefined
   #next = 1
   readonly #waiting = new Map<number, Settle>()
@@ -182,6 +183,7 @@ class Session {
         if (frame.t !== "hello") return fail("sigma-env spoke before its hello")
         if (frame.protocol !== PROTOCOL)
           return fail(`target agent speaks env protocol ${frame.protocol}; this server needs ${PROTOCOL}`)
+        this.#greeting = frame
         return greet(frame)
       }
       clearTimeout(this.#silence)
@@ -222,6 +224,11 @@ class Session {
     this.#lost = lose
     channel.onClose(lose)
     channel.send(encode({ t: "hello", protocol: PROTOCOL, owner: agentOwner(owner, target) }))
+  }
+
+  /** The agent's hello, once it came. */
+  get greeting(): AgentHello | undefined {
+    return this.#greeting
   }
 
   /** Why the channel is gone, once it is. */
@@ -309,6 +316,8 @@ export class TargetPool {
   readonly #sessions = new Map<string, Session>()
   /** Each target whose connector last hung: when, and why its calls fail meanwhile. */
   readonly #hung = new Map<string, { readonly at: number; readonly reason: string }>()
+  /** The targets whose last channel was gone before its hello. */
+  readonly #refused = new Set<string>()
 
   constructor(options: TargetPoolOptions) {
     this.#options = options
@@ -338,10 +347,13 @@ export class TargetPool {
           helloMs,
         )
         this.#sessions.set(target, opened)
+        this.#refused.delete(target)
         void opened.closed.then(() => {
-          if (this.#sessions.get(target) === opened) this.#sessions.delete(target)
+          const latest = this.#sessions.get(target) === opened
+          if (latest) this.#sessions.delete(target)
           if (opened.hung) this.#hung.set(target, { at: now(), reason: opened.reason! })
           else this.#hung.delete(target)
+          if (latest && opened.greeting === undefined) this.#refused.add(target)
         })
         session = opened
       }
@@ -356,6 +368,14 @@ export class TargetPool {
   /** Connects to `target` when no channel is open, and returns its agent's hello. */
   connect(target: string): Effect.Effect<AgentHello, TargetUnreachable> {
     return Effect.flatMap(this.session(target), (session) => Effect.promise(() => session.hello))
+  }
+
+  /**
+   * The hello of `target`'s channel, connecting when none is open, or `undefined` when the last channel was gone before
+   * its hello: a target a call just found unreachable is not reached again until the next call asks (D5).
+   */
+  reached(target: string): Effect.Effect<AgentHello | undefined, TargetUnreachable> {
+    return this.#refused.has(target) && !this.#sessions.has(target) ? Effect.succeed(undefined) : this.connect(target)
   }
 
   /** The environment at `cwd`, a path on `target`. It connects on its first call. */

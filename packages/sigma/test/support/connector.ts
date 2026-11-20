@@ -1,14 +1,14 @@
 // A target connector for tests, as whatever runs sigma would set one: `connector.ts <root> <target> -- sigma-env
 // [args...]`. Each target is a folder `<root>/<target>` on this machine; its `instance` and `files` files hold the ids
 // its sigma-env reports (D6), and `run` is its runtime folder, so a later agent sweeps an earlier one as on one
-// instance. sigma-env's pid is written to `pid`. A target with no `instance` file is unknown: the connector says so on
+// instance. sigma-env's pid is written to `pid`, and the time of each connect is appended to `connects`. A target with no `instance` file is unknown: the connector says so on
 // stderr and exits 3.
 //
 // A `map` file `{ "from": <path>, "to": <path> }` makes the target another machine at one path: the server's `from`
 // is the agent's `to`, rewritten in every frame both ways, so a file at `from` on the home is not the one the target
 // has there. A `platform` file makes the target another kind of computer: its sigma-env's hello reports that platform.
 import { spawn } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 
@@ -20,6 +20,8 @@ if (root === undefined || target === undefined || separator !== "--") {
   process.exit(2)
 }
 const dir = join(root, target)
+// Each connect is logged with its time, so a test can tell when sigma reached for the target.
+if (existsSync(dir)) appendFileSync(join(dir, "connects"), `${Date.now()}\n`)
 if (!existsSync(join(dir, "instance"))) {
   console.error(`no target named ${target}`)
   process.exit(3)

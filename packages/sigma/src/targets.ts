@@ -153,13 +153,16 @@ const machineText = (target: string, hello: AgentHello) =>
 /**
  * What a remote conversation whose provider runs its own loop must read now of its target: reaches it and records the
  * instance behind it, and answers with the change this found, once, or `undefined`. Called before each of its runs and
- * after each of sigma's tool calls, where such a loop reads it before its next request (D6). A target it cannot reach
- * tells nothing; the tool calls say what is gone (D5).
+ * after each of sigma's tool calls, where such a loop reads it before its next request (D6). After a call it connects
+ * only if the call's channel had a hello, so a target the call found unreachable is not reached twice for it. A
+ * target it cannot reach tells nothing; the tool calls say what is gone (D5).
  */
 export const targetNotice =
-  (targets: TargetPool, harness: () => Harness) => (conversationId: ConversationId, target: string) =>
+  (targets: TargetPool, harness: () => Harness) =>
+  (conversationId: ConversationId, target: string, after: "run" | "call") =>
     Effect.gen(function* () {
-      const hello = yield* targets.connect(target)
+      const hello = after === "run" ? yield* targets.connect(target) : yield* targets.reached(target)
+      if (hello === undefined) return undefined
       const conversation = (yield* harness().conversation(conversationId))!
       let changed: TargetChange | undefined
       yield* conversation.commit((tx) =>

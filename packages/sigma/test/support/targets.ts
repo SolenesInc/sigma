@@ -1,7 +1,7 @@
 // Targets for tests: folders on this machine that `connector.ts` reaches, each running sigma-env as an instance with
 // the ids the test sets. A test restarts an instance by giving it a new instance id, replaces it with new instance and
 // files ids, and loses it by removing its instance file; it stops the running agent by the pid the connector wrote.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 const CONNECTOR = Bun.fileURLToPath(new URL("./connector.ts", import.meta.url))
@@ -46,6 +46,17 @@ export class TestTargets {
   /** Makes the target a computer of another platform, which its sigma-env reports, such as `linux`. */
   platform(name: string, platform: string) {
     writeFileSync(join(this.root, name, "platform"), platform)
+  }
+
+  /** When sigma connected to the target, in ms since the epoch, oldest first. */
+  connects(name: string): number[] {
+    const file = join(this.root, name, "connects")
+    return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").map(Number) : []
+  }
+
+  /** Loses the target: the connector reaches no instance of it. */
+  lose(name: string) {
+    rmSync(join(this.root, name, "instance"))
   }
 
   /** A shell command that kills the target's sigma-env, which a model's bash call can run on it. */

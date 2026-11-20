@@ -85,7 +85,11 @@ export interface MemberOptions {
    * What the model must read now of its target, such as an instance that changed since it was last told (D6), or
    * `undefined`. Asked before each run and after each of sigma's tool calls.
    */
-  readonly notice: (conversation: ConversationId, target: string) => Effect.Effect<string | undefined>
+  readonly notice: (
+    conversation: ConversationId,
+    target: string,
+    after: "run" | "call",
+  ) => Effect.Effect<string | undefined>
   /**
    * What a session is told of an entry sigma recorded with no model content, such as a change behind its target: told
    * among what the session missed, so a run that ended before Claude Code read the notice leaves it to the next (D6).
@@ -402,13 +406,15 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
             rootConversation: String(runtime.conversationId),
             ...(folder === undefined ? {} : { member: { folder, append: appendOf(runtime, api, agent) } }),
           }
-          const notice = target === undefined ? undefined : member.notice(runtime.conversationId, target)
+          const notice = target === undefined ? undefined : member.notice(runtime.conversationId, target, "run")
           const run: RunContext = {
             runtime,
             api,
             agent,
             hosting: shared.hosting,
-            ...(notice === undefined ? {} : { member: { notice } }),
+            ...(target === undefined
+              ? {}
+              : { member: { notice: member.notice(runtime.conversationId, target, "call") } }),
           }
           const title: Title = shared.options.title ?? (() => Effect.succeed(undefined))
           const cold = () => opening(runtime, api, provider, title, member.retell)
