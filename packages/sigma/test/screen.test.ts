@@ -691,7 +691,7 @@ test("approval-panel: a split terminal keeps the active approval visible while l
     session.resize(65, 19)
     const split = await session.waitFor(atWidth(65))
     expect(split).toContain("answer below")
-    expect(split).toContain("QUEUE · tab")
+    expect(split).toContain("STEER · tab")
     expect(split).toContain("type a message")
     expect(split).toContain("◆ WAITING · 5 asks")
     const splitPanel = panelIn(split)
@@ -707,7 +707,7 @@ test("approval-panel: a split terminal keeps the active approval visible while l
       panelIn(screen).some((row) => row.includes(`⧉ ${original.at(-1)}`)),
     )
     expect(panelIn(scrolled)[0]).toBe(active)
-    expect(scrolled).toContain("QUEUE · tab")
+    expect(scrolled).toContain("STEER · tab")
 
     session.resize(100, 30)
     const enlarged = await session.waitFor(atWidth(100))
