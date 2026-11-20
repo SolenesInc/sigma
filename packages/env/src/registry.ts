@@ -36,35 +36,40 @@ export class ProcessRegistry {
   }
 
   /**
-   * Kills every recorded process and group still running and forgets them all, processes first, so a recorded agent
-   * starts no command while its groups die. An id the OS has since given to another process, one that started after the
-   * record, as after a reboot, is left alone. Run it before anything records again.
+   * Kills every recorded process and group still running, processes first, so a recorded agent starts no command while
+   * its groups die, then forgets them all. An id the OS has since given to another process, one that started after the
+   * record, as after a reboot or a long gap, is left alone. A group whose leader is gone is killed all the same: the OS
+   * gives no process the id of a group that still has members. Run it before anything records again.
    */
   sweep(): void {
     let names: string[]
     try {
       names = readdirSync(this.dir)
-    } catch {
-      return // never recorded anything
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return // never recorded anything
+      throw error
     }
     const recorded = new Map<number, { startedMs: number; group: boolean }>()
     for (const name of names) {
       const group = !name.endsWith(".process")
       const id = Number(group ? name : name.slice(0, -".process".length))
-      const path = join(this.dir, name)
-      if (Number.isInteger(id) && id > 1) recorded.set(id, { startedMs: statSync(path).mtimeMs, group })
-      rmSync(path, { force: true })
+      if (!Number.isInteger(id) || id <= 1) continue
+      try {
+        recorded.set(id, { startedMs: statSync(join(this.dir, name)).mtimeMs, group })
+      } catch {
+        // Removed since the listing, by the earlier agent that recorded it ending.
+      }
     }
-    if (recorded.size === 0) return
-    const live = [...starts([...recorded.keys()])].filter(([id, startedMs]) => {
+    const started = starts([...recorded.keys()])
+    const live = [...recorded].filter(([id, { startedMs, group }]) => {
+      const start = started.get(id)
       // Starts are read in whole seconds, or ticks, so a start is up to a second late.
-      return startedMs <= recorded.get(id)!.startedMs + 1000
+      return start === undefined ? group : start <= startedMs + 1000
     })
-    const targets = [
-      ...live.filter(([id]) => !recorded.get(id)!.group),
-      ...live.filter(([id]) => recorded.get(id)!.group),
+    const signals = [
+      ...live.filter(([, { group }]) => !group).map(([id]) => id),
+      ...live.filter(([, { group }]) => group).map(([id]) => -id),
     ]
-    const signals = targets.map(([id]) => (recorded.get(id)!.group ? -id : id))
     for (const target of signals) {
       try {
         process.kill(target, "SIGKILL")
@@ -77,6 +82,8 @@ export class ProcessRegistry {
     const deadline = Date.now() + DEATH_MS
     let left = signals
     while ((left = left.filter(exists)).length > 0 && Date.now() < deadline) Atomics.wait(PAUSE, 0, 0, 5)
+    // Forgotten only once killed, so a sweep cut off before here leaves them to the next one.
+    for (const name of names) rmSync(join(this.dir, name), { force: true })
   }
 }
 

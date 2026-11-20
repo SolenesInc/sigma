@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs"
 import { join } from "node:path"
 import { type Channel, spawnChannel, TargetPool } from "@sigma/env/remote"
 
-const AGENT = Bun.fileURLToPath(import.meta.resolve("@sigma/env/agent"))
+export const AGENT = Bun.fileURLToPath(import.meta.resolve("@sigma/env/agent"))
 
 export interface Link {
   readonly pool: TargetPool
@@ -19,6 +19,16 @@ export interface Link {
    * nothing until it kills the connector.
    */
   deafen(): void
+  /** Settles once the latest channel's connector, the agent here, has exited. */
+  exited(): Promise<void>
+}
+
+/** A zombie has exited and only waits to be reaped by its parent, which for a grandchild is not this process. */
+export function alive(pid: number): boolean {
+  const stat = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)])
+    .stdout.toString()
+    .trim()
+  return stat !== "" && !stat.startsWith("Z")
 }
 
 export const runtimeDir = () => mkdtempSync(join("/tmp", "sigma-env-run-"))
@@ -33,6 +43,7 @@ export function link(options: {
   let muted = false
   let deaf = false
   const waiting: { count: number; done: () => void }[] = []
+  let exited = Promise.resolve()
   const pool = new TargetPool({
     owner: options.owner ?? "test-owner",
     ...(options.silenceMs === undefined ? {} : { silenceMs: options.silenceMs }),
@@ -45,6 +56,7 @@ export function link(options: {
         ...(options.agentArgs ?? []),
       ])
       let killed = false
+      exited = new Promise((done) => channel.onClose(() => done()))
       return {
         ...channel,
         kill: () => {
@@ -70,5 +82,6 @@ export function link(options: {
     sent: (count) => (count <= calls ? Promise.resolve() : new Promise((done) => void waiting.push({ count, done }))),
     mute: () => (muted = true),
     deafen: () => (muted = deaf = true),
+    exited: () => exited,
   }
 }

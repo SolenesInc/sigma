@@ -1,7 +1,7 @@
 // `grep`: regular expression search of file contents through the call's environment.
 import { defineTool, type ToolExecutionApi, type ToolExecutionResult } from "@sigma/harness"
 import { bool, obj, opt, type Static, str } from "@sigma/schema"
-import type { SearchQuery } from "@sigma/env"
+import { FileError, type SearchQuery } from "@sigma/env"
 import { searchFiles } from "@sigma/env/search"
 import { Effect } from "effect"
 import { normalizeToolPath, requireEnv } from "./environment.ts"
@@ -32,11 +32,6 @@ export function createGrepTool() {
     replay: "safe",
     execute: (input: GrepToolInput, api: ToolExecutionApi) =>
       Effect.gen(function* () {
-        try {
-          new RegExp(input.pattern)
-        } catch (error) {
-          return text(`bad pattern: ${(error as Error).message}`, true)
-        }
         const env = yield* requireEnv(api)
         const path = normalizeToolPath(input.path ?? ".")
         const query: SearchQuery = {
@@ -49,10 +44,11 @@ export function createGrepTool() {
         // An environment that searches where its files are answers in one call; otherwise grep walks through it.
         const found = yield* Effect.catchIf(
           env.search === undefined ? searchFiles(env, path, query) : env.search(path, query),
-          (error) => error.code === "not_found",
-          () => Effect.succeed(undefined),
+          (error) => error.code === "not_found" || error.code === "invalid",
+          (error) => Effect.succeed(error),
         )
-        if (found === undefined) return text(`${input.path} does not exist`, true)
+        if (found instanceof FileError)
+          return text(found.code === "invalid" ? found.message : `${input.path} does not exist`, true)
         const { matches, truncated } = found
         const shownRoot = input.path === undefined || input.path === "." ? "" : input.path.replace(/\/+$/, "")
         const lines = matches.map(({ path: file, line, text, cut }) => {

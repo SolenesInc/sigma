@@ -79,8 +79,13 @@ export type Event =
 
 export type AgentFrame = AgentHello | Answer | Event | Pong
 
-const replacer = (_key: string, value: unknown) =>
-  value instanceof Uint8Array ? { $b64: Buffer.from(value).toString("base64") } : value
+// The holder's own value: `JSON.stringify` has already turned a Buffer into `{type: "Buffer", data}` by `value`.
+function replacer(this: Record<string, unknown>, key: string, value: unknown) {
+  const raw = this[key]
+  return raw instanceof Uint8Array
+    ? { $b64: Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString("base64") }
+    : value
+}
 
 const reviver = (_key: string, value: unknown) =>
   value !== null && typeof value === "object" && typeof (value as { $b64?: unknown }).$b64 === "string"

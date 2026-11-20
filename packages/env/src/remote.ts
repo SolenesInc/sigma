@@ -3,6 +3,7 @@
 // connects again once (D5). While a call is in flight the client pings and the agent answers, so each end can tell
 // a silent peer: the agent stops its commands (D7), and the client kills the connector and fails its calls (D17).
 import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import { posix } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Effect } from "effect"
@@ -42,7 +43,7 @@ import {
 const PING_MS = 5_000
 /**
  * How long a connector may take to bring the agent's hello: a start through ssh and `docker exec`, with the sweep and
- * reading `AGENTS.md`, took 723 ms (F11), and a binary copied over ssh took 10 s (F19). Past 60 s it is hung.
+ * reading `AGENTS.md`, took 723 ms (F11). Past 60 s it is hung, as an ssh that never connects is (F14).
  */
 const HELLO_MS = 60_000
 /** The connector's stderr kept for a reason (D4); the rest is counted. */
@@ -151,26 +152,26 @@ class Session {
     this.hello = new Promise((resolve, reject) => ((greet = resolve), (refuse = reject)))
     this.hello.catch(() => {})
     let greeted = false
-    const late = setTimeout(() => {
+    // A session that cannot go on is lost at once, its connector killed, so the next call connects again (D5).
+    const fail = (reason: string) => {
+      this.#lost(reason)
       channel.kill()
-      refuse(new TargetUnreachable(target, `no hello from sigma-env within ${HELLO_MS / 1000} s`))
-    }, HELLO_MS)
+    }
+    const late = setTimeout(() => fail(`no hello from sigma-env within ${HELLO_MS / 1000} s`), HELLO_MS)
     channel.onLine((line) => {
-      if (line.trim() === "") return
-      const frame = decode(line) as AgentFrame
+      if (line.trim() === "" || this.#reason !== undefined) return
+      let frame: AgentFrame
+      try {
+        frame = decode(line) as AgentFrame
+      } catch {
+        return fail(`sigma-env wrote a line that is not a frame: ${line.slice(0, 200)}`)
+      }
       if (!greeted) {
         greeted = true
         clearTimeout(late)
-        if (frame.t !== "hello") return refuse(new TargetUnreachable(target, "sigma-env spoke before its hello"))
-        if (frame.protocol !== PROTOCOL) {
-          channel.end()
-          return refuse(
-            new TargetUnreachable(
-              target,
-              `target agent speaks env protocol ${frame.protocol}; this server needs ${PROTOCOL}`,
-            ),
-          )
-        }
+        if (frame.t !== "hello") return fail("sigma-env spoke before its hello")
+        if (frame.protocol !== PROTOCOL)
+          return fail(`target agent speaks env protocol ${frame.protocol}; this server needs ${PROTOCOL}`)
         return greet(frame)
       }
       this.#watch()
@@ -178,7 +179,7 @@ class Session {
       if (frame.t === "hello" || frame.t === "pong") return
       const settle = this.#waiting.get(frame.id)
       this.#waiting.delete(frame.id)
-      this.#ended(frame.id)
+      this.#ended(frame.id, frame.t === "err")
       this.#watch()
       settle?.(frame)
     })
@@ -188,11 +189,13 @@ class Session {
         if (this.#reason !== undefined) return
         clearTimeout(late)
         clearTimeout(this.#silence)
+        clearInterval(this.#ping)
+        this.#ping = undefined
         this.#reason = reason
         refuse(new TargetUnreachable(target, reason))
         const waiting = [...this.#waiting.values()]
         this.#waiting.clear()
-        for (const id of [...this.#execs]) this.#ended(id)
+        this.#execs.clear()
         for (const settle of waiting) settle({ t: "lost", reason })
         for (const [id, listener] of this.#listeners)
           listener({ id, t: "event", kind: "change", change: { kind: "failed", error: lostError(target, reason) } })
@@ -202,7 +205,7 @@ class Session {
     })
     this.#lost = lose
     channel.onClose(lose)
-    channel.send(encode({ t: "hello", protocol: PROTOCOL, owner }))
+    channel.send(encode({ t: "hello", protocol: PROTOCOL, owner: agentOwner(owner, target) }))
   }
 
   /** Why the channel is gone, once it is. */
@@ -232,9 +235,9 @@ class Session {
     this.#listeners.delete(id)
   }
 
-  #ended(id: number) {
-    // A watcher's events outlive its answer; an exec's end with it.
-    if (this.#execs.delete(id)) this.#listeners.delete(id)
+  #ended(id: number, failed: boolean) {
+    // A watcher's events outlive its answer; an exec's end with it, and a failed call has none.
+    if (this.#execs.delete(id) || failed) this.#listeners.delete(id)
     if (this.#waiting.size === 0 && this.#ping !== undefined) {
       clearInterval(this.#ping)
       this.#ping = undefined
@@ -261,6 +264,13 @@ class Session {
   }
 }
 
+/**
+ * The owner an agent sweeps by: the home's, with the target, so a restarted server replaces its own agent on a target
+ * and leaves alone those of another home, or of another target of this home on the same computer (D7).
+ */
+const agentOwner = (owner: string, target: string) =>
+  `${owner}-${createHash("sha256").update(target).digest("hex").slice(0, 16)}`
+
 const lostError = (target: string, reason: string): WireError => ({
   tag: "FileError",
   code: "unknown",
@@ -280,7 +290,6 @@ export interface TargetPoolOptions {
 export class TargetPool {
   readonly #options: TargetPoolOptions
   readonly #sessions = new Map<string, Session>()
-  readonly #hellos = new Map<string, AgentHello>()
 
   constructor(options: TargetPoolOptions) {
     this.#options = options
@@ -305,10 +314,7 @@ export class TargetPool {
       }
       const current = session
       current.hello.then(
-        (hello) => {
-          this.#hellos.set(target, hello)
-          resume(Effect.succeed(current))
-        },
+        () => resume(Effect.succeed(current)),
         (error: TargetUnreachable) => resume(Effect.fail(error)),
       )
     })
@@ -317,11 +323,6 @@ export class TargetPool {
   /** Connects to `target` when no channel is open, and returns its agent's hello. */
   connect(target: string): Effect.Effect<AgentHello, TargetUnreachable> {
     return Effect.flatMap(this.session(target), (session) => Effect.promise(() => session.hello))
-  }
-
-  /** The hello of `target`'s last connect, which names its instance. */
-  instance(target: string): AgentHello | undefined {
-    return this.#hellos.get(target)
   }
 
   /** The environment at `cwd`, a path on `target`. It connects on its first call. */
@@ -416,24 +417,25 @@ export class RemoteExecutionEnv implements ExecutionEnv {
 
   /** `path` on the target: posix, with `~` its home (D8 computes this here, not over the channel). */
   absolutePath(path: string): Effect.Effect<string, FileError> {
-    return Effect.flatMap(this.#session(fileLost), (session) =>
-      Effect.map(
-        Effect.promise(() => session.hello),
-        (hello) => {
-          let normalized = path
-          if (normalized === "~") normalized = hello.home
-          else if (normalized.startsWith("~/")) normalized = posix.join(hello.home, normalized.slice(2))
-          else if (normalized.startsWith("file://")) {
-            try {
-              normalized = fileURLToPath(normalized)
-            } catch {
-              // A malformed URL stays an ordinary path, as in the local env.
-            }
-          }
-          return posix.isAbsolute(normalized) ? posix.resolve(normalized) : posix.resolve(this.cwd, normalized)
-        },
-      ),
-    )
+    const resolve = (normalized: string) =>
+      posix.isAbsolute(normalized) ? posix.resolve(normalized) : posix.resolve(this.cwd, normalized)
+    // Only `~` needs the target's home, so only it connects.
+    if (path === "~" || path.startsWith("~/"))
+      return Effect.flatMap(this.#session(fileLost), (session) =>
+        Effect.map(
+          Effect.promise(() => session.hello),
+          (hello) => resolve(path === "~" ? hello.home : posix.join(hello.home, path.slice(2))),
+        ),
+      )
+    let normalized = path
+    if (normalized.startsWith("file://")) {
+      try {
+        normalized = fileURLToPath(normalized)
+      } catch {
+        // A malformed URL stays an ordinary path, as in the local env.
+      }
+    }
+    return Effect.succeed(resolve(normalized))
   }
 
   joinPath(parts: string[]): Effect.Effect<string, FileError> {

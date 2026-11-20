@@ -4,9 +4,9 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { ExecutionEnv } from "@sigma/env"
-import type { TargetPool } from "@sigma/env/remote"
+import { spawnChannel, TargetPool } from "@sigma/env/remote"
 import { Deferred, Effect, Fiber } from "effect"
-import { link } from "./support/agent.ts"
+import { AGENT, alive, link } from "./support/agent.ts"
 
 const dirs: string[] = []
 const pools: TargetPool[] = []
@@ -25,14 +25,6 @@ const opened = (options: Parameters<typeof link>[0]) => {
   const opened = link(options)
   pools.push(opened.pool)
   return opened
-}
-
-/** A zombie has exited and only waits to be reaped by its parent, which for a grandchild is not this process. */
-function alive(pid: number): boolean {
-  const stat = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)])
-    .stdout.toString()
-    .trim()
-  return stat !== "" && !stat.startsWith("Z")
 }
 
 /**
@@ -85,6 +77,9 @@ test("env-remote-stop: a target's command is killed after the silence limit with
       // The link dies without closing, as a lost ssh link can (F21): the server's pings stop arriving.
       silent.mute()
       const exit = yield* Fiber.join(fiber)
+      // The command's processes are gone with its answer; the agent exits once that answer is written.
+      expect([pids.shell, pids.sleep].filter(alive)).toEqual([])
+      yield* Effect.promise(() => silent.exited())
       return { pids, error: exit._tag === "Failure" ? exit.cause : undefined }
     }),
   )
@@ -143,4 +138,37 @@ test("env-remote-stop: an agent of another owner leaves the first owner's comman
     }),
   )
   expect(Object.values(pids).every(alive)).toBe(true)
+})
+
+test("env-remote-stop: another target of the same home on the same computer leaves the first target's commands running", async () => {
+  const runtime = temporary("sigma-env-run-")
+  const cwd = temporary("sigma-env-")
+  const home = opened({ runtime })
+  const pids = await Effect.runPromise(
+    Effect.gen(function* () {
+      const { fiber: _, ...pids } = yield* started(home.pool.env("here", cwd))
+      yield* home.pool.connect("elsewhere")
+      return pids
+    }),
+  )
+  expect(Object.values(pids).every(alive)).toBe(true)
+})
+
+test("env-remote: a connector that prints a banner before sigma-env fails the call with the banner, and the next call connects again", async () => {
+  const runtime = temporary("sigma-env-run-")
+  let connects = 0
+  const pool = new TargetPool({
+    owner: "test-owner",
+    connect: () =>
+      spawnChannel([
+        "sh",
+        "-c",
+        `${connects++ === 0 ? "echo Welcome to here; " : ""}exec env XDG_RUNTIME_DIR=${runtime} ${process.execPath} ${AGENT}`,
+      ]),
+  })
+  pools.push(pool)
+  const env = pool.env("here", temporary("sigma-env-"))
+  const first = await Effect.runPromise(Effect.flip(env.exists("/")))
+  expect(first.message).toContain("not a frame: Welcome to here")
+  expect(await Effect.runPromise(env.exists("/"))).toBe(true)
 })

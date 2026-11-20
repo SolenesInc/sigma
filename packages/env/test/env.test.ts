@@ -5,7 +5,7 @@ import type { ExecutionEnv } from "@sigma/env"
 import { LocalExecutionEnv } from "@sigma/env/local"
 import type { TargetPool } from "@sigma/env/remote"
 import { Deferred, Effect, Fiber } from "effect"
-import { link, runtimeDir } from "./support/agent.ts"
+import { alive, link, runtimeDir } from "./support/agent.ts"
 
 const dirs: string[] = []
 const pools: TargetPool[] = []
@@ -33,13 +33,33 @@ for (const [id, make] of Object.entries(kinds)) {
     return make(cwd)
   }
 
-  /** A zombie has exited and only waits to be reaped by its parent, which for a grandchild is not this process. */
-  function alive(pid: number): boolean {
-    const stat = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)])
-      .stdout.toString()
-      .trim()
-    return stat !== "" && !stat.startsWith("Z")
-  }
+  test(`${id}: a binary file reads back as the bytes written`, async () => {
+    const local = env()
+    const bytes = new Uint8Array([0, 1, 2, 254, 255, 10, 13])
+    const read = await Effect.runPromise(
+      Effect.gen(function* () {
+        const path = yield* local.absolutePath("bytes.bin")
+        yield* local.writeFile(path, bytes)
+        return yield* local.readBinaryFile(path)
+      }),
+    )
+    expect(read).toBeInstanceOf(Uint8Array)
+    expect([...read]).toEqual([...bytes])
+  })
+
+  test(`${id}: a reader used after it is closed fails as invalid`, async () => {
+    const local = env()
+    const error = await Effect.runPromise(
+      Effect.gen(function* () {
+        const path = yield* local.absolutePath("lines.txt")
+        yield* local.writeFile(path, "one\ntwo\n")
+        const reader = yield* local.openTextLineReader(path)
+        yield* reader.close()
+        return yield* Effect.flip(reader.readLine())
+      }),
+    )
+    expect(error).toMatchObject({ code: "invalid" })
+  })
 
   // The join rule (F6): a fiber interrupted while it runs a command must not outlive the command's processes, or a
   // cancelled tool call would leave work running behind the run that cancelled it.

@@ -7,7 +7,7 @@ import { hostname, homedir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { Cause, Effect, Exit } from "effect"
-import { ExecutionError, type FileChange } from "./index.ts"
+import { ExecutionError, type FileChange, FileError } from "./index.ts"
 import { LocalExecutionEnv } from "./local.ts"
 import {
   type AgentFrame,
@@ -23,10 +23,8 @@ import {
 } from "./protocol.ts"
 import { ProcessRegistry } from "./registry.ts"
 
-/** The environment methods a call may name; everything else is refused. */
+/** The environment methods a call may name; everything else is refused. Paths are computed by the server (D8). */
 const METHODS = new Set([
-  "absolutePath",
-  "joinPath",
   "readTextFile",
   "openTextLineReader",
   "readTextLines",
@@ -88,7 +86,9 @@ const main = () => {
     stopping = true
     process.stderr.write(`sigma-env ${process.pid}: ${why}; stopping ${running.size} calls\n`)
     for (const call of running.values()) call.controller.abort()
-    void Promise.all([...running.values()].map((call) => call.settled)).finally(() => {
+    // Only a command outlives this process; a read that cannot finish, as on a FIFO, ends with it.
+    const execs = [...running.values()].filter((call) => call.exec)
+    void Promise.all(execs.map((call) => call.settled)).finally(() => {
       registry?.removeProcess(process.pid)
       // A pipe takes writes asynchronously and exit drops what it has not taken, such as the answers just written. The
       // callback runs once the earlier writes are in the pipe, or failed because nobody reads it.
@@ -113,8 +113,7 @@ const main = () => {
     if (call.handle !== undefined) {
       const target = handles.get(call.handle)
       const method = target?.[call.method]
-      if (method === undefined)
-        return Effect.fail(new ExecutionError("unknown", `no open ${call.method} handle ${call.handle}`))
+      if (method === undefined) return Effect.fail(new FileError("invalid", `handle ${call.handle} is closed`))
       const done = method.apply(target, [...call.args])
       return RELEASES.has(call.method)
         ? Effect.ensuring(
@@ -186,11 +185,7 @@ const main = () => {
       platform: process.platform,
       home: homedir(),
     }
-    // The server reports a mismatch from this hello; an owner unfit for a folder name is a broken server.
-    if (frame.protocol !== PROTOCOL || !/^[\w-]{1,128}$/.test(String(frame.owner))) {
-      write(reply)
-      process.exit(2)
-    }
+    // The server refuses a hello of another protocol, so the agent answers whatever it was sent.
     // Earlier agents of this owner, and their commands, die before this one answers, so no command from before a
     // restart runs beside the restarted server's calls.
     registry = new ProcessRegistry(join(process.env.XDG_RUNTIME_DIR ?? "/tmp", "sigma-env", frame.owner))
@@ -202,7 +197,12 @@ const main = () => {
   const lines = createInterface({ input: process.stdin })
   lines.on("line", (line) => {
     if (line.trim() === "" || stopping) return
-    const frame = decode(line) as ServerFrame
+    let frame: ServerFrame
+    try {
+      frame = decode(line) as ServerFrame
+    } catch {
+      return stop("the server wrote a line that is not a frame")
+    }
     if (registry === undefined) {
       if (frame.t !== "hello") return stop("the server spoke before its hello")
       return hello(frame)
