@@ -14,6 +14,11 @@ the order sent.
 - `queue-shared` shows the queue to a second client.
 - `queue-idempotent` queues a submission once however often its `requestId`
   is sent.
+- `queue-update` changes a waiting prompt's text, its mode (steering or
+  queueing) or both in place: it keeps its id, its `requestId` and its place in
+  the queue, and the `sigma.user` entry it runs as names who changed it as
+  `editedBy`. A prompt the run already took in answers `already_placed`, one
+  whose run ended `settled`, and neither changes.
 
 ## How to get to it
 
@@ -24,6 +29,8 @@ the order sent.
 ### Agents
 
 - Call `conversation/submit` while a run works.
+- Call `submission/update` with `conversation`, `author`, `submission` (an id
+  from the view's `pi.inbox` items) and `text`, `steer` or both, while it waits.
 
 ## Driving it with drive.ts
 
@@ -67,6 +74,20 @@ Preconditions:
   `pi.assistant` `You said: third` (the script has run out, so Sigma echoes)
   and `sigma.run_end`: `second` once, and an empty inbox.
 
+- **Update.** In a fresh run with the same script, run `drive.ts r serve`,
+  start a conversation as in **Wire**, and run
+  `drive.ts r watch <id> --submit first --until run_end --timeout 25000 --save update &`.
+  While `first` streams, send `second` and `third` with `conversation/submit`
+  (`requestId` `q-1` and `q-2`, author `bo`), then change `second` with
+  `drive.ts r rpc submission/update '{"conversation": "<id>", "submission": <n>, "author": {"id": "cy", "name": "cy"}, "text": "second, edited", "steer": true}'`.
+  It answers `{"result": "updated"}`, and `drive.ts r watch <id>` shows
+  `docs.pi.inbox.items` of `second` then `third` under their own ids, `second`
+  with `"mode": "steer"`, its text `second, edited` and `requestId` `q-1`.
+  Updating `first`, which runs (its id is in `docs.pi.live.run.inputs`),
+  answers `already_placed`. Once the runs
+  settle, the `sigma.user` entry of `second, edited` has `author` `bo` and
+  `editedBy` `cy`, and the transcript holds no `sigma.withdrawn` entry; updating
+  `first` now answers `settled`.
 - **After a failure.** In a fresh run whose script is
   `[{"text": "one two three four five six seven eight", "delayMs": 1000, "fail": "provider went away"}, {"text": "fast reply"}]`,
   queue `second` behind `first` in the TUI as in **Queue a prompt**, then run
@@ -85,6 +106,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 - queue-idempotent: submitting again with the same request id is answered once
 - queue-run: prompts sent while sigma is working wait and run in order, each to its own end
+- queue-update: a queued prompt changes its text and its mode in place, keeping its place, and one already run cannot change
 - queue-run: a prompt sent while sigma works runs after the run fails, instead of waiting for another prompt
 - submit-author, queue-shared: every client sees who wrote each prompt, while it waits and once it runs
 

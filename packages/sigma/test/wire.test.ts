@@ -2084,6 +2084,61 @@ test("withdraw-rpc: a queued prompt taken back never runs, and one already run c
   client.close()
 })
 
+test("queue-update: a queued prompt changes its text and its mode in place, keeping its place, and one already run cannot change", async () => {
+  await using server = await runningServer(ECHO)
+  const ada = await RawClient.connect(server.home.socket)
+  const bo = await RawClient.connect(server.home.socket)
+  const conversation = await start(ada, server.home.dir)
+  const view = watchView(bo, conversation)
+  const first = (await submit(ada, conversation, "one", "one")).result as { submission: number }
+  // The run waits on its approval, so "two" and "three" wait in the queue.
+  const approval = await waitingApproval(view)
+  const second = (await submit(ada, conversation, "two", "two")).result as { submission: number }
+  const third = (await submit(ada, conversation, "three", "three")).result as { submission: number }
+  type Item = { id: number; mode: string; content: unknown; entry: { data: Record<string, unknown> } }
+  const inbox = () => (view.view().docs["pi.inbox"] as { items: Item[] }).items
+  await view.until(() => inbox().length === 2)
+  const update = (submission: number, change: { text?: string; steer?: boolean }) =>
+    bo.call("submission/update", { conversation, submission, author: person("bo"), ...change })
+
+  expect((await update(second.submission, { text: "two, edited", steer: true })).result).toEqual({ result: "updated" })
+  // Bo's client sees the change, and the item is still first in line under its own id and requestId.
+  await view.until(() => inbox()[0]?.mode === "steer")
+  expect(inbox().map((item) => item.id)).toEqual([second.submission, third.submission])
+  expect(inbox()[0]).toMatchObject({
+    content: "two, edited",
+    entry: { data: { author: person("ada"), requestId: "two", editedBy: person("bo") } },
+  })
+  expect(inbox()[1]).toMatchObject({ mode: "followUp", content: "three" })
+  expect(inbox()[1]!.entry.data).not.toHaveProperty("editedBy")
+
+  // The run took "one" in already.
+  expect((await update(first.submission, { text: "uno" })).result).toEqual({ result: "already_placed" })
+  expect(errorTag(await update(9999, { text: "x" }))).toBe("NoSuchSubmission")
+
+  await ada.call("approval/resolve", { conversation, approval, author: person("ada"), allow: true })
+  await view.until(settled(2))
+  // The steer reaches the run in flight with its new text; the follow-up runs after, as it was.
+  expect(transcript(view.seen()).filter((line) => line.startsWith("user: "))).toEqual([
+    "user: one",
+    "user: two, edited",
+    "user: three",
+  ])
+  expect(
+    view
+      .seen()
+      .filter((entry) => entry.kind === USER_KIND)
+      .map((entry) => entry.data),
+  ).toEqual([
+    { author: person("ada"), requestId: "one" },
+    { author: person("ada"), requestId: "two", editedBy: person("bo") },
+    { author: person("ada"), requestId: "three" },
+  ])
+  expect((await update(first.submission, { text: "uno" })).result).toEqual({ result: "settled" })
+  ada.close()
+  bo.close()
+})
+
 test("author-every-change: two people steer one conversation, and its committed entries name who made each change", async () => {
   // Past the 20,000 tokens a summary keeps by default, so the compaction has a run to summarize.
   const long = "word ".repeat(20_000)
@@ -2340,6 +2395,7 @@ test("serve-read-only: a read-only server shows a home's conversations without r
         client.call("conversation/compact", { conversation, author: person("bo") }),
         client.call("conversation/continue", { author: person("ada"), conversation }),
         client.call("submission/withdraw", { author: person("ada"), conversation, submission: 1 }),
+        client.call("submission/update", { author: person("ada"), conversation, submission: 1, text: "x" }),
         client.call("approval/resolve", { conversation, approval: "1", author: person("bo"), allow: true }),
         client.call("auth/start", { provider: "openai" }),
         client.call("auth/logout", { provider: "openai" }),

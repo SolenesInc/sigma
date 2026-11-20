@@ -18,6 +18,9 @@ run, instead of waiting for the run to end.
 - `steer-openai` places a steer after the last of a step's calls, before the
   model's next answer.
 
+A waiting prompt can be switched between queueing and steering, or reworded,
+in place with `submission/update`; [Queue](./queue.md) (`queue-update`) drives it.
+
 ## How to get to it
 
 ### People

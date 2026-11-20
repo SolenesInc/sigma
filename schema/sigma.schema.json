@@ -1351,6 +1351,91 @@
       },
       "stream": false
     },
+    "submission/update": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "string",
+            "description": "A conversation's id: the one its client chose at conversation/start, or else the number it gave."
+          },
+          "submission": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "An `id` of the view's pi.inbox `items`, a person's input."
+          },
+          "author": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Who it is to the program that runs sigma; sigma never reads it."
+              },
+              "name": {
+                "type": "string",
+                "description": "What people see."
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": true,
+            "description": "Who changed it; the sigma.user entry it is placed as names them as `editedBy`. It keeps the author who wrote it."
+          },
+          "text": {
+            "type": "string",
+            "description": "What it says now, in place of its text; its images stay, and the skills it names are read again. Omitted, the text stays."
+          },
+          "steer": {
+            "type": "boolean",
+            "description": "True: it reaches the run at its next step, as submit's `steer`. False: it waits for the run to end. Omitted, the mode stays."
+          }
+        },
+        "required": [
+          "conversation",
+          "submission",
+          "author"
+        ],
+        "additionalProperties": true
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "enum": [
+              "updated",
+              "already_placed",
+              "settled"
+            ],
+            "description": "updated: it keeps its id, its requestId and its place in the queue. already_placed: the run took it in already; settled: its run ended. Neither changes."
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "additionalProperties": true
+      },
+      "error": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ReadOnlyServerEncoded"
+          },
+          {
+            "$ref": "#/$defs/NoSuchConversationEncoded"
+          },
+          {
+            "$ref": "#/$defs/NoSuchSubmissionEncoded"
+          },
+          {
+            "$ref": "#/$defs/TargetUnavailableEncoded"
+          }
+        ]
+      },
+      "stream": false
+    },
     "conversation/configure": {
       "params": {
         "type": "object",

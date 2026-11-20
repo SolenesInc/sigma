@@ -47,7 +47,7 @@ export const RUN_END_KIND = "sigma.run_end"
 /** An entry `{ author, selection }`: someone switched the conversation's model; it answers with it from the next run on. */
 export const MODEL_KIND = "sigma.model"
 
-/** A person's input: the entry its user message is placed as, with data `{ author, requestId }`. */
+/** A person's input: the entry its user message is placed as, with data `{ author, requestId }`, and `editedBy` when someone changed it while it waited. */
 export const USER_KIND = "sigma.user"
 
 /**
@@ -823,6 +823,36 @@ export const Withdraw = Rpc.make("submission/withdraw", {
   error: Schema.Union([ReadOnlyServer, NoSuchConversation, NoSuchSubmission]),
 })
 
+/** Changes what a person's input says or how it reaches the run while it waits, without moving it in the queue. */
+export const Update = Rpc.make("submission/update", {
+  payload: {
+    conversation: ConversationId,
+    submission: Schema.Int.annotate({ description: "An `id` of the view's pi.inbox `items`, a person's input." }),
+    author: Author.annotate({
+      description: `Who changed it; the ${USER_KIND} entry it is placed as names them as \`editedBy\`. It keeps the author who wrote it.`,
+    }),
+    text: Schema.optionalKey(
+      Schema.String.annotate({
+        description:
+          "What it says now, in place of its text; its images stay, and the skills it names are read again. Omitted, the text stays.",
+      }),
+    ),
+    steer: Schema.optionalKey(
+      Schema.Boolean.annotate({
+        description:
+          "True: it reaches the run at its next step, as submit's `steer`. False: it waits for the run to end. Omitted, the mode stays.",
+      }),
+    ),
+  },
+  success: Schema.Struct({
+    result: Schema.Literals(["updated", "already_placed", "settled"]).annotate({
+      description:
+        "updated: it keeps its id, its requestId and its place in the queue. already_placed: the run took it in already; settled: its run ended. Neither changes.",
+    }),
+  }),
+  error: Schema.Union([ReadOnlyServer, NoSuchConversation, NoSuchSubmission, TargetUnavailable]),
+})
+
 /** Changes the conversation's turn limit from its next model request on. */
 export const Configure = Rpc.make("conversation/configure", {
   payload: {
@@ -908,6 +938,7 @@ export const SigmaRpcs = RpcGroup.make(
   Compact,
   Continue,
   Withdraw,
+  Update,
   Configure,
   GetUsage,
   WatchTasks,

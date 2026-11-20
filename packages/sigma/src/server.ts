@@ -31,6 +31,8 @@ import {
   createRegistry,
   type EndedRun,
   type WithdrawnInput,
+  InboxDoc,
+  type Agent,
   openHarness,
   UsageDoc,
   type Harness,
@@ -48,7 +50,7 @@ import {
   type Tx,
 } from "@sigma/kernel"
 import type { AgentHello } from "@sigma/env/protocol"
-import { fromProviders, type Models } from "@sigma/models"
+import { fromProviders, type ImageContent, type Models } from "@sigma/models"
 import type { ImageProcessor } from "@sigma/tools"
 import { createNodePhotonImages } from "@sigma/tools/images/node"
 import {
@@ -535,6 +537,17 @@ const Handlers = SigmaRpcs.toLayer(
         return conversation
       })
 
+    /**
+     * The skills `text` names, read now. A skill named while its target is unreachable could not be read, and the
+     * input would go without it, as if it named none: it is refused instead, so the person knows.
+     */
+    const skillsNamed = (agent: Agent, text: string) =>
+      Effect.gen(function* () {
+        const env = envOf(agent)
+        if (skillNames(text).length > 0 && toldOfWorkspace(providers.instances, agent)) yield* reach(agent.target)
+        return yield* attachedSkills(env, text, providers.skills(agent.model?.provider, workspaceOf(agent, env)))
+      })
+
     // Starts with a chosen id one at a time, so two starts with one new id make one conversation.
     const choosing = yield* Semaphore.make(1)
 
@@ -729,14 +742,9 @@ const Handlers = SigmaRpcs.toLayer(
         Effect.gen(function* () {
           const conversation = yield* takingInput(id)
           const agent = yield* agentOf(conversation)
-          const env = envOf(agent)
-          // A skill named while its target is unreachable could not be read, and the input would go without it, as if
-          // it named none: it is refused instead, so the person knows.
-          if (skillNames(text).length > 0 && toldOfWorkspace(providers.instances, agent)) yield* reach(agent.target)
-          const skills = providers.skills(agent.model?.provider, workspaceOf(agent, env))
           const { content, attached } = userInput(
             text,
-            yield* attachedSkills(env, text, skills),
+            yield* skillsNamed(agent, text),
             yield* attachedImages(attaching, images, models, agent),
           )
           const entry = {
@@ -899,6 +907,41 @@ const Handlers = SigmaRpcs.toLayer(
           )
           if (result === "not_found") return yield* new NoSuchSubmission({ submission })
           return { result: result === "aborted" ? ("withdrawn" as const) : result }
+        }),
+      ),
+      "submission/update": writing(({ conversation: id, submission, author, text, steer }) =>
+        Effect.gen(function* () {
+          const conversation = yield* find(id)
+          const sid = idFromNumber<SubmissionId>(submission)
+          const attached = text === undefined ? undefined : yield* skillsNamed(yield* agentOf(conversation), text)
+          const result = yield* Effect.orDie(
+            conversation.commit((tx) =>
+              Effect.gen(function* () {
+                const record = yield* tx.submission(sid)
+                if (record === undefined || record.conversationId !== conversation.id) return "not_found" as const
+                if (record.status !== "queued") return record.status === "placed" ? "already_placed" : "settled"
+                const item = (yield* tx.doc(InboxDoc, conversation.id)).items.find((queued) => queued.id === sid)
+                // Only a person's input says what a person wrote; the rest of the queue is Sigma's own.
+                if (item === undefined || item.mode === "write" || item.entry?.kind !== USER_KIND) {
+                  return "not_found" as const
+                }
+                const { entry } = item
+                const data = { ...(entry.data as object), editedBy: author } as Record<string, unknown>
+                if (text !== undefined && attached !== undefined) {
+                  const queued: unknown = item.content
+                  const kept = Array.isArray(queued) ? queued.filter((part) => part.type === "image") : []
+                  item.content = userInput(text, attached, kept as Array<ImageContent>).content as typeof item.content
+                  delete data.skills
+                  if (attached.length > 0) data.skills = attached
+                }
+                entry.data = data as NonNullable<typeof entry.data>
+                if (steer !== undefined) item.mode = steer ? "steer" : "followUp"
+                return "updated" as const
+              }),
+            ),
+          )
+          if (result === "not_found") return yield* new NoSuchSubmission({ submission })
+          return { result }
         }),
       ),
       "conversation/configure": writing(({ conversation: id, author, maxTurns }) =>

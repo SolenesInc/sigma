@@ -86,3 +86,6 @@ Screen, `packages/sigma/test/screen.test.ts`:
   `sigma.interrupted` entry or the run's end says what happened.
 - A compaction that found nothing to summarize commits nothing, so it names
   no one.
+- `submission/update` writes no entry of its own: its `author` shows as
+  `editedBy` in the data of the prompt's `sigma.user` entry once it runs, next
+  to the `author` who wrote it.
