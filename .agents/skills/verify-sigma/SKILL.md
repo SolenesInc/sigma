@@ -125,8 +125,9 @@ to settle and stops it, and the next client starts one on the new code.
 - **TUI.** `tui type <text>` types literally; `tui paste <text>` pastes it as
   a terminal does, as when a file is dropped on it; `tui key <keys>` presses tmux
   keys: `Enter` sends, `M-Enter` adds a line (`S-Enter` reaches the TUI as a
-  plain Enter through tmux, and `C-j` sends today, a known bug), `Escape` stops the run, `Tab`
-  switches between queueing and steering while Sigma works, `C-y` allows the
+  plain Enter through tmux, and `C-j` sends today, a known bug), `Escape` stops the run and gives your pending prompts' text back, `Tab`
+  switches between steering and queueing while Sigma works, `Up` on an empty
+  prompt opens your newest pending prompt to edit, and `Escape` closes the edit, `C-y` allows the
   call Sigma asks about and `C-n` denies it, `C-l` signs in to a signed-out
   provider and `Escape` cancels it, `C-c` quits. Typing `/model` and `Enter`
   opens the model list: `Up` and `Down` pick a model, `Left` and `Right` its
@@ -134,9 +135,9 @@ to settle and stops it, and the next client starts one on the new code.
   waits until the screen shows the text, or stops showing it with `--gone`; on
   a timeout it prints the screen and exits 1. Wait on text, never sleep. The
   pane is 100x30. Stable handles are the status words `READY`, `WORKING` and
-  `WAITING`, the prompt panel's titles `PROMPT`, `QUEUE · tab` and
-  `STEER · tab`, the speaker bars `ADA` and `SIGMA`, `queued · <text>` and
-  `steering · <text>`, a call's `▸ Tool(subject)`, `allow this call?`,
+  `WAITING`, the prompt panel's titles `PROMPT`, `STEER · tab`,
+  `QUEUE · tab`, `EDIT STEER · tab` and `EDIT QUEUED · tab`, the speaker
+  bars `ADA` and `SIGMA`, `queued · <text>` and `steering · <text>`, a call's `▸ Tool(subject)`, `allow this call?`,
   `✓ allowed by <name>` and `✗ denied by <name>`, `with <skill>, <skill>`
   under a message that named skills, a run's end `◆ interrupted` or
   `✗ <message>`, and the exit line `resume with: sigma --conversation <id>`.

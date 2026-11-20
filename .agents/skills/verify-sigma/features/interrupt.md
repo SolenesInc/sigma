@@ -23,6 +23,11 @@ can interrupt any conversation's run.
   naming its `requestId`, so a client that lost its watch learns the prompt's
   fate from entries alone. A prompt sent after the interrupt, while the run
   still stops, waits and runs once it stopped.
+- `interrupt-restore` puts the text of your own withdrawn prompts back in the
+  TUI's prompt when `Esc` stops the run, oldest first, a blank line between
+  each, before whatever you had typed, so Enter sends them again as one. Only
+  prompts you wrote come back; the client does this from what was pending,
+  with no change on the server.
 
 ## How to get to it
 
@@ -60,6 +65,13 @@ Preconditions:
   watch ends on a `pi.assistant` entry with what was said and
   `"stopReason": "aborted"`, then `sigma.run_end` with
   `{"outcome": "interrupted", "message": "aborted"}`.
+- **Give it back** (`interrupt-restore`). In a fresh run with the same script,
+  `drive.ts r tui start`, send `count`, and wait for `one`. Type `go left` and
+  `Enter` (`steering · go left`), `Tab`, `then right` and `Enter`
+  (`queued · then right`), then type `half typed` without `Enter`. `Escape`,
+  wait for `READY`, and `drive.ts r tui screen restored`: `◆ interrupted`, no
+  `steering ·` or `queued ·` rows, and the prompt holds `go left`, a blank
+  line, `then right`, a blank line, `half typed`.
 - **Run, then background jobs** (`--fake-claude bash_background_stopped`).
   `drive.ts r tui start --provider claude --auto`, send
   `Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started`,
@@ -98,6 +110,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 Screen, `packages/sigma/test/screen.test.ts`:
 
 - interrupt-tui: escape stops sigma mid-answer and the answer shows it was interrupted
+- interrupt-restore: escape mid-run gives the text of your pending prompts back to the composer, oldest first, before what you were typing
 - claude-job-card, background-count: a background command's card reads running while it works and done after, the status bar counts it, and its report shows under its name before Sigma's follow-up
 
 Provider, `packages/sigma/test/openai.test.ts`:

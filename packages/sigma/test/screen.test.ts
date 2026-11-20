@@ -263,7 +263,9 @@ test("queue-show: a prompt sent while sigma works waits in the queue, then runs"
   const session = await open([{ text: "slow one two three", delayMs: 300 }, { text: "fast reply" }])
   await session.waitFor((screen) => screen.includes("READY"))
   session.type("first\r")
-  await session.waitFor((screen) => screen.includes("WORKING") && screen.includes("QUEUE"))
+  await session.waitFor((screen) => screen.includes("WORKING") && screen.includes("STEER · tab"))
+  session.type("\t")
+  await session.waitFor((screen) => screen.includes("QUEUE · tab"))
   session.type("second\r")
   await session.waitFor((screen) => screen.includes("queued · second"))
   const screen = await session.waitFor((screen) => screen.includes("fast reply"))
@@ -319,11 +321,13 @@ test("approval-deny-tui: ctrl+n denies a call, the denial shows as its result an
   await quit(session)
 })
 
-test("steer-toggle, steer-show: tab switches a prompt sent mid-run from queueing to steering, and the steer shows until it lands", async () => {
+test("steer-toggle, steer-show: enter steers a prompt sent mid-run, tab switches to queueing and back, and the steer shows until it lands", async () => {
   const session = await open([call("bash", { command: "sleep 1" }), { text: "turning left now" }], ["--auto"])
   await session.waitFor((screen) => screen.includes("READY"))
   session.type("drive\r")
-  await session.waitFor((screen) => screen.includes("▸ bash(sleep 1)") && screen.includes("QUEUE · tab"))
+  await session.waitFor((screen) => screen.includes("▸ bash(sleep 1)") && screen.includes("STEER · tab"))
+  session.type("\t")
+  await session.waitFor((screen) => screen.includes("QUEUE · tab"))
   session.type("\t")
   await session.waitFor((screen) => screen.includes("STEER · tab"))
   session.type("turn left\r")
@@ -625,7 +629,7 @@ test("approval-panel: with the conversation and two subagents asking, the panel 
   expect(panel[2]).not.toBe(panel[3])
   // Nothing is drawn over anything else: the panel's own borders, the prompt below it and the transcript above it.
   expect(panel[4]).toMatch(/^╰─+╯$/)
-  expect(panel[5]).toMatch(/^╭─ QUEUE · tab ─+╮$/)
+  expect(panel[5]).toMatch(/^╭─ STEER · tab ─+╮$/)
   const lines = asking.split("\n")
   const above = lines.slice(0, lines.indexOf(panel[0]!)).findLast((line) => line.trim() !== "")
   expect(above).toMatch(/^ +allow this call\? · answer below +$/)
@@ -1069,6 +1073,8 @@ test("withdraw-rpc: /withdraw takes back the queued prompt before it runs", asyn
   session.type("first\r")
   // The run waits on its approval, so "second" waits in the queue.
   await session.waitFor((screen) => screen.includes("allow this call?"))
+  session.type("\t")
+  await session.waitFor((screen) => screen.includes("QUEUE · tab"))
   session.type("second\r")
   await session.waitFor((screen) => screen.includes("queued · second"))
   session.type("/withdraw\r")
@@ -1078,6 +1084,125 @@ test("withdraw-rpc: /withdraw takes back the queued prompt before it runs", asyn
   expect(screen).not.toContain("You said: second")
   await quit(session)
 })
+
+/** The rows of the prompt panel, from its top border to its bottom one. */
+const promptPanel = (screen: string) => {
+  const lines = screen.split("\n")
+  const top = lines.findLastIndex((line) => /^╭─ /.test(line))
+  return lines.slice(top, lines.findIndex((line, at) => at > top && /^╰/.test(line)) + 1).join("\n")
+}
+
+const up = "\x1b[A"
+const down = "\x1b[B"
+
+test("queue-edit: up on an empty prompt opens your newest pending prompt, up again an older one, and enter saves the edit in place, tab flipping it between steering and queueing", async () => {
+  const session = await open([call("bash", { command: "echo hi" }), { text: "all done" }])
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type("first\r")
+  // The run waits on its approval, so what is sent meanwhile waits too.
+  await session.waitFor((screen) => screen.includes("allow this call?"))
+  session.type("second\r")
+  await session.waitFor((screen) => screen.includes("steering · second"))
+  session.type("third\r")
+  await session.waitFor((screen) => screen.includes("steering · third"))
+  session.type(up)
+  await session.waitFor(
+    (screen) => promptPanel(screen).includes("EDIT STEER · tab") && promptPanel(screen).includes("❯ third"),
+  )
+  session.type(up)
+  await session.waitFor((screen) => promptPanel(screen).includes("❯ second"))
+  // Down goes back to the newer one, and past the newest closes the edit.
+  session.type(down)
+  await session.waitFor((screen) => promptPanel(screen).includes("❯ third"))
+  session.type(down)
+  await session.waitFor(
+    (screen) => promptPanel(screen).includes("STEER · tab") && !promptPanel(screen).includes("EDIT"),
+  )
+  session.type(up + up)
+  await session.waitFor((screen) => promptPanel(screen).includes("❯ second"))
+  session.type(" please\t")
+  await session.waitFor((screen) => promptPanel(screen).includes("EDIT QUEUED · tab"))
+  session.type("\r")
+  const saved = await session.waitFor((screen) => screen.includes("queued · second please"))
+  // It keeps its place: it was sent before third, and still runs before it.
+  expect(saved.indexOf("queued · second please")).toBeLessThan(saved.indexOf("steering · third"))
+  expect(promptPanel(saved)).not.toContain("EDIT")
+  expect(promptPanel(saved)).not.toContain("second")
+  session.type("\x19")
+  const screen = await session.waitFor(
+    (screen) => screen.includes("You said: second please") && screen.includes("READY"),
+  )
+  expect(screen.indexOf("third")).toBeLessThan(screen.indexOf("all done"))
+  expect(screen.indexOf("all done")).toBeLessThan(screen.indexOf("You said: second please"))
+  await quit(session)
+}, 20_000)
+
+test("queue-edit: emptying the prompt you opened withdraws it, esc closes an edit unsaved, and an edit saved after the prompt went stays in the composer to send anew", async () => {
+  const session = await open([call("bash", { command: "echo hi" }), { text: "all done" }])
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type("first\r")
+  await session.waitFor((screen) => screen.includes("allow this call?"))
+  session.type("\tsecond\r")
+  await session.waitFor((screen) => screen.includes("queued · second"))
+  session.type("third\r")
+  await session.waitFor((screen) => screen.includes("queued · third"))
+  session.type(up)
+  await session.waitFor((screen) => promptPanel(screen).includes("EDIT QUEUED · tab"))
+  session.type("\x7f".repeat("third".length) + "\r")
+  const withdrawn = await session.waitFor((screen) => screen.includes("withdrew: third"))
+  expect(withdrawn).not.toContain("queued · third")
+  expect(withdrawn).toContain("queued · second")
+  // Esc leaves an edit without saving it, and without stopping the run.
+  session.type(up)
+  await session.waitFor((screen) => promptPanel(screen).includes("❯ second"))
+  session.type(" changed")
+  await session.waitFor((screen) => promptPanel(screen).includes("❯ second changed"))
+  session.type("\x1b")
+  const cancelled = await session.waitFor((screen) => !promptPanel(screen).includes("EDIT"))
+  expect(promptPanel(cancelled)).not.toContain("second")
+  expect(cancelled).toContain("queued · second")
+  expect(cancelled).toContain("allow this call?")
+  // Opened again, it waits while the run ends and runs it; the edit saved then comes too late.
+  session.type(up)
+  await session.waitFor((screen) => promptPanel(screen).includes("❯ second"))
+  session.type(" again")
+  session.type("\x19")
+  await session.waitFor((screen) => screen.includes("You said: second") && screen.includes("READY"))
+  session.type("\r")
+  const late = await session.waitFor((screen) => screen.includes("too late to edit: second already"))
+  expect(promptPanel(late)).toContain("❯ second again")
+  expect(promptPanel(late)).not.toContain("EDIT")
+  session.type("\r")
+  await session.waitFor((screen) => screen.includes("You said: second again"))
+  await quit(session)
+}, 20_000)
+
+test("interrupt-restore: escape mid-run gives the text of your pending prompts back to the composer, oldest first, before what you were typing", async () => {
+  const session = await open([{ text: "one two three four five six seven eight nine ten", delayMs: 300 }])
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type("count\r")
+  await session.waitFor((screen) => screen.includes("WORKING") && screen.includes("one"))
+  session.type("go left\r")
+  await session.waitFor((screen) => screen.includes("steering · go left"))
+  session.type("\tthen right\r")
+  await session.waitFor((screen) => screen.includes("queued · then right"))
+  session.type("half typed")
+  await session.waitFor((screen) => promptPanel(screen).includes("half typed"))
+  session.type("\x1b")
+  const screen = await session.waitFor(
+    (screen) => screen.includes("interrupted") && screen.includes("READY") && promptPanel(screen).includes("go left"),
+  )
+  expect(screen).not.toContain("steering ·")
+  expect(screen).not.toContain("queued ·")
+  const panel = promptPanel(screen)
+  expect(panel).toContain("❯ go left")
+  expect(panel.indexOf("go left")).toBeLessThan(panel.indexOf("then right"))
+  expect(panel.indexOf("then right")).toBeLessThan(panel.indexOf("half typed"))
+  // Enter sends what came back as one prompt.
+  session.type("\r")
+  await session.waitFor((screen) => /You said: go left\s+then right\s+half typed/.test(screen))
+  await quit(session)
+}, 20_000)
 
 test("configure-rpc, run-turn-limit: /max-turns shows who set the limit, and a looping run ends naming it", async () => {
   const echo = call("bash", { command: "echo again" })

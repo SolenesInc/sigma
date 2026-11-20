@@ -1,14 +1,15 @@
 # Steering
 
-A person redirects Sigma mid-run without stopping it. While Sigma works, `Tab`
-switches the prompt from queueing to steering; a steering prompt shows as
+A person redirects Sigma mid-run without stopping it. While Sigma works, Enter
+steers, and `Tab` switches the prompt to queueing and back; a steering prompt shows as
 `steering · <text>` and reaches the model at its next step, inside the same
 run, instead of waiting for the run to end.
 
 ## Sub-features
 
-- `steer-toggle` switches the prompt panel between `QUEUE · tab` and
-  `STEER · tab` with `Tab` while Sigma works.
+- `steer-toggle` sends a prompt typed while Sigma works as a steer, under the
+  panel title `STEER · tab`; `Tab` switches the panel to `QUEUE · tab`, which
+  queues, and back.
 - `steer-show` shows a waiting steer as `steering · <text>`, to every client.
 - `steer-place` places the steer after the step that was running and goes on
   in the same run.
@@ -19,13 +20,15 @@ run, instead of waiting for the run to end.
   model's next answer.
 
 A waiting prompt can be switched between queueing and steering, or reworded,
-in place with `submission/update`; [Queue](./queue.md) (`queue-update`) drives it.
+in place: in the TUI with `Up` ([Queue](./queue.md) `queue-edit`), and on the
+wire with `submission/update` (`queue-update`).
 
 ## How to get to it
 
 ### People
 
-- Press `Tab` in the TUI while it shows `WORKING`, type, and press Enter.
+- Type in the TUI while it shows `WORKING` and the panel reads `STEER · tab`,
+  and press Enter.
 
 ### Agents
 
@@ -42,6 +45,7 @@ Preconditions:
 
 - **Steer.** Run `drive.ts r tui start`, `drive.ts r tui wait READY`,
   `drive.ts r tui type first`, `drive.ts r tui key Enter`,
+  `drive.ts r tui wait 'STEER · tab'`, `drive.ts r tui key Tab`,
   `drive.ts r tui wait 'QUEUE · tab'`, `drive.ts r tui key Tab`,
   `drive.ts r tui wait 'STEER · tab'`, `drive.ts r tui type 'go left'`,
   `drive.ts r tui key Enter`, `drive.ts r tui wait 'steering · go left'`,
@@ -69,8 +73,8 @@ Preconditions:
   run `drive.ts r tui start --provider claude`, `drive.ts r tui wait READY`,
   type
   ``Run the bash command `touch steered.txt` with the Bash tool, then reply with exactly: done``
-  and `Enter`, and `drive.ts r tui wait 'allow this call?'`. Press `Tab`,
-  `drive.ts r tui wait 'STEER · tab'`, type
+  and `Enter`, and `drive.ts r tui wait 'allow this call?'`. The
+  panel reads `STEER · tab`; type
   `Also end your reply with the word BANANA.` and `Enter`, then
   `drive.ts r tui wait 'steering · Also'` and `drive.ts r tui screen steering`:
   `▸ Bash(touch steered.txt)` asking, `steering · Also end your reply with the word BANANA.`
@@ -86,7 +90,7 @@ Preconditions:
 - **Claude, two steers** (`two_steers`). In a fresh run made with
   `--fake-claude two_steers`, start the TUI as above and type
   ``Run the bash command `touch one.txt` with the Bash tool, then, as a separate call, run `touch two.txt` with the Bash tool, then reply with exactly: done``.
-  At `allow this call?` for `touch one.txt`, press `Tab`, type
+  At `allow this call?` for `touch one.txt`, type
   `Also end your reply with the word BANANA.` and `Enter`, wait for
   `steering · Also`, and press `C-y`. Wait for `Bash(touch two.txt)` and
   `allow this call?`: the panel is still `STEER · tab`, so type
@@ -105,7 +109,7 @@ Preconditions:
   `drive.ts r up --fake-openai steer_after_parallel_calls`, run
   `drive.ts r tui start --provider openai`, wait for `READY`, type
   `echo one and two` and `Enter`, and wait for `allow this call?`: both
-  `▸ bash(echo one)` and `▸ bash(echo two)` ask at once. Press `Tab`, type
+  `▸ bash(echo one)` and `▸ bash(echo two)` ask at once. Type
   `and three`, `Enter`, wait for `steering · and three`, and press `C-y` for
   the first call, then `C-y` for the second, and wait for `READY`. The screen shows both
   calls allowed with `one` and `two`, `ADA` over `and three`, and `SIGMA`
@@ -129,7 +133,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 Screen, `packages/sigma/test/screen.test.ts`:
 
-- steer-toggle, steer-show: tab switches a prompt sent mid-run from queueing to steering, and the steer shows until it lands
+- steer-toggle, steer-show: enter steers a prompt sent mid-run, tab switches to queueing and back, and the steer shows until it lands
 
 Provider, `packages/sigma/test/openai.test.ts`:
 
@@ -159,7 +163,7 @@ Package, `packages/claude/test/claude.test.ts`:
   the steer lands inside the run; the fakes wait for a steer the recording
   has, whatever the timing, so a steer sent late stalls the run.
 - `Tab` does nothing while Sigma is ready; the panel then reads `PROMPT`. A
-  switch to steering lasts across runs in that TUI, until `Tab` again.
+  switch to queueing lasts across runs in that TUI, until `Tab` again.
 
 ## With a real account
 
@@ -169,7 +173,7 @@ SKILL.md's "Real accounts" first, and run the first check before any step.
 - **Claude.** Start with `drive.ts r up --real-claude`. Run
   `drive.ts r tui start --provider claude`, wait for `READY`, and type
   ``Run the bash command `touch /tmp/sigma-verify/r/steered.txt` with the Bash tool, then reply with exactly: done``.
-  At `allow this call?` press `Tab`, type
+  At `allow this call?` type
   `Also end your reply with the word BANANA.` and `Enter`, then press `C-y`.
   Wait `--timeout 120000` for `READY`. The final answer ends with
   `BANANA`, the steer's `sigma.user` entry sits between the `pi.tool-result` and
@@ -181,7 +185,7 @@ SKILL.md's "Real accounts" first, and run the first check before any step.
   wait for `READY`, and type
   ``Run `echo hi` with the Bash tool, then write a 300-word story about a gnome.``
   and `Enter`. Once `▸ Bash(echo hi)` shows `hi` and the status is still
-  `WORKING`, press `Tab`, type `Now reply with exactly: BANANA` and `Enter`,
+  `WORKING`, type `Now reply with exactly: BANANA` and `Enter`,
   and wait `--timeout 120000` for `READY`. Today's behaviour, which this
   checks: the story ends the first run, the steer's `sigma.user` entry follows that
   run's `sigma.run_end`, and a second run answers `BANANA`; `drive.ts r watch <id> --save real-claude-late-steer` shows two `sigma.run_end`s. Report what the screen and
@@ -190,7 +194,7 @@ SKILL.md's "Real accounts" first, and run the first check before any step.
 - **ChatGPT.** Start with `drive.ts r up --openai-kept`. Run
   `drive.ts r tui start --provider openai`, wait for `READY`, and type
   ``Run `echo one` and then `echo two` with the bash tool, one call at a time, then say what they printed.``.
-  At the first `allow this call?` press `Tab`, type
+  At the first `allow this call?` type
   `Also end your answer with the word BANANA.` and `Enter`, then press `C-y`
   at each call that follows. Wait `--timeout 120000` for `READY`. The final
   answer ends with `BANANA`, and `watch` shows one `sigma.run_end` with the

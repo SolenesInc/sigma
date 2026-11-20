@@ -130,10 +130,11 @@ lists when a change touches them.
   things wait for `^Y`, `^N` or `approval/resolve`; `exec` denies them and
   `--auto` allows them.
 - [Interrupt](./interrupt.md) (people, agents): `Esc` or `conversation/interrupt` stops a run
-  and keeps what was said.
+  and keeps what was said; the TUI gives your pending prompts' text back.
 - [Queue](./queue.md) (people, agents): prompts sent while Sigma works wait in a queue everyone
-  sees, then run in order; a resent `requestId` queues once.
-- [Steering](./steering.md) (people, agents): `Tab` or `"steer": true` sends a prompt that
+  sees, then run in order; a resent `requestId` queues once; `Up` in the TUI
+  edits your own in place.
+- [Steering](./steering.md) (people, agents): Enter while Sigma works, or `"steer": true`, sends a prompt that
   reaches the model at its next step, inside the same run; replayed for Claude
   (one and two steers, between parallel calls) and ChatGPT.
 - [Providers](./providers.md) (people, agents): `--provider` or `conversation/start` picks one,

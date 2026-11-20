@@ -73,7 +73,7 @@ Preconditions:
   Under `SIGMA`: `checking`, `▸ bash(echo approved)`,
   `allow this call? · answer below`, the `WAITING ON YOU · 1` panel above the
   prompt holds `SIGMA allow bash(echo approved)?  ^Y  allow  ^N  deny`, the
-  status bar reads `◆ WAITING 0s`, and the prompt panel is titled `QUEUE · tab`. `drive.ts r watch <id> --save asking` shows
+  status bar reads `◆ WAITING 0s`, and the prompt panel is titled `STEER · tab`. `drive.ts r watch <id> --save asking` shows
   the request in `docs.sigma.approvals.requests`, keyed by its approval id,
   with `"tool": "bash"`.
 - **Allow.** Run `drive.ts r tui key C-y`, `drive.ts r tui wait 'all done'`,

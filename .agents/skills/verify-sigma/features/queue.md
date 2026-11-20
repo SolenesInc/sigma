@@ -6,8 +6,9 @@ the order sent.
 
 ## Sub-features
 
-- `queue-show` shows a waiting prompt as `queued · <text>` while the prompt
-  panel is titled `QUEUE · tab`.
+- `queue-show` shows a waiting prompt as `queued · <text>`, sent while the
+  prompt panel is titled `QUEUE · tab`: `Tab` switches it there from
+  `STEER · tab`, where Enter steers.
 - `queue-run` runs it after the current run ends, answered or failed, and
   removes it from the queue. A run whose task faults on a bug withdraws the
   prompts queued behind it instead, each marked `sigma.withdrawn`.
@@ -19,12 +20,24 @@ the order sent.
   the queue, and the `sigma.user` entry it runs as names who changed it as
   `editedBy`. A prompt the run already took in answers `already_placed`, one
   whose run ended `settled`, and neither changes.
+- `queue-edit` edits your own waiting prompts in the TUI. `Up` on an empty
+  prompt opens your newest one, its panel titled `EDIT STEER · tab` or
+  `EDIT QUEUED · tab`; `Up` again opens the next older, `Down` the next newer,
+  and `Down` past the newest closes the edit. `Up` (on the first line) and
+  `Down` (at the end of the text) move between prompts only while the one
+  opened is unchanged in text and mode. `Tab` flips it between
+  steering and queueing, Enter saves it in place with `submission/update`,
+  Enter on an emptied prompt withdraws it, and `Esc` closes the edit unsaved,
+  stopping nothing. An edit saved after the prompt reached Sigma stays in the
+  composer with `◆ too late to edit: <text> already ran` (or `already reached
+sigma`), and Enter sends it as a new prompt.
 
 ## How to get to it
 
 ### People
 
-- Type and press Enter in the TUI while it shows `WORKING` and the panel reads `QUEUE · tab`.
+- Press `Tab` in the TUI while it shows `WORKING`, so the panel reads `QUEUE · tab`, type, and press Enter.
+- Press `Up` on an empty prompt to edit your own waiting prompts.
 
 ### Agents
 
@@ -41,6 +54,7 @@ Preconditions:
 
 - **Queue a prompt.** Run `drive.ts r tui start`, `drive.ts r tui wait READY`,
   `drive.ts r tui type first`, `drive.ts r tui key Enter`,
+  `drive.ts r tui wait 'STEER · tab'`, `drive.ts r tui key Tab`,
   `drive.ts r tui wait 'QUEUE · tab'`, `drive.ts r tui type second`,
   `drive.ts r tui key Enter`, `drive.ts r tui wait 'queued · second'`,
   `drive.ts r tui screen queued`. `WORKING`, the slow answer streaming, and
@@ -88,6 +102,24 @@ Preconditions:
   settle, the `sigma.user` entry of `second, edited` has `author` `bo` and
   `editedBy` `cy`, and the transcript holds no `sigma.withdrawn` entry; updating
   `first` now answers `settled`.
+- **Edit in the TUI.** In a fresh run whose script is
+  `[{"tool": {"name": "bash", "input": {"command": "echo hi"}}}, {"text": "all done"}]`,
+  run `drive.ts r tui start`, wait for `READY`, type `first` and `Enter`, and
+  wait for `allow this call?`: the run holds there. Type `second`, `Enter`,
+  `third`, `Enter`, and wait for `steering · third`. Press `Up`: the panel
+  reads `EDIT STEER · tab` over `❯ third` and
+  `enter  save · empty withdraws · esc  cancel`
+  (`drive.ts r tui screen edit-open`). `Up` again opens `second`; type
+  ` please`, press `Tab` (`EDIT QUEUED · tab`, screen `edit-flipped`) and
+  `Enter`: the transcript shows `queued · second please` above
+  `steering · third`, and the prompt is empty (screen `edit-saved`). `Up`
+  opens `third`; delete it with `BSpace` and press `Enter`:
+  `◆ withdrew: third`, and its row is gone (screen `edit-withdrawn`). `C-y`:
+  `all done`, then `You said: second please`. To see an edit come too late,
+  open a queued prompt with `Up`, change it, press `C-y`, wait for its
+  `You said:` and `READY`, then `Enter`: `◆ too late to edit: <text> already
+ran; enter sends your edit as a new prompt`, with the edit still in the
+  prompt (screen `edit-late`).
 - **After a failure.** In a fresh run whose script is
   `[{"text": "one two three four five six seven eight", "delayMs": 1000, "fail": "provider went away"}, {"text": "fast reply"}]`,
   queue `second` behind `first` in the TUI as in **Queue a prompt**, then run
@@ -113,6 +145,8 @@ Wire, `packages/sigma/test/wire.test.ts`:
 Screen, `packages/sigma/test/screen.test.ts`:
 
 - queue-show: a prompt sent while sigma works waits in the queue, then runs
+- queue-edit: up on an empty prompt opens your newest pending prompt, up again an older one, and enter saves the edit in place, tab flipping it between steering and queueing
+- queue-edit: emptying the prompt you opened withdraws it, esc closes an edit unsaved, and an edit saved after the prompt went stays in the composer to send anew
 
 Package, `packages/harness/test/harness.test.ts` (no wire test can make a run task fault):
 
@@ -128,9 +162,12 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - A scripted run needs no account: Claude is a fake that is signed in, so the
   splash and `providers/list` show it ready.
 - The prompt panel reads `PROMPT` while Sigma is ready and, while it works,
-  `QUEUE · tab`, or `STEER · tab` if `Tab` switched this TUI to steering
+  `STEER · tab`, or `QUEUE · tab` if `Tab` switched this TUI to queueing
   earlier: the switch lasts across runs until `Tab` is pressed again. Wait for
   `QUEUE · tab` before typing the second prompt. Steering is a different
   feature. No committed test covers the switch lasting across runs.
+- `Up` opens only prompts you wrote, by your author id; another client's stay
+  out of reach, though `/withdraw` still takes back the newest of anyone's.
+- `Up` on a prompt with text in it moves the cursor, as before: clear it first.
 - Each `drive.ts` call takes a few hundred milliseconds, so the first answer
   has to take seconds for the queued state to still be there when you look.

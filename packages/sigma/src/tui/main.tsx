@@ -62,6 +62,7 @@ import {
   type ConversationActions,
   type Notice,
   type Panel,
+  type Pending,
   type Screen,
   setupOf,
   Shell,
@@ -115,7 +116,13 @@ type Approval = {
   readonly answer?: unknown
 }
 type Approvals = { readonly requests?: Readonly<Record<string, Approval>> }
-type InboxItem = { readonly id: number; readonly mode: string; readonly content?: Message["content"] }
+type InboxItem = {
+  readonly id: number
+  readonly mode: string
+  readonly content?: Message["content"]
+  /** The entry it is placed as: a person's input names its author. */
+  readonly entry?: EntryRecord
+}
 type Usage = {
   readonly totalTokens: number
   readonly input: number
@@ -1229,12 +1236,13 @@ const conversationScreen = Effect.fnUntraced(function* (
   )
   /** A task, its notice once it ends: what it came to, or why it failed, a defect the server sent included. */
   const report = <A, E>(effect: Effect.Effect<A, E>, said: (value: A) => string | undefined) =>
-    Effect.runFork(
+    Effect.runPromise(
       effect.pipe(
         Effect.matchCause({
-          onSuccess: (value) => {
+          onSuccess: (value): A | undefined => {
             const text = said(value)
             setNotice(text === undefined ? undefined : { text, warning: false })
+            return value
           },
           onFailure: (cause) => {
             const why: unknown = Cause.squash(cause)
@@ -1243,9 +1251,23 @@ const conversationScreen = Effect.fnUntraced(function* (
                 ? why.message
                 : String(why)
             setNotice({ text, warning: true })
+            return undefined
           },
         }),
       ),
+      // A notice that throws while it is drawn fails the promise; nothing waits on most, and a rejection nothing
+      // handles would end the TUI.
+    ).catch(() => undefined)
+  /** The prompts an interrupt gave back to the composer already. */
+  const givenBack = new Set<number>()
+  /** Your own prompts waiting in the queue, oldest first: the ones you may edit, and the ones Esc gives back. */
+  const yours = (): ReadonlyArray<Pending> =>
+    (root.docs()["pi.inbox"]?.items ?? []).flatMap((item) =>
+      (item.mode === "steer" || item.mode === "followUp") &&
+      item.entry?.kind === USER_KIND &&
+      dataOf<{ author?: Author }>(item.entry).author?.id === author.id
+        ? [{ id: item.id, text: typedOf(item.content), steer: item.mode === "steer" }]
+        : [],
     )
   // A read-only server runs nothing, so a run it shows in flight is not working.
   const status = () => (readOnly() ? "idle" : statusOf(root.docs()))
@@ -1369,7 +1391,44 @@ const conversationScreen = Effect.fnUntraced(function* (
           client["approval/resolve"]({ conversation: head.conversation, approval: head.approval, author, allow }),
         )
     },
-    interrupt: () => Effect.runFork(client["conversation/interrupt"]({ conversation, author })),
+    pending: yours,
+    edit: async (pending, text) => {
+      if (readOnly()) {
+        setNotice(READ_ONLY_NOTICE)
+        return "failed"
+      }
+      const went = (result: string) => (result === "settled" ? "already ran" : "already reached sigma")
+      if (text.trim() === "") {
+        const withdrawn = await report(
+          client["submission/withdraw"]({ conversation, submission: pending.id, author }),
+          (withdrawn) =>
+            withdrawn.result === "withdrawn"
+              ? `withdrew: ${pending.text}`
+              : `too late to withdraw: ${pending.text} ${went(withdrawn.result)}`,
+        )
+        return withdrawn === undefined ? "failed" : withdrawn.result === "withdrawn" ? "saved" : "went"
+      }
+      const updated = await report(
+        client["submission/update"]({ conversation, submission: pending.id, author, text, steer: pending.steer }),
+        (updated) =>
+          updated.result === "updated"
+            ? undefined
+            : `too late to edit: ${pending.text} ${went(updated.result)}; enter sends your edit as a new prompt`,
+      )
+      return updated === undefined ? "failed" : updated.result === "updated" ? "saved" : "went"
+    },
+    // A second Esc before the first's withdrawals show would give the same prompts back again.
+    interrupt: async () => {
+      const withdrawing = untrack(yours).filter((pending) => !givenBack.has(pending.id))
+      for (const pending of withdrawing) givenBack.add(pending.id)
+      const stopped = await Effect.runPromise(
+        client["conversation/interrupt"]({ conversation, author }).pipe(
+          Effect.as(true),
+          Effect.catchCause(() => Effect.succeed(false)),
+        ),
+      )
+      return stopped ? withdrawing.map((pending) => pending.text) : []
+    },
     selectModel: (selection) =>
       Effect.runFork(client["conversation/select_model"]({ conversation, author, selection })),
     command: (name, argument) => {

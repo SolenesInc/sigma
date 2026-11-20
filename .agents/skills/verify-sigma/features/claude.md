@@ -406,7 +406,7 @@ Preconditions:
   `allow Bash(touch made.txt)? · answer below`, the panel row
   `⧉ Create made.txt file allow Bash(touch made.txt)?  ^Y  allow  ^N  deny`,
   the status bar `◆ WAITING <n>s   ⧉ 1 in background` and the prompt
-  `QUEUE · tab` over `esc  stop the run`: the parent's run stays open while
+  `STEER · tab` over `esc  stop the run`: the parent's run stays open while
   its background subagent works. `C-y`, wait for `READY`: the card reads
   `done`, the report under `Create made.txt file`, and `SIGMA`'s reply.
 - **Job cut off** (`bash_background_cut_off`). `drive.ts r serve`,

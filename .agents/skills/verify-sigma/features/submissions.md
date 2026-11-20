@@ -72,7 +72,7 @@ Preconditions:
   prompt. After an answered run,
   `drive.ts r rpc conversation/continue '{"author": {"id": "ada", "name": "ada"}, "conversation": "talk"}'` fails
   `NothingToContinue`, `the last run answered; send a message to go on`.
-- **Withdraw from the TUI.** While `first` still streams, type `second` and
+- **Withdraw from the TUI.** While `first` still streams, press `Tab`, type `second` and
   `Enter`, `drive.ts r tui wait 'queued · second'`, then type `/withdraw` and
   `Enter`: `drive.ts r tui wait 'withdrew: second'` shows
   `◆ withdrew: second` above the prompt and the queued line is gone. Once

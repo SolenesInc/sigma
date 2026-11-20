@@ -103,6 +103,12 @@ export type UsageStatus = {
 
 export type Panel = { readonly title: string; readonly lines: ReadonlyArray<string> }
 
+/** One of your own prompts waiting in the queue, as the composer edits it. */
+export type Pending = { readonly id: number; readonly text: string; readonly steer: boolean }
+
+/** What saving an edit came to: saved, too late because it already went, or refused. */
+export type EditOutcome = "saved" | "went" | "failed"
+
 /** The slash commands, with what each does, as /help lists them. */
 export const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["/model", "switch the model"],
@@ -124,7 +130,12 @@ export interface ConversationActions {
   readonly attachments?: (text: string) => ReadonlyArray<string>
   /** Answers the first of the screen's asks. */
   readonly answer: (allow: boolean) => void
-  readonly interrupt: () => void
+  /** Your own prompts waiting in the queue, oldest first. */
+  readonly pending: () => ReadonlyArray<Pending>
+  /** Saves `text` in place of the prompt's own, with `pending.steer` its mode; empty text withdraws it. */
+  readonly edit: (pending: Pending, text: string) => Promise<EditOutcome>
+  /** Stops the run, which withdraws what waits; answers the text of your own prompts it withdrew, oldest first. */
+  readonly interrupt: () => Promise<ReadonlyArray<string>>
   readonly selectModel: (selection: ModelSelection) => void
   /** Runs `/name argument`; false when it names no command, so the text goes to the model. */
   readonly command: (name: string, argument: string) => boolean
@@ -288,15 +299,17 @@ const Header = (props: { screen: Screen }) => (
   </box>
 )
 
-/** What `Esc` stops now: the run, or else the work going on under the idle conversation. */
-const escHint = (screen: Screen) =>
+/** What `Esc` does now: cancels an edit, stops the run, or else the work going on under the idle conversation. */
+const escHint = (screen: Screen, editing: boolean) =>
   screen.hosted || screen.readOnly
     ? ""
-    : screen.status !== "idle"
-      ? " esc  stop the run "
-      : screen.background > 0
-        ? ` esc  stop ${screen.background} background job${screen.background === 1 ? "" : "s"} `
-        : ""
+    : editing
+      ? " enter  save · empty withdraws · esc  cancel "
+      : screen.status !== "idle"
+        ? " esc  stop the run "
+        : screen.background > 0
+          ? ` esc  stop ${screen.background} background job${screen.background === 1 ? "" : "s"} `
+          : ""
 
 /** One line per ask, so a long command leaves room for the answer keys. */
 const AskRow = (props: { ask: Ask; active?: boolean }) => (
@@ -363,6 +376,10 @@ const Prompt = (props: {
   command: (name: string, argument: string) => boolean
   pasteCallback: (url: string) => void
   steer: boolean
+  /** While the composer edits a pending prompt, whether saving makes it steer; undefined otherwise. */
+  editing: boolean | undefined
+  save: (text: string) => void
+  composer: (input: TextareaRenderable) => void
   attachments: ((text: string) => ReadonlyArray<string>) | undefined
 }) => {
   let input: TextareaRenderable | undefined
@@ -371,6 +388,8 @@ const Prompt = (props: {
   const submit = () => {
     if (!input || props.screen.hosted) return
     const text = input.plainText
+    const signingIn = props.setup.signIn?.interaction?._tag === "browser"
+    if (props.editing !== undefined && !signingIn) return props.save(text)
     if (text.trim() === "") return
     const typed = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/.exec(text.trim())
     if (props.screen.readOnly) {
@@ -395,23 +414,29 @@ const Prompt = (props: {
           ? " INPUT GOES THROUGH ITS PARENT "
           : props.screen.readOnly
             ? " READ ONLY "
-            : props.screen.status === "idle"
-              ? " PROMPT "
-              : props.steer
-                ? " STEER · tab "
-                : " QUEUE · tab "
+            : props.editing !== undefined
+              ? ` EDIT ${props.editing ? "STEER" : "QUEUED"} · tab `
+              : props.screen.status === "idle"
+                ? " PROMPT "
+                : props.steer
+                  ? " STEER · tab "
+                  : " QUEUE · tab "
       }
       titleColor={color.magenta}
-      bottomTitle={escHint(props.screen)}
+      bottomTitle={escHint(props.screen, props.editing !== undefined)}
       bottomTitleAlignment="right"
       flexDirection="column"
       paddingLeft={1}
       minHeight={3}
+      flexShrink={0}
     >
       <box flexDirection="row">
         <text fg={color.magenta}>❯ </text>
         <textarea
-          ref={(element: TextareaRenderable) => (input = element)}
+          ref={(element: TextareaRenderable) => {
+            input = element
+            props.composer(element)
+          }}
           flexGrow={1}
           minHeight={1}
           maxHeight={8}
@@ -455,7 +480,60 @@ export const Shell = (props: {
   actions: ConversationActions
   transcript: () => JSX.Element
 }) => {
-  const [steer, setSteer] = createSignal(false)
+  // While Sigma works Enter steers; Tab switches to queueing, which lasts across runs until Tab again.
+  const [queue, setQueue] = createSignal(false)
+  /** The pending prompt the composer opened, as it was, and the mode it gets when saved. */
+  const [editing, setEditing] = createSignal<{ readonly item: Pending; readonly steer: boolean } | undefined>()
+  let composer: TextareaRenderable | undefined
+  const fill = (text: string) => {
+    composer?.setText(text)
+    composer?.gotoBufferEnd()
+  }
+  const open = (pending: Pending | undefined) => {
+    setEditing(pending && { item: pending, steer: pending.steer })
+    fill(pending?.text ?? "")
+  }
+  /**
+   * The composer moves between your pending prompts while it holds nothing of yours: it is empty, or holds the prompt
+   * it opened, in its text and its mode. Up on the first line of the text opens the next older one, Down at the end of
+   * the text the next newer one, and Down past the newest closes the edit.
+   */
+  const browsing = () => {
+    if (!composer || props.screen.hosted || props.screen.readOnly) return false
+    const opened = editing()
+    return opened === undefined
+      ? composer.plainText === ""
+      : composer.plainText === opened.item.text && opened.steer === opened.item.steer
+  }
+  const older = () => {
+    const opened = editing()?.item
+    return props.actions
+      .pending()
+      .filter((pending) => opened === undefined || pending.id < opened.id)
+      .at(-1)
+  }
+  const newer = () => {
+    const opened = editing()?.item
+    return opened && props.actions.pending().find((pending) => pending.id > opened.id)
+  }
+  // The composer empties at once, so what is typed next is a new prompt; an edit that failed or came too late comes
+  // back if nothing was typed meanwhile, and one that came too late comes back as a new prompt to send.
+  const save = async (text: string) => {
+    const opened = editing()
+    if (!opened) return
+    setEditing(undefined)
+    fill("")
+    const outcome = await props.actions.edit({ ...opened.item, steer: opened.steer }, text)
+    if (outcome === "saved" || composer?.plainText !== "" || editing() !== undefined) return
+    if (outcome === "failed") setEditing(opened)
+    fill(text)
+  }
+  const interrupt = async () => {
+    const withdrawn = await props.actions.interrupt()
+    if (withdrawn.length === 0) return
+    const typed = composer?.plainText ?? ""
+    fill([...withdrawn, ...(typed.trim() === "" ? [] : [typed])].join("\n\n"))
+  }
   const setup = props.setup
   useKeyboard((key) => {
     const picker = setup.view.picker
@@ -475,8 +553,25 @@ export const Shell = (props: {
     else if (key.ctrl && key.name === "l") setup.signIn(props.screen.model?.provider)
     else if (key.ctrl && key.name === "y") props.actions.answer(true)
     else if (key.ctrl && key.name === "n") props.actions.answer(false)
-    else if (key.name === "tab" && props.screen.status !== "idle") setSteer((on) => !on)
-    else if (key.name === "escape") props.actions.interrupt()
+    else if (key.name === "up" && browsing() && composer?.scrollY === 0 && composer.visualCursor.visualRow === 0) {
+      const next = older()
+      if (next) {
+        key.preventDefault()
+        open(next)
+      }
+    } else if (
+      key.name === "down" &&
+      editing() &&
+      browsing() &&
+      composer !== undefined &&
+      composer.cursorOffset === composer.plainText.length
+    ) {
+      key.preventDefault()
+      open(newer())
+    } else if (key.name === "tab" && editing()) setEditing((opened) => opened && { ...opened, steer: !opened.steer })
+    else if (key.name === "tab" && props.screen.status !== "idle") setQueue((on) => !on)
+    else if (key.name === "escape" && editing()) open(undefined)
+    else if (key.name === "escape") void interrupt()
   })
   const dimensions = useTerminalDimensions()
   return (
@@ -521,11 +616,14 @@ export const Shell = (props: {
         <Prompt
           screen={props.screen}
           setup={setup.view}
-          submit={(text) => props.actions.submit(text, steer() && props.screen.status !== "idle")}
+          submit={(text) => props.actions.submit(text, !queue() && props.screen.status !== "idle")}
           openPicker={() => setup.openPicker(props.screen.model)}
           command={props.actions.command}
           pasteCallback={setup.pasteCallback}
-          steer={steer()}
+          steer={!queue()}
+          editing={editing()?.steer}
+          save={(text) => void save(text)}
+          composer={(input) => (composer = input)}
           attachments={props.actions.attachments}
         />
         <StatusBar screen={props.screen} />
