@@ -194,8 +194,8 @@ Preconditions:
 - Images a person attaches are read on their own machine, from the TUI's or `sigma exec`'s
   folder when the conversation is on a target.
 - The instance is announced through a `target` prompt section, rendered
-  before each request, on ChatGPT. Claude Code runs its own loop, so member
-  mode tells it at the start of a run and in a sigma call's result instead;
+  before each request, on ChatGPT. Claude Code runs its own loop, so remote
+  hands tells it at the start of a run and in a sigma call's result instead;
   a change found between those points waits for the next one.
 - A change a remote-hands run found but Claude Code never read is retold to
   the next run's session, except when that run is a compaction: its
