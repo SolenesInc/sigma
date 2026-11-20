@@ -1,9 +1,10 @@
 // `glob`: files whose path matches a glob, newest first, through the call's environment.
 import { defineTool, type ToolExecutionApi, type ToolExecutionResult } from "@sigma/harness"
 import { obj, opt, type Static, str } from "@sigma/schema"
+import { FileError, type GlobQuery } from "@sigma/env"
+import { globFiles } from "@sigma/env/search"
 import { Effect } from "effect"
-import { requireEnv, resolveToolPath } from "./environment.ts"
-import { filesBelow, globMatcher } from "@sigma/env/search"
+import { normalizeToolPath, requireEnv } from "./environment.ts"
 
 const GLOB_LIMIT = 200
 
@@ -29,24 +30,21 @@ export function createGlobTool() {
     execute: (input: GlobToolInput, api: ToolExecutionApi) =>
       Effect.gen(function* () {
         const env = yield* requireEnv(api)
-        const root = yield* resolveToolPath(env, input.path ?? ".")
-        const files = yield* filesBelow(env, root)
-        if (files === undefined) return text(`${input.path} does not exist`, true)
-        const wanted = globMatcher(input.pattern)
+        const path = normalizeToolPath(input.path ?? ".")
+        const query: GlobQuery = { pattern: input.pattern, maxPaths: GLOB_LIMIT }
+        // An environment that globs where its files are answers in one call; otherwise glob walks through it.
+        const found = yield* Effect.catchIf(
+          env.glob === undefined ? globFiles(env, path, query) : env.glob(path, query),
+          (error) => error.code === "not_found",
+          (error) => Effect.succeed(error),
+        )
+        if (found instanceof FileError) return text(`${input.path} does not exist`, true)
+        if (found.total === 0) return text("No files found.")
         const shownRoot = input.path === undefined || input.path === "." ? "" : input.path.replace(/\/+$/, "")
-        const stamped: { path: string; mtime: number }[] = []
-        for (const file of files) {
-          if (file === "" || !wanted(file)) continue
-          const info = yield* Effect.option(env.fileInfo(yield* env.joinPath([root, file])))
-          if (info._tag === "Some")
-            stamped.push({ path: shownRoot === "" ? file : `${shownRoot}/${file}`, mtime: info.value.mtimeMs })
-        }
-        stamped.sort((a, b) => b.mtime - a.mtime)
-        if (stamped.length === 0) return text("No files found.")
-        const shown = stamped.slice(0, GLOB_LIMIT).map(({ path }) => path)
+        const shown = found.paths.map((file) => (shownRoot === "" ? file : `${shownRoot}/${file}`))
         return text(
-          stamped.length > GLOB_LIMIT
-            ? `${shown.join("\n")}\n[${stamped.length - GLOB_LIMIT} more not shown]`
+          found.total > GLOB_LIMIT
+            ? `${shown.join("\n")}\n[${found.total - GLOB_LIMIT} more not shown]`
             : shown.join("\n"),
         )
       }),

@@ -1,7 +1,16 @@
-// The files below a directory, as `grep` and `glob` search them, and grep's matching over them, through an environment.
-// `LocalExecutionEnv.search` runs `searchFiles` where the files are, so a remote search is one call (D8).
+// The files below a directory, as `grep` and `glob` search them, and grep's and glob's matching over them, through an
+// environment. `LocalExecutionEnv` runs `searchFiles` and `globFiles` where the files are, so a remote search or glob is
+// one call (D8).
 import { Effect } from "effect"
-import { type ExecutionEnv, FileError, type SearchMatch, type SearchQuery, type SearchResult } from "./index.ts"
+import {
+  type ExecutionEnv,
+  FileError,
+  type GlobQuery,
+  type GlobResult,
+  type SearchMatch,
+  type SearchQuery,
+  type SearchResult,
+} from "./index.ts"
 
 const BINARY_PROBE = 8192
 
@@ -53,6 +62,26 @@ export const globMatcher = (pattern: string): ((path: string) => boolean) => {
   const glob = new Bun.Glob(pattern)
   return pattern.includes("/") ? (path) => glob.match(path) : (path) => glob.match(path.split("/").at(-1)!)
 }
+
+/**
+ * The files below `path` matching `query`, newest first, through `env`'s own operations: what `FileSystem.glob`
+ * answers, for an environment that runs it where the files are and for callers of one that does not.
+ */
+export const globFiles = (env: ExecutionEnv, path: string, query: GlobQuery): Effect.Effect<GlobResult, FileError> =>
+  Effect.gen(function* () {
+    const root = yield* env.absolutePath(path)
+    const files = yield* filesBelow(env, root)
+    if (files === undefined) return yield* Effect.fail(new FileError("not_found", `${path} does not exist`, path))
+    const wanted = globMatcher(query.pattern)
+    const stamped: { path: string; mtime: number }[] = []
+    for (const file of files) {
+      if (file === "" || !wanted(file)) continue
+      const info = yield* Effect.option(env.fileInfo(yield* env.joinPath([root, file])))
+      if (info._tag === "Some") stamped.push({ path: file, mtime: info.value.mtimeMs })
+    }
+    stamped.sort((a, b) => b.mtime - a.mtime)
+    return { paths: stamped.slice(0, query.maxPaths).map(({ path }) => path), total: stamped.length }
+  })
 
 /**
  * The lines matching `query` in the text files below `path`, through `env`'s own operations: what

@@ -172,6 +172,21 @@ export interface FileListing {
   truncated: boolean
 }
 
+/** What `FileSystem.glob` looks for: the files below a path whose path matches a glob. */
+export interface GlobQuery {
+  /** Matched against the path below the searched directory; a pattern without `/` matches the file name alone. */
+  pattern: string
+  /** Most paths returned; `total` counts the rest too. */
+  maxPaths: number
+}
+
+export interface GlobResult {
+  /** Relative to the searched directory with `/` separators, newest first, then in path order. */
+  paths: string[]
+  /** Every match, those past `maxPaths` too. */
+  total: number
+}
+
 /** What `FileSystem.search` looks for: grep's regular expression over the text files below a path. */
 export interface SearchQuery {
   /** A JavaScript regular expression. */
@@ -234,6 +249,12 @@ export interface FileSystem {
    * does not exist fails with `not_found`, a bad pattern with `invalid`.
    */
   search?(path: string, query: SearchQuery): Effect.Effect<SearchResult, FileError>
+  /**
+   * Optional: the files below `path` whose path matches `query`, newest first, skipping inside a git work tree what git
+   * ignores and elsewhere names starting with `.`, run where the files are. Absent, callers glob through the other
+   * operations. A path that does not exist fails with `not_found`.
+   */
+  glob?(path: string, query: GlobQuery): Effect.Effect<GlobResult, FileError>
   /** When the returned watcher exists, coverage is established: a watch before a load cannot miss a change during it. */
   watch(targets: readonly WatchTarget[], onChange: (change: FileChange) => void): Effect.Effect<FileWatcher, FileError>
   canonicalPath(path: string): Effect.Effect<string, FileError>

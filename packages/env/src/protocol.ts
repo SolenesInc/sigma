@@ -3,7 +3,7 @@
 import { ExecutionError, type ExecutionErrorCode, FileError, type FileErrorCode } from "./index.ts"
 
 /** Bumped on any change a peer of another version would misread; the hello refuses a mismatch. */
-export const PROTOCOL = 1
+export const PROTOCOL = 2
 
 /** What the server opens with: whose commands this agent runs, so it can sweep that owner's earlier agents. */
 export type ServerHello = { readonly t: "hello"; readonly protocol: number; readonly owner: string }

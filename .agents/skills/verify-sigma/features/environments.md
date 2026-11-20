@@ -46,7 +46,8 @@ Feature ledger area N: spec §7.3; README Environment; example 28-sandbox-per-co
 - `@sigma/env/remote` is the client: `TargetPool` keeps one channel per target, opened by a `connect` the server
   supplies, and `pool.env(target, cwd)` is a view over it. `@sigma/env/agent` is `sigma-env`, built by
   `bun scripts/sigma-env.ts`. The server builds a remote conversation's environment as such a view ([Targets](./targets.md)).
-- `search` is optional in the interface; grep uses it when present, so a remote grep is one call, and walks otherwise.
+- `search` and `glob` are optional in the interface; grep and glob use them when present, so a remote grep or glob is
+  one call, and walk otherwise.
 - `listFiles` is optional in the interface, and the local environment does not implement it, as upstream's does not;
   its conformance cases run only for an environment that does.
 - The `env` factory per conversation is the harness's (`harness-tools`), and the file mutation queue keyed by the

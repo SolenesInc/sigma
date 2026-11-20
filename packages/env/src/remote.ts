@@ -17,6 +17,8 @@ import {
   FileError,
   type FileInfo,
   type FileWatcher,
+  type GlobQuery,
+  type GlobResult,
   type LineScan,
   type SearchQuery,
   type SearchResult,
@@ -511,6 +513,10 @@ export class RemoteExecutionEnv implements ExecutionEnv {
 
   search(path: string, query: SearchQuery) {
     return this.#call<SearchResult>("search", path, query)
+  }
+
+  glob(path: string, query: GlobQuery) {
+    return this.#call<GlobResult>("glob", path, query)
   }
 
   watch(

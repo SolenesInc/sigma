@@ -1,6 +1,6 @@
 // `grep` and `glob` through a real Harness, in a git work tree and in a plain directory.
 import { afterEach, expect, test } from "bun:test"
-import { mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { fauxAssistantMessage, fauxToolCall } from "@sigma/models/faux"
 import { Effect } from "effect"
@@ -141,5 +141,44 @@ test("tool-grep: grep through a target's environment searches a whole copy of si
       // Walking line by line made 192,922 calls for the whole repository; `search` makes one (F13).
       expect(remote.calls()).toBe(1)
       expect(resultText((yield* chat.toolResults())[0]!)).toBe(expected.stdout.toString().trimEnd())
+    }),
+  ))
+
+test("tool-glob: glob through a target's environment lists a whole copy of sigma in one call, newest first as git lists it", () =>
+  run(
+    Effect.gen(function* () {
+      const runtime = runtimeDir()
+      const remote = link({ runtime })
+      yield* Effect.addFinalizer(() =>
+        Effect.andThen(
+          remote.pool.close(),
+          Effect.sync(() => rmSync(runtime, { recursive: true })),
+        ),
+      )
+      const chat = yield* openChat({
+        tools: [createGlobTool()],
+        responses: calls(["glob", { pattern: "**/*.ts" }]),
+        env: (local) => remote.pool.env("copy", local.cwd),
+      })
+      const cloned = Bun.spawnSync(["git", "clone", "-q", "--shared", REPOSITORY, chat.workspace])
+      if (cloned.exitCode !== 0) throw new Error(`git clone failed: ${cloned.stderr}`)
+      const listed = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+        cwd: chat.workspace,
+      })
+      const newest = listed.stdout
+        .toString()
+        .split("\0")
+        .filter((path) => path.endsWith(".ts"))
+        .sort()
+        .map((path) => ({ path, mtime: statSync(join(chat.workspace, path)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime)
+        .map(({ path }) => path)
+      expect(newest.length).toBeGreaterThan(200)
+      yield* chat.ask("list")
+      // A stat per match made 595 calls and took 24 s over ssh to another computer; `glob` makes one.
+      expect(remote.calls()).toBe(1)
+      expect(resultText((yield* chat.toolResults())[0]!)).toBe(
+        `${newest.slice(0, 200).join("\n")}\n[${newest.length - 200} more not shown]`,
+      )
     }),
   ))

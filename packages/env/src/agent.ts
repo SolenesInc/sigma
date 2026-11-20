@@ -39,6 +39,7 @@ const METHODS = new Set([
   "listDir",
   "openDirReader",
   "search",
+  "glob",
   "watch",
   "canonicalPath",
   "exists",
