@@ -59,6 +59,15 @@ fork                    a worker that starts with its parent's history; only
 ```
 
 ```text
+job                     work a harness started that can outlive the run that
+                        started it, such as a background command or subagent
+job report              the entry that tells the conversation a job ended,
+                        under the job's name, as input by no person
+wake run                a run the harness's own turn starts: held job reports
+                        are its input, and it sends the harness nothing
+```
+
+```text
 target                  the computer a conversation's tools act on, named by
 │                       an opaque id fixed at start; `local` is the server's
 │                       own machine, the default

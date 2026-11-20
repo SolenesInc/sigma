@@ -19,15 +19,11 @@ export interface Adapter<S = any> {
   /** How the harness of a provider instance is started; `undefined` for a provider it does not serve. */
   readonly settings: (provider: string) => S | undefined
   /**
-   * Starts a process at `start`; it is closed with the scope. It calls `wake` with the reports it holds when the
-   * harness begins a turn by itself while the process serves no run (D3), taking them so no run that attaches
-   * meanwhile takes them too.
+   * Starts the harness at `start`; it is closed with the scope. `host` is what the harness's own calls reach: the run
+   * that serves its turn, or a job's task. The hosted process reads the connection's frames and owns every decision
+   * that depends on whether a run is served (D3).
    */
-  readonly open: (
-    config: ProcessConfig<S>,
-    start: Start,
-    wake: (reports: ReadonlyArray<JobReport>) => void,
-  ) => Effect.Effect<HostedProcess, never, Scope.Scope>
+  readonly open: (config: ProcessConfig<S>, start: Start, host: Host) => Effect.Effect<Connection, never, Scope.Scope>
   /**
    * What a member-mode run's failure `message` adds when it says the harness is signed out, as a target's own folder
    * holds no sign-in; `undefined` when it does not say so.
@@ -101,7 +97,52 @@ export const processKey = (config: ProcessConfig) => {
   })
 }
 
-/** One live harness process, serving one run at a time. */
+/**
+ * One harness process as its adapter speaks it, in sigma's vocabulary. It never decides when a run ends, where a job's
+ * report goes, or whether the process stays live: the hosted process does, from its frames (D3).
+ */
+export interface Connection {
+  /**
+   * Every frame the harness says, in order, whether or not a run is served. Ends when the harness exits; fails with the
+   * error its end raised, if it raised one.
+   */
+  readonly frames: AsyncIterable<Frame>
+  /** The harness's session, which a reset such as `/clear` may move to a new id. */
+  readonly session: string
+  /**
+   * Whether a frame's `at` is a position a resume can continue from, as far as the harness's own state says: false
+   * while a reset's new session id is not known yet. The hosted process adds that the harness took what it was sent.
+   */
+  readonly holdsPosition: boolean
+  /**
+   * Sends the harness a message, and returns its id, which the harness's `took` frame names once it took it. `next`
+   * places it before the harness's next step, as a steer.
+   */
+  readonly send: (said: ReadonlyArray<Said>, priority?: "next") => string
+  /** Whether `select` can switch the process to `selection`; one that cannot needs a new process. */
+  readonly canSelect: (selection: Selection) => boolean
+  /** Switches the harness to `selection`, which `canSelect` allows. */
+  readonly select: (selection: Selection) => Effect.Effect<void, unknown>
+  /** Stops the open turn. The harness then says `idle`. Its jobs keep working (D7). */
+  readonly interrupt: () => Promise<void>
+  /** Stops the job `job`. The harness then says `job-ended`. */
+  readonly stopJob: (job: string) => Promise<void>
+  /** The cache facts of the newest main-loop request, for an idle compaction; `undefined` while none is known. */
+  readonly lastRequest: LastRequest | undefined
+}
+
+/** What the harness's own calls back reach, which the hosted process gives its adapter. */
+export interface Host {
+  /**
+   * The callbacks for a call of the job `job`, or of the main loop when `undefined`. A main-loop call waits for the run
+   * that serves its turn, which a turn the harness began by itself is served by only once a run attaches (F10).
+   */
+  readonly callbacks: (job: string | undefined, signal?: AbortSignal) => Promise<Callbacks>
+  /** The harness compacted its context into `summary`, by a person's request (`manual`) or at its threshold. */
+  readonly compacted: (summary: string, manual: boolean, signal?: AbortSignal) => Promise<void>
+}
+
+/** One live harness process, serving one run at a time: what the hosted process makes of a `Connection`. */
 export interface HostedProcess {
   /**
    * Serves the run `run`: switches to the run's model and effort, commits the reports the process holds, sends it
@@ -146,55 +187,71 @@ export interface LastRequest {
 export type Part = { readonly type: "text"; readonly text: string } | ToolCall
 
 /**
- * What an adapter tells the run, or a hosted subagent's job, of its harness. `at` is the harness's id of the message a
+ * What an adapter says of its harness, which the hosted process hands the run, a hosted subagent's job, or holds. `at` is the harness's id of the message a
  * frame came in, where a resume continues from: a frame without one moves no position, so a harness whose frames
  * never carry one is always started fresh, told the conversation.
  */
 export type Frame =
   /** Partial text of the response the harness is writing. */
-  | { readonly type: "text"; readonly delta: string }
-  /** One message of a response: its texts are committed, its calls sighted for their callbacks or results to commit. */
-  | { readonly type: "said"; readonly response: string; readonly at?: string; readonly content: ReadonlyArray<Part> }
-  /** The results of calls, as the harness reports them. */
-  | {
-      readonly type: "results"
-      readonly at?: string
-      readonly results: ReadonlyArray<{ readonly call: string; readonly text: string; readonly isError: boolean }>
-    }
-  /**
-   * The harness started a subagent with the call `call`, which it knows as `task`; its frames go to the job
-   * `ServingProcess.started` gives, and its end, with its final answer as the summary, as that job's `end`.
-   * `background`: the turn can end while it works, so the run's conversation holds it as a job (D3).
-   */
-  | {
-      readonly type: "subagent"
-      readonly call: string
-      readonly task: string
-      readonly description: string
-      readonly background: boolean
-      readonly agentType?: string
-      readonly prompt?: string
-    }
-  /**
-   * The run's harness started a background command with the call `call`, which it knows as `task`: a job of the run's
-   * conversation, whose end goes to the job `ServingProcess.started` gives.
-   */
-  | { readonly type: "command"; readonly call: string; readonly task: string; readonly description: string }
-  /** The harness started a new context, as `/clear` does. */
-  | { readonly type: "reset" }
-  /** What each model spent since the process's previous report, keyed by the harness's model id. */
-  | { readonly type: "spent"; readonly usage: ReadonlyArray<readonly [model: string, usage: Usage]> }
-  /** The harness began a turn, such as its follow-up for a job's end or a steer: the one before it no longer ends the run. */
-  | { readonly type: "began" }
-  /** The turn ended with an answer, or at the conversation's turn limit; the run ends with it at the next `idle`. */
-  | { readonly type: "answered"; readonly turnLimit: boolean }
-  /**
-   * The harness's turn is over, and with it the run, as its newest `answered` said (D2). A turn the harness began by
-   * itself, such as for a job's end, is the run's too, since it comes before this.
-   */
-  | { readonly type: "idle" }
-  /** The turn failed. `gone`: the harness no longer has the session, or the position it was resumed at. */
-  | { readonly type: "failed"; readonly message: string; readonly gone?: boolean }
+  (
+    | { readonly type: "text"; readonly delta: string }
+    /** One message of a response: its texts are committed, its calls sighted for their callbacks or results to commit. */
+    | { readonly type: "said"; readonly response: string; readonly at?: string; readonly content: ReadonlyArray<Part> }
+    /** The results of calls, as the harness reports them. */
+    | {
+        readonly type: "results"
+        readonly at?: string
+        readonly results: ReadonlyArray<{ readonly call: string; readonly text: string; readonly isError: boolean }>
+      }
+    /**
+     * The harness started the job `id` with the call `call`: a subagent (`agent`), whose frames carry its id and whose
+     * end, with its final answer as the summary, closes its conversation, or a command. `background`: the turn can end
+     * while it works. A job a job started carries its parent's id as `job`; a job's own frames carry its id the same way.
+     */
+    | {
+        readonly type: "job"
+        readonly id: string
+        readonly call: string
+        readonly kind: "agent" | "command"
+        readonly title: string
+        readonly background: boolean
+        readonly agentType?: string
+        readonly prompt?: string
+      }
+    /** The harness said the job `id` ended; a subagent's `summary` is its final answer. */
+    | {
+        readonly type: "job-ended"
+        readonly id: string
+        readonly status: "completed" | "failed" | "stopped"
+        readonly summary?: string
+      }
+    /** The harness took the message `send` returned `id` for: it answers it before its turn is over. */
+    | { readonly type: "took"; readonly id: string }
+    /**
+     * The harness began running a turn. One that nothing sigma sent asked for, while no run serves, is a wake (D3): the
+     * hosted process decides, from what it sent and what the harness took.
+     */
+    | { readonly type: "woke" }
+    /** The harness started a new context, as `/clear` does. */
+    | { readonly type: "reset" }
+    /** What each model spent since the process's previous report, keyed by the harness's model id. */
+    | { readonly type: "spent"; readonly usage: ReadonlyArray<readonly [model: string, usage: Usage]> }
+    /** The harness began a turn, such as its follow-up for a job's end or a steer: the one before it no longer ends the run. */
+    | { readonly type: "began" }
+    /** The turn ended with an answer, or at the conversation's turn limit; the run ends with it at the next `idle`. */
+    | { readonly type: "answered"; readonly turnLimit: boolean }
+    /**
+     * The harness's turn is over, and with it the run, as its newest `answered` said (D2). A turn the harness began by
+     * itself, such as for a job's end, is the run's too, since it comes before this. While a message sent to the harness
+     * has not been taken, nothing ends here: the harness begins another turn for it.
+     */
+    | { readonly type: "idle" }
+    /** The turn failed. `gone`: the harness no longer has the session, or the position it was resumed at. */
+    | { readonly type: "failed"; readonly message: string; readonly gone?: boolean }
+  ) & {
+    /** The job whose frame it is; none for the main loop's. */
+    readonly job?: string
+  }
 
 /** What the harness calls back for the calls of one conversation. */
 export interface Callbacks {

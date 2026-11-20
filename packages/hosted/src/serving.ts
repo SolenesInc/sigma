@@ -238,11 +238,15 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
         case "results":
           if (yield* transcript.results(frame)) yield* steer
           return resetQueued ? ({ _tag: "reset" } as const) : undefined
-        case "subagent":
-          yield* transcript.host(frame)
+        case "job":
+          // A command in the foreground is the turn's own: only one the turn can end before is a job to host.
+          if (frame.kind === "agent") yield* transcript.host(frame)
+          else if (frame.background) yield* transcript.hostCommand(frame)
           return undefined
-        case "command":
-          yield* transcript.hostCommand(frame)
+        case "job-ended":
+        case "took":
+        case "woke":
+          // The hosted process's: it never hands them to a run.
           return undefined
         case "reset":
           // The session goes on under the id the next frames carry (F13); a new context starts.

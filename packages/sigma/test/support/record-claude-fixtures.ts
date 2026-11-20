@@ -359,7 +359,7 @@ const open = async (name: string, journey: Journey) => {
     quiet: async (reports = 0) => {
       await view.until(
         (watch) =>
-          watch.seen().filter((e) => e.kind === "claude.report").length >= reports &&
+          watch.seen().filter((e) => e.kind === "hosted.report").length >= reports &&
           (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run === undefined,
         TURN,
       )
@@ -375,7 +375,7 @@ const open = async (name: string, journey: Journey) => {
     /** The conversation's jobs. */
     jobs: () =>
       Object.values(
-        (view.view().docs["claude.jobs"] as { jobs?: Record<string, { state: string }> } | undefined)?.jobs ?? {},
+        (view.view().docs["hosted.jobs"] as { jobs?: Record<string, { state: string }> } | undefined)?.jobs ?? {},
       ),
     say: async (text: string) => {
       await session.submit(text)

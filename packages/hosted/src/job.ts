@@ -4,7 +4,7 @@
 // subagents it starts. A background `hosted.job-anchor` in the parent owns the subagent's conversation, so the parent's
 // run can end while the job works (F6). `hosted.command` is a background command's, in the background of the
 // conversation that started it. A job ends when the harness says it did; a person's stop or a restart aborts it, and
-// one whose process ends first is cut off (D6). A job of its parent's `claude.jobs` ends there too, and a cut-off one
+// one whose process ends first is cut off (D6). A job of its parent's `hosted.jobs` ends there too, and a cut-off one
 // tells its parent in a report.
 import { endRun, LiveDoc, type TaskApi, TaskServices } from "@sigma/harness"
 import {
@@ -33,7 +33,7 @@ export const JOB_KINDS: ReadonlySet<string> = new Set([JOB_KIND, JOB_ANCHOR_KIND
 
 /**
  * `task`: the harness's id of the subagent's task. `harness`: the adapter's name, which a cut-off job's texts say.
- * `parent`: the conversation whose `claude.jobs` holds the job, for a background subagent the run started.
+ * `parent`: the conversation whose `hosted.jobs` holds the job, for a background subagent the run started.
  */
 type JobInput = { call: string; title: string; task: string; harness: string; parent?: number }
 type JobCheckpoint = { phase: "wait" }
@@ -63,9 +63,9 @@ const handle = (transcript: Transcript, frame: Frame) =>
         return yield* transcript.said(frame.content, frame.response, frame.at)
       case "results":
         return yield* Effect.asVoid(transcript.results(frame))
-      case "subagent":
-        // A subagent this one started is hosted under it.
-        return yield* transcript.host(frame)
+      case "job":
+        // A subagent this one started is hosted under it; a command it started is its own work, not a job of a parent.
+        return frame.kind === "agent" ? yield* transcript.host(frame) : undefined
       default:
         return undefined
     }
@@ -216,7 +216,7 @@ const commandEnd = (job: Job) =>
     }
   })
 
-/** A background command the run's harness started: its job in the conversation's `claude.jobs`, until it ends. */
+/** A background command the run's harness started: its job in the conversation's `hosted.jobs`, until it ends. */
 export const makeCommandTask = (links: JobLinks) =>
   defineTask<{ task: string; harness: string }, JobCheckpoint, null, TaskServices>({
     name: COMMAND_KIND,

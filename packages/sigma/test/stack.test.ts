@@ -353,7 +353,7 @@ const BACKGROUND_SLEEP =
   "Use the Bash tool with run_in_background set to true to run: sleep 600. Do not wait for it. Reply with exactly: started"
 
 type Jobs = { jobs: Record<string, { state: string; title: string }> }
-const jobsOf = (watch: ViewWatch) => Object.values((watch.view().docs["claude.jobs"] as Jobs | undefined)?.jobs ?? {})
+const jobsOf = (watch: ViewWatch) => Object.values((watch.view().docs["hosted.jobs"] as Jobs | undefined)?.jobs ?? {})
 
 for (const [how, end] of [
   ["killed", (server: Awaited<ReturnType<typeof serving>>) => server.kill("SIGKILL")],

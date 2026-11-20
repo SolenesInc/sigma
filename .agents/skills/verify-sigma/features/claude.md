@@ -50,13 +50,13 @@ it into a run that serves Claude Code's own follow-up.
   the next run starts one that resumes the session. A process that waits to
   compact (`claude-idle-compaction`) stays past the 30 minutes, and one with a
   job working stays until 30 minutes after its last job ended.
-- `claude-job-report` shows a job's end in its parent as a `claude.report`
+- `claude-job-report` shows a job's end in its parent as a `hosted.report`
   entry, whose text is what the parent is told: `The background agent "<title>" completed: <its answer>`,
   or a command's summary as Claude Code words it. The run that reads Claude
   Code's notification commits it; one read while no run serves waits for the
   wake. A live Claude Code is never sent a report, since it read the
   notification itself; a new process is told it, as anything else its
-  session missed. The `claude.jobs` document holds each job by Claude Code's
+  session missed. The `hosted.jobs` document holds each job by Claude Code's
   task id, with its `kind`, `title`, `state` (`working`, `done`, `failed`,
   `stopped`, `cut off`) and summary.
 - `claude-wake` starts a run when Claude Code begins a turn on its own while
@@ -75,6 +75,15 @@ it into a run that serves Claude Code's own follow-up.
   background subagents with the run itself, so they end `stopped`. A report
   Claude Code gives while no run serves waits for the next run, or joins the
   transcript when its process closes first.
+- `hosted-outside-a-run` [kernel] holds the rule above for every harness,
+  not only Claude Code: the hosted process, not the adapter, decides that a
+  run ends at the harness's turn-over, that a job's end is committed by the
+  run serving or held for the wake, and that a turn the harness begins by
+  itself while no run serves wakes the conversation, with a report that the
+  harness `continued on its own` when no job's end came before it. Proven
+  over a scripted connection with no harness, since no second adapter has a
+  client path yet; Claude Code's client path is `claude-wake` and
+  `claude-job-report`.
 - `claude-idle-compaction` compacts an idle conversation whose last request
   had a context of 200,000 tokens or more: two minutes before the prompt
   cache that request read or wrote expires, sigma compacts it as
@@ -430,6 +439,14 @@ Package, `packages/claude/test/claude.test.ts`:
 - claude-switch, claude-live: switching to Claude from another provider retells the conversation to a new Claude Code session
 - claude-offered-sections: Claude Code's system prompt gets the sections of the extensions it is offered, before the instructions, and no others
 
+Package, `packages/hosted/test/outside-a-run.test.ts`, over a scripted connection:
+
+- hosted-outside-a-run: a job that outlives its run reports in a wake run, which sends the harness nothing
+- hosted-outside-a-run: a job that ends while its run serves reports in that run, before its answer
+- hosted-outside-a-run: a wake with no job's end before it is committed as the harness continuing on its own
+- hosted-outside-a-run: a run ends when the harness's turn is over, not at an answer the turn goes on past
+- hosted-outside-a-run: a call the harness makes in a turn it began by itself waits for the wake run, and is committed in it
+
 ## Gotchas
 
 - A new recording comes from a real Claude Code through
@@ -536,6 +553,13 @@ decide instead of them: a `touch` asks, a `Read` does not.
   the same way; the subagent's conversation ends `interrupted`, and after a
   text stop the session holds the cut-off text and
   `[Request interrupted by user]`.
+- **A background command wakes the conversation.** `drive.ts r tui start --provider claude --model haiku --auto`, send
+  `Use the Bash tool with run_in_background set to true to run: sleep 20; echo done. Do not wait for it. Reply with exactly: started`,
+  wait for `WORKING`, then `READY`: one `sigma.run_end` (`watch <id>`). About 20 s later, without typing,
+  `watch <id> --until run_end --timeout 120000` returns, and a fresh `watch <id>` holds a `hosted.report`
+  entry for the command (`status` `done`), Claude's follow-up and a second `sigma.run_end`, and `hosted.jobs`
+  shows the job `done`. The session file under your Claude Code configuration's `projects/` holds one prompt
+  from sigma: the follow-up turn's only input is Claude Code's own `<task-notification>`.
 - **Health and model.** `drive.ts r rpc providers/list '{}' --timeout 60000`:
   `claude` `ready` with the Claude Code version installed now.
   `drive.ts r rpc models/list '{}'` lists today's models.

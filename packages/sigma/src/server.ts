@@ -346,7 +346,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
                       type: "input",
                       content: report.text,
                       whenBusy: "steer",
-                      // No requestId: Claude Code's task id names a resumed subagent's every end, and nothing retries a wake.
+                      // No requestId: the harness's task id names a resumed subagent's every end, and nothing retries a wake.
                       entry: { kind: REPORT_KIND, ...(report.data === undefined ? {} : { data: report.data }) },
                     }),
               { discard: true },

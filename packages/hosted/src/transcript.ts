@@ -369,7 +369,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
    * Hosts a subagent the harness started as a conversation of its own, under this one, which its `hosted.job` task
    * writes (D1). A background anchor owns the conversation of a run's subagent; a job owns its subagent's own.
    */
-  const host = (frame: Extract<Frame, { type: "subagent" }>) =>
+  const host = (frame: Extract<Frame, { type: "job" }>) =>
     Effect.gen(function* () {
       // The call that started it comes first in this conversation.
       if (Deferred.isDoneUnsafe(sighting(frame.call))) {
@@ -396,8 +396,8 @@ export const makeTranscript = (scope: TranscriptScope) => {
             scope.hosting.job,
             {
               call: frame.call,
-              title: frame.description,
-              task: frame.task,
+              title: frame.title,
+              task: frame.id,
               harness: adapter.name,
               ...(reported ? { parent: Number(conversationId) } : {}),
             },
@@ -406,9 +406,9 @@ export const makeTranscript = (scope: TranscriptScope) => {
           job.conversation = Number(created.id)
           if (reported) {
             yield* recordJob(tx, conversationId, {
-              task: frame.task,
+              task: frame.id,
               kind: "agent",
-              title: frame.description,
+              title: frame.title,
               call: frame.call,
               conversation: Number(created.id),
               taskId: Number(hosted),
@@ -417,7 +417,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
           }
           yield* recordOrigin(tx, created.id, {
             call: frame.call,
-            title: frame.description,
+            title: frame.title,
             ...(frame.agentType === undefined ? {} : { agentType: frame.agentType }),
           })
           const live = yield* tx.doc(LiveDoc, created.id)
@@ -428,7 +428,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
           const data: SubagentEntry = {
             call: frame.call,
             conversation: Number(created.id),
-            title: frame.description,
+            title: frame.title,
             ...(frame.agentType === undefined ? {} : { agentType: frame.agentType }),
           }
           yield* tx.appendEntry(conversationId, { kind: SUBAGENT_ENTRY_KIND, data })
@@ -446,7 +446,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
    * Hosts a background command the run's harness started as a `hosted.command` task in the background of this
    * conversation, which ends the command's job when the harness says it ended, or cuts it off (D6).
    */
-  const hostCommand = (frame: Extract<Frame, { type: "command" }>) =>
+  const hostCommand = (frame: Extract<Frame, { type: "job" }>) =>
     Effect.gen(function* () {
       const job = scope.started(frame.call)
       let hosted: TaskId | undefined
@@ -454,7 +454,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
         Effect.gen(function* () {
           hosted = yield* tx.createTask(
             scope.hosting.command,
-            { task: frame.task, harness: adapter.name },
+            { task: frame.id, harness: adapter.name },
             {
               ownership: { kind: "conversation" },
               conversationId,
@@ -463,9 +463,9 @@ export const makeTranscript = (scope: TranscriptScope) => {
             },
           )
           yield* recordJob(tx, conversationId, {
-            task: frame.task,
+            task: frame.id,
             kind: "command",
-            title: frame.description,
+            title: frame.title,
             call: frame.call,
             taskId: Number(hosted),
             state: "working",

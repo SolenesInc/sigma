@@ -20,13 +20,23 @@ and answers with that task's result, followed by `member.notice`. Its process st
 session is told of entries sigma recorded with no model content, such as a change behind its target.
 
 - `src/adapter.ts`: the seam. `Adapter` (its task kind, its name in texts, the `api` its responses carry, its settings
-  per provider, and `open`), the `HostedProcess` it opens, where a process starts (`Start`), the `Frame`s it hands a
-  run or a job, and the `Callbacks` it reaches the run through for a call about to run or one that needs a person. An
-  adapter never commits: it reaches the run only through `makeServing`. It does decide what the harness's protocol
-  says: the usage each turn added (`spent`), how a turn ended (`answered`, `failed`, and whether a failure means the
-  session is `gone`), and when the turn is over (`idle`), which it holds back while a message it sent has not come
-  back. It routes each job's frames and end to the job, builds the report of a background job's end (`endReport`),
-  hands it to the run it serves or holds it, and calls `wake` for a turn the harness began by itself.
+  per provider, and `open`), the `Connection` it opens on one harness process, the `Host` the harness's calls back
+  reach, where a process starts (`Start`), the `Frame`s it says, and the `Callbacks` a run or a job answers those calls
+  with. An adapter only translates: it says what its harness did, in frames, and never decides when a run ends, where a
+  job's report goes or whether its process stays live. Beside a turn's content it says four things, all required (D4):
+  a job started (`job`), a job ended (`job-ended`), the harness began a turn by itself (`woke`), and its turn is over
+  (`idle`), and when it took a message it was sent (`took`). It also says the usage each turn added
+  (`spent`), how a turn ended (`answered`, `failed`, and whether a failure means the session is `gone`), and marks a
+  job's own frames with its id. A harness that cannot say a job started or ended has no jobs: its later news arrives as
+  a wake with no report. One that cannot say turn-over for a wake is not hosted: nothing guesses an end.
+- `src/process.ts`: the hosted process, `openHostedProcess`: one connection's frames, read whether or not a run is
+  served, and the rule for what a harness does outside a run (D1 to D3). A job's frames and end go to the job. A job's
+  end becomes its parent's report, which the run serving commits, or the process holds. A turn the harness begins by
+  itself while no run serves wakes the conversation with the held reports, or with one saying the harness
+  `continued on its own` when none came before it; that wake run sends the harness nothing. The rest go to the run
+  served, or wait for the next one. A run ends at `idle`, at `failed`, or when the process ends; an `idle` before the harness took what the process sent it ends nothing, since the harness answers that next. A main-loop call made
+  before a run serves the turn waits for that run (F10). A stopped run's turn is the stop's: its frames reach no run,
+  but what it spent is counted by the next.
 - `src/run.ts`: the run task. An invocation starts by recording, as interrupted, the calls a previous process left
   without results, which only a crash or a stop leaves; a stop is not counted as a restart. It then leases the
   conversation's live process, told only the entries after the newest one it has seen, when the process key matches
@@ -60,8 +70,8 @@ session is told of entries sigma recorded with no model content, such as a chang
   answers its callbacks through itself, not through the run that started it, until the harness says the subagent
   ended or its process ends; and `hosted.command`, a background command's task in its parent. A job its process
   outlived ends `cut off` and appends that report to its parent; an abort stops a live job through the job's `stop`.
-- `src/jobs.ts`: the `claude.jobs` document, each background job of a conversation as its parent knows it, and the
-  `claude.report` entry that tells the parent a job ended. Both keep the names clients already read.
+- `src/jobs.ts`: the `hosted.jobs` document, each background job of a conversation as its parent knows it, and the
+  `hosted.report` entry that tells the parent a job ended.
 - `src/links.ts`: a job as its process and its task share it in memory: its frames in order, its callbacks, how it
   ended and how to stop it.
 - `src/session.ts`: `hosted.session`, where the conversation stands in the harness's session: the provider, the
@@ -70,5 +80,6 @@ session is told of entries sigma recorded with no model content, such as a chang
 - `src/retell.ts`: what a session is told of the conversation: the entries a resumed one missed, or, for a fresh one,
   the conversation so far within about 64,000 characters.
 
-The tests that drive the hosted run use a real adapter: `packages/claude/test` drives it through a Harness with
-sigma's fake `claude`, and `packages/sigma/test/claude.test.ts` over the wire.
+`test/outside-a-run.test.ts` holds the rule for work outside a run with no harness: a scripted adapter whose connection
+the test speaks for, over a Harness. The tests of a real adapter drive the rest: `packages/claude/test` through a
+Harness with sigma's fake `claude`, and `packages/sigma/test/claude.test.ts` over the wire.

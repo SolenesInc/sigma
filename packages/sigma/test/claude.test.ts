@@ -880,7 +880,7 @@ test("claude-job-report, claude-wake: a background subagent that ends during the
     "assistant: forked",
     "run_end: answered",
   ])
-  expect(Object.values((session.view.view().docs["claude.jobs"] as { jobs: object }).jobs)).toEqual([
+  expect(Object.values((session.view.view().docs["hosted.jobs"] as { jobs: object }).jobs)).toEqual([
     expect.objectContaining({ kind: "agent", title: "Fork reply test", state: "done", conversation: Number(child.id) }),
   ])
 
@@ -910,7 +910,7 @@ test("claude-wake, claude-command-job: a background command that ends after its 
     "assistant: The background command finished with exit code 0. Its output was `done`.",
     "run_end: answered",
   ])
-  const report = session.view.seen().find((entry) => entry.kind === "claude.report")!
+  const report = session.view.seen().find((entry) => entry.kind === "hosted.report")!
   expect(report.data).toEqual({
     job: "bxvwu23df",
     kind: "command",
@@ -920,14 +920,14 @@ test("claude-wake, claude-command-job: a background command that ends after its 
   })
   // The wake run sent Claude Code nothing: the one message it got is the prompt.
   expect(claude.log().filter((entry) => entry.received?.type === "user")).toHaveLength(1)
-  expect(Object.values((session.view.view().docs["claude.jobs"] as { jobs: object }).jobs)).toEqual([
+  expect(Object.values((session.view.view().docs["hosted.jobs"] as { jobs: object }).jobs)).toEqual([
     expect.objectContaining({ task: "bxvwu23df", kind: "command", state: "done" }),
   ])
 })
 
 const jobsOf = (watch: ViewWatch) =>
   Object.values(
-    (watch.view().docs["claude.jobs"] as { jobs: Record<string, { state: string; kind: string }> } | undefined)?.jobs ??
+    (watch.view().docs["hosted.jobs"] as { jobs: Record<string, { state: string; kind: string }> } | undefined)?.jobs ??
       {},
   )
 

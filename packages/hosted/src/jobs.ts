@@ -1,6 +1,5 @@
 // A conversation's background jobs: the background subagents and commands its harness started in it, as the
-// `claude.jobs` document holds them for cards and the count, and the `claude.report` entry that says one ended. Both
-// kinds keep the names clients already read. A report is the job's end told to the parent: the run that reads the
+// `hosted.jobs` document holds them for cards and the count, and the `hosted.report` entry that says one ended. A report is the job's end told to the parent: the run that reads the
 // harness's word for it commits it, an idle conversation gets it as input that starts a wake run (D3), and a job cut
 // off with its process gets it from its task.
 import type { ConversationId, JsonObject, Tx } from "@sigma/kernel"
@@ -29,7 +28,7 @@ export type JobRecord = {
   summary?: string
 }
 
-export const JOBS_KIND = "claude.jobs"
+export const JOBS_KIND = "hosted.jobs"
 
 /** The parent's jobs by the harness's task id, in the order they started. */
 export const JobsDoc = defineDoc<{ jobs: Record<string, JobRecord> }>({
@@ -43,9 +42,9 @@ export const JobsDoc = defineDoc<{ jobs: Record<string, JobRecord> }>({
   checkpointWhen: () => true,
 })
 
-export const REPORT_KIND = "claude.report"
+export const REPORT_KIND = "hosted.report"
 
-/** What a `claude.report` entry holds besides its text, which is its user message. */
+/** What a `hosted.report` entry holds besides its text, which is its user message. */
 export type ReportData = {
   job: string
   kind: JobRecord["kind"]

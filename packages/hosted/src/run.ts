@@ -47,6 +47,7 @@ import { Effect } from "effect"
 import { type Adapter, isMember, ownTools, type ProcessConfig, processKey, selectionOf, type Start } from "./adapter.ts"
 import { JOB_KIND, JobAnchor, makeCommandTask, makeJobTask } from "./job.ts"
 import { continuedOnItsOwn, REPORT_KIND } from "./jobs.ts"
+import { openHostedProcess } from "./process.ts"
 import { JobLinks } from "./links.ts"
 import type { HostedProcesses, Openings } from "./processes.ts"
 import { history, INTERRUPTED, joining, type Retell, type Said, textOf, unseen } from "./retell.ts"
@@ -279,7 +280,7 @@ const converse = <E>(shared: Shared, config: ProcessConfig, run: RunContext, ope
         selectionOf(config.agent),
         openings,
         (start, wake) =>
-          run.adapter.open(config, start, (reports) =>
+          openHostedProcess(run.adapter, config, start, (reports) =>
             wake(reports.length > 0 ? reports : [continuedOnItsOwn(run.adapter.name)]),
           ),
       )
