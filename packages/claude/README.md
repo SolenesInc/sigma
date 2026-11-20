@@ -6,6 +6,13 @@ process stays live after a run for the conversation's next one, and closes after
 keeps its own session and runs its own tools; sigma's transcript stays the truth, and every frame Claude Code sends
 becomes a commit.
 
+A conversation on a target other than `local` runs in member mode: Claude Code's own tools, settings, connectors and
+MCP servers are off, and it acts only through sigma's tools, served on the in-process `sigma` MCP server with
+`alwaysLoad`, each call run as a `pi.tool` task of the run, on the target. Its processes use the target's own Claude
+Code folders, which `ClaudeRunOptions.member.folder` names, and their system prompt's `append` is the conversation's
+prompt sections, rendered through its env. `member.notice` says what the model must read of its target, before each
+run and after each of sigma's calls.
+
 `claudeRunTasks(options)` returns the task definitions (`claude.run`, `claude.job` and `claude.job-anchor`), to install
 in the registry, and the `RunTasks` to open the
 harness with, which choose `claude.run` for a model whose provider `options.settings` knows. `options.processes` is the
@@ -36,14 +43,18 @@ live.
   every frame as it arrives and routes it: a subagent's frames, by `parent_tool_use_id`, and its end go to its job,
   and its callbacks, by `agent_id`, to its job's task; the rest go to the run `serve` serves, or wait for the next
   run while it serves none, when a main-loop callback fails. Its jobs end with it. `processKey` names what a process is spawned with and cannot change: the provider,
-  executable, environment, arguments, directory, turn limit and root conversation.
+  executable, environment, arguments, directory, target, turn limit, root conversation, and in member mode the tools
+  sigma serves it. In member mode it starts with only `ToolSearch` of Claude Code's tools, `strictMcpConfig`, no
+  setting sources, `ENABLE_CLAUDEAI_MCP_SERVERS=false`, and `MCP_TOOL_TIMEOUT` past sigma's longest bash timeout, so a
+  tool's own limit is the one the model sees.
 - `src/serving.ts`: what one run does with the frames of its own conversation. Steers placed at a round of results are
   sent with priority `next`. Claude Code's compaction is kept as a compaction entry holding its summary, `/clear` as a
   reset.
 - `src/transcript.ts`: how a conversation the process writes to is committed, through its own task: the run's, or a
   job's. A call Claude Code makes is committed as an assistant entry and a live slot before its PreToolUse hook is
   answered; a call it would ask about waits on `sigma.approvals`, keyed `<task>/<call>`, where the first answer
-  counts. Each subagent Claude Code starts is hosted as a conversation of
+  counts. In member mode a call of sigma's tools, `mcp__sigma__<name>`, is committed under sigma's name when Claude
+  Code makes it over MCP, with a `pi.tool` task that runs it, asks a person when the tool asks, and commits its result. Each subagent Claude Code starts is hosted as a conversation of
   its own: a run's are owned by a background `claude.job-anchor` in its conversation, so the run can end while they
   work, and a subagent's own by its job, so stopping it stops them too.
 - `src/job.ts`: `claude.job`, the run of a hosted subagent's conversation. It commits its subagent's frames and

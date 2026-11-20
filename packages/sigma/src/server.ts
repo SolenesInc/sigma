@@ -37,7 +37,7 @@ import {
   type Tx,
 } from "@sigma/kernel"
 import type { AgentHello } from "@sigma/env/protocol"
-import { fromProviders, type Models, type ProviderInstance } from "@sigma/models"
+import { fromProviders, type Models } from "@sigma/models"
 import type { ImageProcessor } from "@sigma/tools"
 import { createNodePhotonImages } from "@sigma/tools/images/node"
 import {
@@ -105,7 +105,7 @@ import { agentTools, type AgentTypes, interruptTree } from "./agents.ts"
 import { followTreeStatus, type TreeStatuses } from "./status.ts"
 import { attachedSkills, skillsOf, userInput, type Workspace, workspaceInstructions } from "./workspace.ts"
 import { projectDefaultModel } from "./config.ts"
-import { envOn, isLocal, openTargets, recordTarget, targetSection } from "./targets.ts"
+import { envOn, isLocal, openTargets, recordTarget, targetFolder, targetNotice, targetSection } from "./targets.ts"
 import { lineageOf, listConversations, titleOf, wireId } from "./conversations.ts"
 import { readableNdJsonRpc } from "./wire-errors.ts"
 
@@ -216,12 +216,20 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
             typesOf,
           ),
         )
-        registry.install(targetSection(targets, () => harness))
-        // Claude Code has its own tools and subagents, so sigma's built-in ones are not offered to it.
+        registry.install(
+          targetSection(
+            targets,
+            () => harness,
+            (provider) => claude.has(provider),
+          ),
+        )
+        // A local conversation's Claude Code has its own tools and subagents, so sigma's are not offered to it. A remote
+        // one's runs in member mode, with only sigma's (D9).
         const claudeRuns = claudeRunTasks({
           settings: (provider) => claude.get(provider),
           title: (conversation) => titleOf(harness, conversation),
           processes,
+          member: { folder: (target) => targetFolder(home, target), notice: targetNotice(targets, () => harness) },
         })
         registry.install({ name: "claude", tasks: claudeRuns.tasks })
         // A run ended for the limit was aborted; its run_end says why.
@@ -413,20 +421,6 @@ const Handlers = SigmaRpcs.toLayer(
     // Starts with a chosen id one at a time, so two starts with one new id make one conversation.
     const choosing = yield* Semaphore.make(1)
 
-    // Claude Code's own tools act on the machine it runs on, the server's; on a target it waits for member mode.
-    const refusedOnTarget = (
-      target: string | undefined,
-      selection: { readonly provider: string },
-      instance: ProviderInstance,
-    ) =>
-      isLocal(target) || instance.kind !== "claude"
-        ? Effect.void
-        : Effect.fail(
-            new UnknownProvider({
-              provider: selection.provider,
-              message: `${selection.provider} runs Claude Code, whose tools would act on this machine, not on target ${target}; choose a ChatGPT model`,
-            }),
-          )
     // A remote target is reached before a start: one that cannot be reached starts nothing (D4).
     const reach = (target: string | undefined) =>
       isLocal(target)
@@ -453,7 +447,6 @@ const Handlers = SigmaRpcs.toLayer(
           cwd,
         )
         const { selection, instance } = yield* providers.choose(project, ask, last?.selection)
-        yield* refusedOnTarget(remote, selection, instance)
         const model = yield* agentModel(selection, instance)
         // One commit: a second start with the same id finds the first one's mapping.
         let started: ConversationId | undefined
@@ -655,7 +648,6 @@ const Handlers = SigmaRpcs.toLayer(
           const conversation = yield* takingInput(id)
           const instance = providers.instances.get(selection.provider)
           if (instance === undefined) return yield* new UnknownProvider({ provider: selection.provider })
-          yield* refusedOnTarget((yield* agentOf(conversation)).target, selection, instance)
           const model = yield* agentModel(selection, instance)
           const subagent = (yield* lineageOf(harness, conversation.id)) !== undefined
           yield* Effect.orDie(

@@ -1,7 +1,8 @@
 // Where a conversation works: its directory, the `AGENTS.md` files, the skills and the agent types there, and how a
 // ChatGPT conversation is told of them, as a prompt section the harness renders before each request and commits when
-// it changes. Claude Code reads its own `CLAUDE.md` files and skills, and a script reads nothing, so their
-// conversations get none.
+// it changes. A local Claude Code conversation reads its own `CLAUDE.md` files and skills, and a script reads nothing,
+// so their conversations get none. A remote Claude Code conversation, in member mode, gets the same section in its
+// system prompt's `append` (D11).
 //
 // The project's files are read through the conversation's environment, so a remote conversation is told what its
 // target holds, never what the home has at the same path (D11). What is the home's own, its `AGENTS.md`, its skills
@@ -280,6 +281,24 @@ export const agentTypes = (workspace: Workspace, claudeConfig: string): Effect.E
     return [...types.values()].sort((a, b) => a.name.localeCompare(b.name))
   })
 
+/**
+ * Whether sigma tells a conversation of its workspace: one whose loop is sigma's (ChatGPT), or one in member mode
+ * (Claude Code on a target), whose Claude Code reads nothing of the project itself (D9, D11).
+ */
+export const toldOfWorkspace = (
+  instances: ReadonlyMap<string, ProviderInstance>,
+  agent: { readonly model?: { readonly provider: string }; readonly target?: string },
+) => {
+  const kind = agent.model === undefined ? undefined : instances.get(agent.model.provider)?.kind
+  return kind === "openai" || (kind === "claude" && agent.target !== undefined && agent.target !== "local")
+}
+
+/** The name a conversation's model calls sigma's `read` by: Claude Code reaches it over sigma's MCP server. */
+const readTool = (
+  instances: ReadonlyMap<string, ProviderInstance>,
+  agent: { readonly model?: { readonly provider: string } },
+) => (agent.model !== undefined && instances.get(agent.model.provider)?.kind === "claude" ? "mcp__sigma__read" : "read")
+
 /** What ChatGPT is told of the agent types `spawn_agent` takes, or `""` when there are none. */
 const agentTypesInstructions = (types: ReadonlyArray<AgentType>) =>
   types.length === 0
@@ -305,8 +324,7 @@ export const workspaceInstructions = (
         tag: false,
         render: ({ agent, env, shown }) =>
           Effect.gen(function* () {
-            const provider = agent.model?.provider
-            if (provider === undefined || instances.get(provider)?.kind !== "openai") return undefined
+            if (!toldOfWorkspace(instances, agent)) return undefined
             const workspace = workspaceOf(agent, env)
             if (workspace === undefined) return undefined
             // With max_threads = 0 no conversation has spawn_agent, so none has use for the types. A code-mode model is
@@ -321,7 +339,7 @@ export const workspaceInstructions = (
               ],
               { concurrency: "unbounded" },
             )
-            const text = `The working directory is ${workspace.cwd}.\n${agentsMdInstructions(files)}${skillsInstructions(skills, "read")}${agentTypesInstructions(types)}`
+            const text = `The working directory is ${workspace.cwd}.\n${agentsMdInstructions(files)}${skillsInstructions(skills, readTool(instances, agent))}${agentTypesInstructions(types)}`
             return text.trimEnd()
           }).pipe(
             // A target it cannot reach now keeps what the model was told; its tools say what is gone.
@@ -331,16 +349,13 @@ export const workspaceInstructions = (
     ],
   })
 
-/** The skills input to a conversation on `agent` can name: a ChatGPT conversation's, and none for the rest. */
+/** The skills input to a conversation on `agent` can name: those of one sigma tells of its workspace, else none. */
 export const skillsOf = (
   instances: ReadonlyMap<string, ProviderInstance>,
-  agent: { readonly model?: { readonly provider: string } },
+  agent: { readonly model?: { readonly provider: string }; readonly target?: string },
   workspace: Workspace,
-): Effect.Effect<ReadonlyArray<Skill>> => {
-  const provider = agent.model?.provider
-  if (provider === undefined || instances.get(provider)?.kind !== "openai") return Effect.succeed([])
-  return skillsFor(workspace)
-}
+): Effect.Effect<ReadonlyArray<Skill>> =>
+  toldOfWorkspace(instances, agent) ? skillsFor(workspace) : Effect.succeed([])
 
 /**
  * What a person's `text` and `images` give the model: the text, the `SKILL.md` of each skill it names, read now so a

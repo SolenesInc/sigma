@@ -16,9 +16,14 @@ const append = (entry: unknown) => {
   pings?.write("\n")
 }
 
-/** The variables this process started with that name Claude Code or this fake; the rest of the environment stays out of the log. */
+/**
+ * The variables this process started with that name Claude Code or this fake, or turn a Claude Code feature on or off;
+ * the rest of the environment stays out of the log.
+ */
 const claudeEnv = () =>
-  Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(CLAUDE|AI_AGENT|FAKE_CLAUDE)/.test(name)))
+  Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => /^(CLAUDE|AI_AGENT|FAKE_CLAUDE|ENABLE_|MCP_)/.test(name)),
+  )
 
 if (argv[0] === "auth") {
   append({ auth: argv.slice(1), env: claudeEnv() })
@@ -50,7 +55,13 @@ const spawn = Number(readFileSync(counterFile, { encoding: "utf8", flag: "a+" })
 writeFileSync(counterFile, String(spawn + 1))
 
 const log = (entry: unknown) => append(probe ? { probe: spawn, ...(entry as object) } : { spawn, ...(entry as object) })
-log({ argv, rootConversation: process.env.SIGMA_ROOT_CONVERSATION, env: claudeEnv(), pid: process.pid })
+log({
+  argv,
+  cwd: process.cwd(),
+  rootConversation: process.env.SIGMA_ROOT_CONVERSATION,
+  env: claudeEnv(),
+  pid: process.pid,
+})
 process.on("SIGTERM", () => {
   log({ exited: "SIGTERM" })
   process.exit(143)

@@ -2,7 +2,8 @@
 // its `claude.job` task writes (D1). Each commits through its own task: its texts, its calls and their results, the
 // questions it asks a person, and the subagents it starts. A call Claude Code runs itself is committed before its
 // PreToolUse hook is answered, so the intent is durable before the effect; a question for a person waits on
-// `sigma.approvals`, keyed `<task>/<call>`.
+// `sigma.approvals`, keyed `<task>/<call>`. In member mode a call of sigma's own tools, which Claude Code reaches over
+// sigma's MCP server, runs as a `pi.tool` task of the run, as in sigma's own loop.
 import type { HookCallback, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { copyJson } from "@sigma/delta/json"
 import type { Draft } from "@sigma/delta"
@@ -19,9 +20,11 @@ import {
   recordOrigin,
   removeApproval,
   type TaskApi,
+  ToolTask,
+  type ToolTaskResult,
   UserEntry,
 } from "@sigma/harness"
-import type { AnyTask, ConversationId, EntryId, JsonObject, TaskId, TaskRuntime, Tx } from "@sigma/kernel"
+import type { AnyTask, ConversationId, EntryId, EntryRecord, JsonObject, TaskId, TaskRuntime, Tx } from "@sigma/kernel"
 import type { AssistantMessage, ToolCall, Usage } from "@sigma/models"
 import { Deferred, Effect, Option, Stream } from "effect"
 import type { Job, JobLinks } from "./links.ts"
@@ -31,6 +34,44 @@ import { textOf } from "./retell.ts"
 export interface Callbacks {
   readonly preToolUse: HookCallback
   readonly canUseTool: NonNullable<Options["canUseTool"]>
+  /** Runs a call of one of sigma's own tools, which Claude Code made over sigma's MCP server. */
+  readonly runOwn: (name: string) => (input: unknown, extra: unknown) => Promise<McpResult>
+}
+
+type McpPart = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+export type McpResult = { content: McpPart[]; isError: boolean }
+
+/** The prefix Claude Code gives the tools of sigma's MCP server. */
+export const OWN_TOOL = "mcp__sigma__"
+
+/** Sigma's name of a tool Claude Code calls: an MCP tool's without its prefix. */
+export const toolName = (name: string) => (name.startsWith(OWN_TOOL) ? name.slice(OWN_TOOL.length) : name)
+
+/** A tool result as MCP carries it: its text and its images, whose shape MCP shares with sigma's. */
+const mcpContent = (content: unknown): McpPart[] => {
+  if (!Array.isArray(content)) return [{ type: "text", text: String(content ?? "") }]
+  return (content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>).flatMap(
+    (part): McpPart[] =>
+      part.type === "text"
+        ? [{ type: "text", text: part.text ?? "" }]
+        : part.type === "image"
+          ? [{ type: "image", data: part.data!, mimeType: part.mimeType! }]
+          : [],
+  )
+}
+
+const toolUseOf = (extra: unknown) => {
+  const meta = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta
+  return meta?.["claudecode/toolUseId"] as string | undefined
+}
+
+/**
+ * What a run in member mode has of sigma (D9): the names of sigma's tools Claude Code reaches over MCP, and what the
+ * model must read after each of their calls, such as a computer behind the conversation that changed (D6).
+ */
+export type Member = {
+  readonly own: ReadonlySet<string>
+  readonly notice: Effect.Effect<string | undefined>
 }
 
 /** The entry that places a hosted subagent's conversation in its parent's transcript. */
@@ -117,6 +158,8 @@ export type TranscriptScope = {
   readonly started: (call: string) => Job
   /** The run's own conversation: its entries move its position. A job's has none. */
   readonly position?: Position
+  /** A run in member mode; a job has none, since member mode offers no Agent tool. */
+  readonly member?: Member
 }
 
 /** Removes every approval request the task `task` keyed in the conversation: `<task>/<call>`. */
@@ -131,6 +174,7 @@ type Sighting = { readonly call: ToolCall; readonly response: string; readonly a
 /** The transcript of the conversation `scope` writes. */
 export const makeTranscript = (scope: TranscriptScope) => {
   const { runtime, api, agent, commit, serially, provider, modelId, position } = scope
+  const own = scope.member?.own ?? new Set<string>()
   const conversationId = runtime.conversationId
   const task = runtime.taskId
   const main = position !== undefined
@@ -173,8 +217,14 @@ export const makeTranscript = (scope: TranscriptScope) => {
       }),
     )
 
-  /** Commits a call once, with the arguments it runs with. */
-  const recordNow = (seen: Sighting, input: unknown) =>
+  /** The tool tasks of own tools' calls, by call. */
+  const tools = new Map<string, TaskId<ToolTaskResult>>()
+
+  /**
+   * Commits a call once, with the arguments it runs with. `runs` gives an own tool's call the tool task that runs it:
+   * only Claude Code's MCP call does, so a call Claude Code failed before making it is committed with its result alone.
+   */
+  const recordNow = (seen: Sighting, input: unknown, runs = false) =>
     Effect.suspend(() => {
       const known = recorded.get(seen.call.id)
       if (known) return Effect.succeed(known)
@@ -187,8 +237,22 @@ export const makeTranscript = (scope: TranscriptScope) => {
             const entry = yield* tx.appendEntry(AssistantEntry, conversationId, {
               model: [assistant([call], seen.response, "toolUse")],
             })
+            let tool: TaskId<ToolTaskResult> | undefined
+            if (runs && own.has(call.name)) {
+              tool = yield* tx.createTask(
+                ToolTask,
+                { kind: "model", assistant: entry.id, callId: call.id },
+                // Owned by the run, in whose conversation the tool task finds the call and adds its result.
+                { ownership: { kind: "task", taskId: task }, abandonOnRestart: true },
+              )
+              tools.set(call.id, tool)
+              answered.add(call.id)
+            }
             // Assigned whole: a draft records an array it is given, not what is pushed to it afterwards.
-            live.tools = [...(live.tools ?? []), { callId: call.id, name: call.name, status: "running" }]
+            live.tools = [
+              ...(live.tools ?? []),
+              { callId: call.id, name: call.name, status: "running", ...(tool === undefined ? {} : { taskId: tool }) },
+            ]
             if (main && live.run?.taskId === task && response === seen.response) live.run.first ??= entry.id
             return position === undefined ? undefined : yield* position(tx, live, seen.at, entry.id, "call")
           }),
@@ -201,7 +265,8 @@ export const makeTranscript = (scope: TranscriptScope) => {
         }),
       )
     })
-  const record = (seen: Sighting, input: unknown = seen.call.arguments) => serially(recordNow(seen, input))
+  const record = (seen: Sighting, input: unknown = seen.call.arguments, runs = false) =>
+    serially(recordNow(seen, input, runs))
 
   /** Commits a call's result as Claude Code reported it. */
   const recordResult = (call: ToolCall, text: string, isError: boolean, at: string | undefined) =>
@@ -272,9 +337,14 @@ export const makeTranscript = (scope: TranscriptScope) => {
   const run = <A>(effect: Effect.Effect<A, unknown>, signal: AbortSignal | undefined) =>
     Effect.runPromise(effect, signal === undefined ? undefined : { signal })
 
+  /** Whether Claude Code's `tool` is one of sigma's own, served over MCP. */
+  const isOwn = (tool: string) => tool.startsWith(OWN_TOOL) && own.has(toolName(tool))
+
   /** Commits each call Claude Code runs itself before it runs, so the intent is durable before the effect. */
   const preToolUse: HookCallback = async (input, _toolUseID, { signal }) => {
     if (input.hook_event_name !== "PreToolUse") return {}
+    // An own tool's call is committed as it runs, by `runOwn`, and its tool task asks a person, as in sigma's own loop.
+    if (isOwn(input.tool_name)) return {}
     const asked: ToolCall = {
       type: "toolCall",
       id: input.tool_use_id,
@@ -293,6 +363,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
 
   const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, { signal, toolUseID }) => {
     const allow = { behavior: "allow" as const, updatedInput: input, toolUseID }
+    if (isOwn(tool)) return allow
     const asked: ToolCall = {
       type: "toolCall",
       id: toolUseID,
@@ -322,7 +393,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
             call: {
               type: "toolCall",
               id: block.id,
-              name: block.name,
+              name: toolName(block.name),
               arguments: block.input as ToolCall["arguments"],
             },
             response: responseId,
@@ -415,8 +486,50 @@ export const makeTranscript = (scope: TranscriptScope) => {
       })
     })
 
+  /**
+   * Runs an own tool's call: commits it with its tool task, waits for the task, and answers with the result it
+   * committed, followed by what the model must read now (`Member.notice`).
+   */
+  const runOwn = (name: string) => async (input: unknown, extra: unknown) =>
+    run(
+      Effect.gen(function* () {
+        const id = toolUseOf(extra)
+        if (id === undefined) {
+          return {
+            content: [{ type: "text" as const, text: `Claude Code called ${name} without a call id` }],
+            isError: true,
+          }
+        }
+        const seen = yield* Deferred.await(sighting(id))
+        yield* record(seen, input, true)
+        const tool = tools.get(id)
+        tools.delete(id)
+        if (tool === undefined) {
+          return { content: [{ type: "text" as const, text: `${name} is already running` }], isError: true }
+        }
+        const settled = yield* runtime.waitForTask(tool)
+        const outcome = settled.state.outcome
+        let entry: EntryRecord | undefined
+        if (outcome.status === "completed" && outcome.result.kind === "model") {
+          const id = outcome.result.entryId
+          yield* commit((tx) => Effect.map(tx.entry(id), (found) => void (entry = found)))
+        }
+        const message = entry?.model?.[0] as { content?: unknown; isError?: boolean } | undefined
+        const notice = yield* scope.member?.notice ?? Effect.succeed(undefined)
+        const told: McpPart[] = notice === undefined ? [] : [{ type: "text", text: notice }]
+        if (message === undefined) {
+          return {
+            content: [{ type: "text" as const, text: `${name} ended ${outcome.status}` }, ...told],
+            isError: true,
+          }
+        }
+        return { content: [...mcpContent(message.content), ...told], isError: message.isError ?? true }
+      }),
+      (extra as { signal?: AbortSignal } | undefined)?.signal,
+    )
+
   /** The callbacks for this conversation's calls. */
-  const callbacks: Callbacks = { preToolUse, canUseTool }
+  const callbacks: Callbacks = { preToolUse, canUseTool, runOwn }
 
   return { callbacks, said, results, host, recordText }
 }

@@ -3,6 +3,7 @@
 // `config.toml` (D1): sigma runs `<target_connector...> <target> -- sigma-env` and speaks the env protocol to sigma-env
 // on the target's current instance. Each target has one channel, shared by its conversations (`@sigma/env/remote`).
 import { createHash } from "node:crypto"
+import { mkdirSync } from "node:fs"
 import { hostname } from "node:os"
 import { join } from "node:path"
 import type { ExecutionEnv } from "@sigma/env"
@@ -73,19 +74,21 @@ const pairOf = (hello: AgentHello): TargetPair => ({ instance: hello.instance, f
 
 /**
  * Records the pair `hello` names for the conversation, in `tx`. The first pair is only recorded; a different one later
- * also appends `sigma.target_changed`. The same pair again changes nothing.
+ * also appends `sigma.target_changed`, and is the change returned. The same pair again changes nothing.
  */
 export const recordTarget = (tx: Tx, conversation: ConversationId, target: string, hello: AgentHello) =>
   Effect.gen(function* () {
     const doc = yield* tx.doc(TargetDoc, conversation)
     const to = pairOf(hello)
     const from = doc.last
-    if (from?.instance === to.instance && from.files === to.files) return
+    if (from?.instance === to.instance && from.files === to.files) return undefined
     doc.last = to
-    if (from === undefined) return
+    if (from === undefined) return undefined
     const filesKept = from.files === to.files
-    doc.changed = { to, filesKept }
+    const changed: TargetChange = { to, filesKept }
+    doc.changed = changed
     yield* tx.appendEntry(conversation, { kind: TARGET_CHANGED_KIND, data: { target, from, to, filesKept } })
+    return changed
   })
 
 /** What the model reads of the last change behind its target (D6). */
@@ -95,11 +98,12 @@ const changeText = ({ to, filesKept }: TargetChange) =>
     : `The computer behind this conversation was replaced (now instance ${to.instance}). Files, processes and changes from before are gone.`
 
 /**
- * Before each request of a remote conversation, reaches its target and records the instance behind it. A changed one
- * is committed as `sigma.target_changed` for clients, and the model is told of it in this section, before the request.
- * A target it cannot reach keeps what the model was told; the tool calls say what is gone (D5).
+ * Before each request of a remote conversation that sigma's loop runs, reaches its target and records the instance
+ * behind it. A changed one is committed as `sigma.target_changed` for clients, and the model is told of it in this
+ * section, before the request. A target it cannot reach keeps what the model was told; the tool calls say what is gone
+ * (D5). A provider that runs its own loop, as Claude Code does, is told by `targetNotice` instead.
  */
-export const targetSection = (targets: TargetPool, harness: () => Harness) =>
+export const targetSection = (targets: TargetPool, harness: () => Harness, ownLoop: (provider: string) => boolean) =>
   defineExtension({
     name: "sigma-target",
     sections: [
@@ -109,7 +113,7 @@ export const targetSection = (targets: TargetPool, harness: () => Harness) =>
         render: ({ conversationId, agent, shown }) =>
           Effect.gen(function* () {
             const target = agent.target
-            if (isLocal(target)) return undefined
+            if (isLocal(target) || ownLoop(agent.model?.provider ?? "")) return undefined
             const hello = yield* targets.connect(target)
             const conversation = (yield* harness().conversation(conversationId))!
             yield* conversation.commit((tx) => recordTarget(tx, conversationId, target, hello))
@@ -118,6 +122,38 @@ export const targetSection = (targets: TargetPool, harness: () => Harness) =>
           }).pipe(Effect.catch(() => Effect.succeed(shown.target))),
       },
     ],
+  })
+
+/**
+ * What a remote conversation whose provider runs its own loop must read now of its target: reaches it and records the
+ * instance behind it, and answers with the change this found, once, or `undefined`. Called before each of its runs and
+ * after each of sigma's tool calls, where such a loop reads it before its next request (D6). A target it cannot reach
+ * tells nothing; the tool calls say what is gone (D5).
+ */
+export const targetNotice =
+  (targets: TargetPool, harness: () => Harness) => (conversationId: ConversationId, target: string) =>
+    Effect.gen(function* () {
+      const hello = yield* targets.connect(target)
+      const conversation = (yield* harness().conversation(conversationId))!
+      let changed: TargetChange | undefined
+      yield* conversation.commit((tx) =>
+        Effect.map(recordTarget(tx, conversationId, target, hello), (change) => void (changed = change)),
+      )
+      return changed === undefined ? undefined : changeText(changed)
+    }).pipe(Effect.orElseSucceed(() => undefined))
+
+/**
+ * The Claude Code folders of a target's member-mode processes (D10): `claude` is their config folder and `loop` their
+ * empty working folder, so their sessions, resumes and forks find each other there and nothing lands in the person's
+ * `~/.claude`. Made on first use; the key is the first 16 hex digits of the target's SHA-256.
+ */
+export const targetFolder = (home: Home, target: string) =>
+  Effect.sync(() => {
+    const dir = join(home.dir, "targets", createHash("sha256").update(target).digest("hex").slice(0, 16))
+    const folder = { config: join(dir, "claude"), cwd: join(dir, "loop") }
+    mkdirSync(folder.config, { recursive: true })
+    mkdirSync(folder.cwd, { recursive: true })
+    return folder
   })
 
 /** The environment of a conversation with this agent state, on its target. */

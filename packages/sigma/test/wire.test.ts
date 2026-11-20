@@ -2295,23 +2295,22 @@ test("target-unavailable: a home with no target_connector refuses a remote start
   client.close()
 })
 
-test("target-start: Claude Code is refused on a target, at start and as a model switch, since its own tools would act on the server's machine", async () => {
+test("target-member-mode: Claude Code can start on a target, and a conversation there can switch to it, since it runs only sigma's tools there", async () => {
   using targets = new TestTargets()
   const work = targets.add("box")
   await using server = await targetServer(targets, [])
   const client = await RawClient.connect(server.home.socket)
-  const refused = await startOn(client, "box", work, { provider: "claude" })
-  expect(errorTag(refused)).toBe("UnknownProvider")
-  expect(refused.error!.message).toContain("not on target box")
-  expect(await listed(client)).toEqual([])
+  const started = await startOn(client, "box", work, { provider: "claude" })
+  expect(started.error).toBeUndefined()
   const conversation = (await startOn(client, "box", work)).result.conversation as string
   const switched = await client.call("conversation/select_model", {
     conversation,
     author: person("bo"),
     selection: { provider: "claude" },
   })
-  expect(errorTag(switched)).toBe("UnknownProvider")
-  expect((await list(client))[0]!.model.provider).toBe("script")
+  expect(switched.error).toBeUndefined()
+  const providers = (await list(client)).map((each) => each.model.provider).sort()
+  expect(providers).toEqual(["claude", "claude"])
   client.close()
 })
 

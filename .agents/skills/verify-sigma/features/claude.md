@@ -328,6 +328,9 @@ Preconditions:
 - **Subagents.** A Claude subagent is listed by `conversation/list` with its
   `lineage` (no `task`), and `conversation/submit` or
   `conversation/select_model` on it answers `TakesNoInput`.
+- **On a target.** A conversation on a target runs Claude Code in member
+  mode, with only sigma's tools, in [Targets](./targets.md)
+  (`target-member-mode`). Everything above is a local conversation's.
 - **Inside an agent.** Sigma leaves out the variables a host Claude Code
   session sets (`claude-environment`). Its `ANTHROPIC` and `CCR` variables
   still reach Claude Code, so start a real-account run without them.

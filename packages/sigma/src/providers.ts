@@ -183,10 +183,13 @@ export class Providers extends Context.Service<
           instances,
           agents: { maxThreads: agents?.max_threads ?? DEFAULT_AGENT_LIMITS.maxThreads },
           claude: claudeInstances(options),
-          agentTypes: (provider, workspace) =>
-            provider !== undefined && instances.get(provider)?.kind === "openai"
-              ? agentTypes(workspace, options.openai(provider).claudeConfig)
-              : Effect.succeed([]),
+          agentTypes: (provider, workspace) => {
+            const kind = provider === undefined ? undefined : instances.get(provider)?.kind
+            if (kind === "openai") return agentTypes(workspace, options.openai(provider!).claudeConfig)
+            // In member mode only the project's types, on the target, apply (D11); the home's are the person's.
+            if (kind === "claude" && !workspace.local) return agentTypes(workspace, "")
+            return Effect.succeed([])
+          },
           choose: (project, ask, last) =>
             Effect.suspend(() => {
               const selection = chooseModel(ask, {

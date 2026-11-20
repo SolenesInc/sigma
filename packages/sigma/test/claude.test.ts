@@ -1,7 +1,8 @@
 // Claude Code: a real server in process, driven as a raw JSON-RPC client, with
 // Claude Code played by the fake `claude` replaying a recorded process per spawn.
 import { expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { type Duration, Effect } from "effect"
 import { TestClock } from "effect/testing"
@@ -14,6 +15,7 @@ import {
   USER_KIND,
 } from "@sigma/protocol"
 import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
+import { TestTargets } from "./support/targets.ts"
 import {
   person,
   runEnds,
@@ -1137,4 +1139,175 @@ test("claude-tool-search: tool search set to auto in the person's Claude Code se
     const settings = argv.includes("--settings") ? JSON.parse(argv[argv.indexOf("--settings") + 1]!) : undefined
     expect({ value, override: settings?.env?.ENABLE_TOOL_SEARCH }).toEqual({ value, override: expected })
   }
+})
+
+/** A Claude conversation on the test target `box`, whose work folder holds `agents`, as its AGENTS.md. */
+const memberSession = async (claude: FakeClaude, targets: TestTargets, agents = "Run the tests with make check.") => {
+  const work = targets.add("box", "box-1", "vol-1")
+  writeFileSync(join(work, "AGENTS.md"), agents)
+  const session = await conversationWith(
+    claude,
+    { target: "box", cwd: work, approvals: "auto", instructions: "Report with attn when done." } as never,
+    { config: { target_connector: targets.connector } },
+  )
+  return { ...session, work }
+}
+
+/** The Claude Code folders of target `box`'s processes in `home` (D10). */
+const boxFolder = (home: string) => {
+  const dir = join(home, "targets", createHash("sha256").update("box").digest("hex").slice(0, 16))
+  return { config: join(dir, "claude"), cwd: join(dir, "loop") }
+}
+
+/** Spawn `spawn`'s log line: its argv, cwd and env. */
+const spawnLine = (claude: FakeClaude, spawn: number) =>
+  claude.log().find((entry) => entry.spawn === spawn && entry.argv !== undefined)
+
+test("target-member-mode: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's AGENTS.md", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("member_bash")
+  await using session = await memberSession(claude, targets)
+  await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
+  await session.view.until(settled(1))
+
+  const folder = boxFolder(session.server.home.dir)
+  const spawn = claude.spawns()[0]!
+  // Claude Code's own tools, the person's settings and every MCP server but sigma's are off.
+  expect(spawn).toMatchObject({ "--tools": "ToolSearch", "--strict-mcp-config": true, "--setting-sources": "" })
+  const line = spawnLine(claude, 0)
+  expect(line.cwd).toBe(folder.cwd)
+  expect(line.env).toMatchObject({
+    CLAUDE_CONFIG_DIR: folder.config,
+    ENABLE_TOOL_SEARCH: "true",
+    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+    MCP_TOOL_TIMEOUT: "2147483647",
+  })
+  const initialize = claude.log().find((entry) => entry.initialize)!.initialize
+  expect(initialize.sdkMcpServers).toEqual(["sigma"])
+  // Sigma's tools, each kept out of Claude Code's tool search.
+  const offered = initialize.sdkMcpServerManifests.sigma.toolsListResult.tools as Array<{ name: string; _meta: object }>
+  expect(offered.map((tool) => tool.name)).toEqual(
+    expect.arrayContaining(["read", "write", "edit", "bash", "grep", "glob"]),
+  )
+  for (const tool of offered) expect(tool._meta).toEqual({ "anthropic/alwaysLoad": true })
+  // The conversation's instructions, then what the target's folder holds, not the home's.
+  expect(initialize.appendSystemPrompt).toContain("Report with attn when done.")
+  expect(initialize.appendSystemPrompt).toContain(`The working directory is ${session.work}.`)
+  expect(initialize.appendSystemPrompt).toContain("Run the tests with make check.")
+
+  // The call ran on the target, in its folder, and Claude Code read its result over MCP.
+  expect(readFileSync(join(session.work, "made"), "utf8")).toBe("box-1\n")
+  const answered = claude.log().find((entry) => entry.received?.response?.response?.mcp_response)
+  expect(answered.received.response.response.mcp_response.result).toEqual({
+    content: [{ type: "text", text: `${session.work}\n` }],
+    isError: false,
+  })
+  expect(results(session.view.seen())).toEqual([expect.objectContaining({ text: `${session.work}\n`, isError: false })])
+  expect(calls(session.view.seen()).map((call) => call.name)).toEqual(["bash"])
+  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: made", "run_end: answered"])
+})
+
+test("target-member-mode: a local conversation's Claude Code keeps its own tools, settings and folder", async () => {
+  using claude = new FakeClaude("text")
+  await using session = await conversationWith(claude)
+  await session.submit("Reply with exactly: fixture text ok")
+  await session.view.until(settled(1))
+  const spawn = claude.spawns()[0]!
+  expect(spawn["--setting-sources"]).toBe("user,project,local")
+  for (const flag of ["--tools", "--strict-mcp-config", "--mcp-config"]) expect(spawn[flag]).toBeUndefined()
+  expect(spawnLine(claude, 0).cwd).toBe(session.server.home.dir)
+  expect(spawnLine(claude, 0).env.CLAUDE_CONFIG_DIR ?? "").not.toContain(join(session.server.home.dir, "targets"))
+})
+
+test("target-member-mode, claude-resume: a remote conversation's Claude Code resumes its session in the target's folders", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("died_while_idle")
+  await using session = await memberSession(claude, targets)
+  await session.submit("Remember the word PLUM. Reply with exactly: noted")
+  await session.view.until(settled(1))
+  process.kill(claude.pids()[0]!, "SIGKILL")
+  await session.submit("Which word did I ask you to remember? Reply with that word only.")
+  await session.view.until(settled(2))
+  const folder = boxFolder(session.server.home.dir)
+  expect(claude.spawns()[1]).toMatchObject({ "--resume": claude.spawns()[0]!["--session-id"] })
+  for (const spawn of [0, 1]) {
+    expect(spawnLine(claude, spawn).cwd).toBe(folder.cwd)
+    expect(spawnLine(claude, spawn).env.CLAUDE_CONFIG_DIR).toBe(folder.config)
+  }
+})
+
+test("target-member-mode, target-subagent-fork: a fork of a remote Claude conversation forks its session in the target's folders", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("died_while_idle")
+  await using session = await memberSession(claude, targets)
+  await session.submit("Remember the word PLUM. Reply with exactly: noted")
+  await session.view.until(settled(1))
+  const at = session.view.seen().at(-1)!.id
+  const forked = (
+    await session.client.call("conversation/fork", { author: person("ada"), conversation: session.conversation, at })
+  ).result.conversation as string
+  const fork = watchView(session.client, forked)
+  await fork.until(() => true)
+  await submit(session.client, forked, "Which word did I ask you to remember? Reply with that word only.")
+  await fork.until(settled(1))
+  const folder = boxFolder(session.server.home.dir)
+  expect(claude.spawns()[1]).toMatchObject({ "--resume": claude.spawns()[0]!["--session-id"], "--fork-session": true })
+  expect(spawnLine(claude, 1).cwd).toBe(folder.cwd)
+  expect(spawnLine(claude, 1).env.CLAUDE_CONFIG_DIR).toBe(folder.config)
+  expect(spawnLine(claude, 1).argv).toContain("--strict-mcp-config")
+})
+
+test("target-restarted, target-member-mode: Claude Code in member mode is told in a call's result that the computer behind it restarted under the call", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("member_restart")
+  await using session = await memberSession(claude, targets)
+  await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
+  await session.view.until(settled(1))
+  const answered = claude.log().find((entry) => entry.received?.response?.response?.mcp_response)
+  const told = answered.received.response.response.mcp_response.result.content.map(
+    (part: { text: string }) => part.text,
+  )
+  expect(told.at(-1)).toBe(
+    "The computer behind this conversation restarted (now instance box-2). Your files are as you left them; processes you started are gone.",
+  )
+  expect(
+    session.view
+      .seen()
+      .filter((entry) => entry.kind === "sigma.target_changed")
+      .map((entry) => entry.data),
+  ).toEqual([expect.objectContaining({ target: "box", filesKept: true })])
+})
+
+test("target-restarted, target-member-mode: a remote Claude conversation's next run is told first that its computer restarted while the server was down", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("text", "text")
+  const first = await memberSession(claude, targets)
+  await first.submit("Reply with exactly: fixture text ok")
+  await first.view.until(settled(1))
+  first.client.close()
+  await first.server.stop()
+  // The instance restarts on the same files while no server holds its channel.
+  writeFileSync(join(targets.root, "box", "instance"), "box-2")
+
+  await using server = await runningServer([], {
+    home: first.server.home,
+    claude: claude.options,
+    config: { target_connector: targets.connector },
+  })
+  const client = await RawClient.connect(server.home.socket)
+  const view = watchView(client, first.conversation)
+  await view.until(() => true)
+  await submit(client, first.conversation, "Reply with exactly: fixture text ok")
+  await view.until(settled(2))
+  expect(claude.userTexts(1)[0]).toEqual([
+    "The computer behind this conversation restarted (now instance box-2). Your files are as you left them; processes you started are gone.",
+    "Reply with exactly: fixture text ok",
+  ])
+  expect(
+    view
+      .seen()
+      .filter((entry) => entry.kind === "sigma.target_changed")
+      .map((entry) => entry.data),
+  ).toEqual([expect.objectContaining({ target: "box", filesKept: true })])
+  client.close()
 })

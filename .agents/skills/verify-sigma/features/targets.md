@@ -16,9 +16,7 @@ on. attn will use targets to run a member's work in a sandbox.
   (`local` for one started without), a start with an id that names a
   conversation keeps that one's target, and a ChatGPT conversation is told
   the `AGENTS.md` files and skills the target has at its folder, never what
-  the home has at the same path. A start or a model switch that would run
-  Claude Code on a target is refused with `UnknownProvider`: its own tools
-  would act on the server's machine.
+  the home has at the same path.
 - `target-unavailable` refuses a start whose target the connector cannot
   reach, or a home with no `target_connector`, with `TargetUnavailable`
   carrying the connector's reason, and creates nothing.
@@ -31,6 +29,21 @@ on. attn will use targets to run a member's work in a sandbox.
 - `target-lost` fails a call on a target that is gone with
   `target <t> unavailable: <reason>` from the connector, and the run goes on
   to the model's next step.
+- `target-member-mode` runs a Claude conversation on a target in member
+  mode, at start or after a model switch: Claude Code's own tools, the
+  person's settings, connectors and other MCP servers are off, and it acts
+  only through sigma's tools, served to it as `mcp__sigma__<name>` and kept
+  out of tool search. Its calls are committed under sigma's names and run on
+  the target. Its Claude Code processes use the target's own folders,
+  `$SIGMA_HOME/targets/<16 hex of sha256(target)>/claude` as
+  `CLAUDE_CONFIG_DIR` and `.../loop` as their working folder, so its
+  resumes and forks find their session there and nothing lands in the
+  person's `~/.claude`. Its system prompt's `append` holds the
+  conversation's instructions, then the target's `AGENTS.md` files and
+  skills. A restarted or replaced instance is told at the start of its next
+  run, or in the result of the call it happened under. Claude Code waits for
+  a sigma call as long as sigma's bash may run, so bash's own timeout is the
+  limit the model sees.
 - `target-subagent-fork` runs a subagent's calls and a fork's calls on their
   parent's target.
 - `target-server-restart` kills a remote command cut off by a crashed server
@@ -104,18 +117,31 @@ Preconditions:
   interrupted (`target-server-restart`).
 - **Subagents.** A subagent and a fork act on their parent's target.
 - **Provider.** On ChatGPT the tools and the workspace's `AGENTS.md` and
-  skills come through the target. Claude Code on a target (member mode) is
-  not built yet, so it is refused there: its own tools would act on the home.
+  skills come through the target. Claude Code on a target runs in member
+  mode (`target-member-mode`): the same tools and workspace text, through
+  sigma's MCP server and its system prompt's `append`.
+- **Sign-in.** A member-mode Claude Code is signed in as the provider's
+  Claude Code is, except where Claude Code keeps the sign-in in its config
+  folder: on Linux, `.credentials.json`. There the target's fresh folder is
+  signed out, and the sign-in must come through the environment
+  (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`). macOS keeps it in
+  the keychain, which a fresh folder reaches.
 - **Read-only server.** It reaches no target: a hello would sweep what an
   earlier server left running there.
 
 ## Tests
 
 - Wire: `target-start: ...`, `target-unavailable: ...`, `target-restarted: ...`,
-  `target-replaced: ...`, `target-lost: ...`, `target-subagent-fork: ...` in
-  `packages/sigma/test/wire.test.ts`.
+  `target-replaced: ...`, `target-lost: ...`, `target-subagent-fork: ...`,
+  `target-member-mode: ...` in `packages/sigma/test/wire.test.ts`.
 - Provider: `target-start, agents-md, skills-found: ...` in
-  `packages/sigma/test/openai.test.ts`.
+  `packages/sigma/test/openai.test.ts`; `target-member-mode: ...`,
+  `target-member-mode, claude-resume: ...`,
+  `target-member-mode, target-subagent-fork: ...` and
+  `target-restarted, target-member-mode: ...` in
+  `packages/sigma/test/claude.test.ts`, on the fake `claude`'s
+  `member_bash` and `member_restart`, which `derive-claude-fixtures.ts`
+  derives from `bash_allowed`.
 - Stack: `target-server-restart: ...` and `target-cli, target-unavailable: ...`
   in `packages/sigma/test/stack.test.ts`.
 - Screen: `target-cli: ...` and `target-restarted, target-replaced: ...` in
@@ -132,5 +158,8 @@ Preconditions:
 - Images a person attaches are read on their own machine, from the TUI's
   folder when the conversation is on a target.
 - The instance is announced through a `target` prompt section, rendered
-  before each request; a conversation on the Claude Code path does not
-  render it yet.
+  before each request, on ChatGPT. Claude Code runs its own loop, so member
+  mode tells it at the start of a run and in a sigma call's result instead;
+  a change found between those points waits for the next one.
+- In member mode Claude Code reads `AGENTS.md` and skills only as they were
+  when its process started; an edit reaches it with its next process.

@@ -5,6 +5,11 @@
 //
 // subagent_working: `subagent` until its subagent's Read returns, then the process goes quiet, as if it never answered
 // the interrupt, and the next spawn is `resume_after_kill`'s resumed one, told that the Agent call was cut off.
+//
+// member_bash: `bash_allowed` as Claude Code plays it in member mode, where its own tools are off: its Bash call is a
+// call of sigma's `bash` over sigma's MCP server, which Claude Code makes as an `mcp_message` once the call is allowed,
+// and whose answer is the result it reads. member_restart is the same with a command that restarts the target's
+// instance under the call.
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
@@ -82,4 +87,84 @@ const subagentWorking = () => {
   ])
 }
 
+/** member_bash's command says where it ran and on which instance; member_restart's restarts the test target's. */
+const memberBash = (name: string, command: string) => {
+  const source = read("bash_allowed")
+  const call = source
+    .find(
+      (line) =>
+        line.type === "emit_inbound" &&
+        line.frame.type === "assistant" &&
+        line.frame.message.content.some((block: any) => block.type === "tool_use"),
+    )!
+    .frame.message.content.find((block: any) => block.type === "tool_use").id as string
+  const asMember = (line: Line): Line => {
+    const text = JSON.stringify(line)
+      .replaceAll('"name":"Bash"', '"name":"mcp__sigma__bash"')
+      .replaceAll('"tool_name":"Bash"', '"tool_name":"mcp__sigma__bash"')
+      .replaceAll('"display_name":"Bash"', '"display_name":"bash"')
+    const member = JSON.parse(text)
+    // The call's input, wherever Claude Code repeats it, is the member command.
+    const visit = (value: any) => {
+      if (value === null || typeof value !== "object") return
+      if (typeof value.command === "string" && value.command.includes("touch made.txt")) {
+        for (const key of Object.keys(value)) delete value[key]
+        value.command = command
+      }
+      for (const child of Object.values(value)) visit(child)
+    }
+    visit(member.frame)
+    return member
+  }
+  const lines = source.slice(1).map(asMember)
+  const result = lines.findIndex(
+    (line) =>
+      line.type === "emit_inbound" &&
+      line.frame.type === "user" &&
+      Array.isArray(line.frame.message.content) &&
+      line.frame.message.content.some((block: any) => block.type === "tool_result" && block.tool_use_id === call),
+  )
+  const answer = { content: [{ type: "text", text: "<the target's folder>" }], isError: false }
+  lines[result]!.frame.message.content = [{ tool_use_id: call, type: "tool_result", content: answer.content }]
+  const id = crypto.randomUUID()
+  const mcp = { jsonrpc: "2.0", id: 2 }
+  lines.splice(
+    result,
+    0,
+    {
+      type: "emit_inbound",
+      frame: {
+        type: "control_request",
+        request_id: id,
+        request: {
+          subtype: "mcp_message",
+          server_name: "sigma",
+          message: {
+            method: "tools/call",
+            params: {
+              name: "bash",
+              arguments: { command },
+              _meta: { "claudecode/toolUseId": call, progressToken: 2 },
+            },
+            ...mcp,
+          },
+        },
+      },
+    },
+    {
+      type: "expect_outbound",
+      frame: {
+        type: "control_response",
+        response: { subtype: "success", request_id: id, response: { mcp_response: { result: answer, ...mcp } } },
+      },
+    },
+  )
+  write(name, [
+    header(name, source[0]!, `bash_allowed, its Bash call made over sigma's MCP server: ${command}`),
+    ...lines,
+  ])
+}
+
 subagentWorking()
+memberBash("member_bash", 'echo "$SIGMA_TARGET_INSTANCE" > made; pwd')
+memberBash("member_restart", "echo box-2 > ../instance; kill -9 $(cat ../pid)")

@@ -99,7 +99,8 @@ const fakes = (): Record<string, string> => ({
  * A `claude` that runs the SDK's bundled Claude Code, as a person's sigma does, without the person's own settings: their
  * `defaultMode` and allow rules would run calls a step waits to see asked about, and Claude Code withdraws a question
  * one of them answers. The sign-in is not a setting, so it stays. Sigma's own `--setting-sources` comes first in the
- * arguments, and the last one counts.
+ * arguments, and the last one counts. A member-mode process (`--strict-mcp-config`) reads no settings already, and keeps
+ * that.
  *
  * It runs as the person's own `USER`, not the run's `ada`: on macOS Claude Code finds its sign-in in the keychain by
  * `USER`, and under another name it signs in without the subscription and writes only 5-minute prompt cache.
@@ -109,7 +110,7 @@ const writeRealClaude = () => {
   // `claude auth ...` takes no --setting-sources; signing in and out runs as the person's own Claude Code does.
   writeFileSync(
     realClaude,
-    `#!/bin/sh\nexport USER='${userInfo().username}'\n[ "$1" = auth ] && exec '${bundled}' "$@"\nexec '${bundled}' "$@" --setting-sources=project\n`,
+    `#!/bin/sh\nexport USER='${userInfo().username}'\n[ "$1" = auth ] && exec '${bundled}' "$@"\ncase " $* " in *" --strict-mcp-config "*) exec '${bundled}' "$@" ;; esac\nexec '${bundled}' "$@" --setting-sources=project\n`,
   )
   chmodSync(realClaude, 0o755)
 }

@@ -3,6 +3,7 @@
 // subagent's frames and callbacks go to its job (D1, F7); the rest go to the run it serves, or wait for the next run
 // while it serves none. What a run does with its frames is `serving.ts`, what a job does is `job.ts`.
 import {
+  createSdkMcpServer,
   type EffortLevel,
   type HookCallbackMatcher,
   type HookEvent,
@@ -15,6 +16,7 @@ import {
 import type { Agent } from "@sigma/harness"
 import type { Usage } from "@sigma/models"
 import { Cause, Clock, Deferred, type Duration, Effect, Exit, Option, Semaphore } from "effect"
+import { z } from "zod"
 import { claudeEnvironment, toolSearchSettings } from "./environment.ts"
 import { Inbox } from "./inbox.ts"
 import { ENDED_WITH_PROCESS, Job, type JobEnd, STOPPED_WITH_RUN } from "./links.ts"
@@ -52,7 +54,36 @@ export type ProcessConfig = {
   readonly settings: ClaudeProcessSettings
   /** The id of the conversation people started, for the `SIGMA_ROOT_CONVERSATION` its commands see. */
   readonly rootConversation: string
+  /** A remote conversation's process, in member mode (D9); absent for a local conversation's. */
+  readonly member?: MemberProcess
 }
+
+/**
+ * What a process in member mode starts with: the target's Claude Code folders (D10), and the system prompt's `append`,
+ * the conversation's sections as sigma renders them (D11).
+ */
+export type MemberProcess = {
+  readonly folder: { readonly config: string; readonly cwd: string }
+  readonly append: string | undefined
+}
+
+/**
+ * Whether a conversation with this agent runs in member mode: its tools act on a target that is not the server's
+ * machine, so Claude Code must not use its own tools, which act on the machine it runs on (D9).
+ */
+export const isMember = (agent: Agent) => agent.target !== undefined && agent.target !== "local"
+
+/**
+ * How long Claude Code waits for a call of sigma's tools in member mode: as long as sigma's bash may run (its largest
+ * `timeout`), so each tool's own limit, such as bash's 1800 s default, is the one the model sees. Measured with Claude
+ * Code 2.1.329: an in-process MCP server's call has no idle timeout, waits `MCP_TOOL_TIMEOUT` when set, which a
+ * person's environment may set lower, and otherwise 1e8 ms; a call past it is aborted and the model reads
+ * `MCP server "sigma" tool "<name>" timed out after <n>s`.
+ */
+const MEMBER_TOOL_TIMEOUT_MS = 2_147_483_647
+
+/** The tools sigma offers Claude Code in member mode: the conversation's, but code mode, which Claude takes no part in. */
+export const ownTools = (agent: Agent) => agent.tools.filter((tool) => tool.codeMode !== true)
 
 /** The model and effort a process answers with; `""` and `undefined` leave them to the person's Claude Code settings. */
 export type Selection = { readonly modelId: string; readonly effort: EffortLevel | undefined }
@@ -160,12 +191,17 @@ const userMessage = (parts: ReadonlyArray<Said>, priority?: "next"): SDKUserMess
  * differs from its live process's gets a new process. The model and effort are not in it: `serve` switches them.
  */
 export const processKey = (config: ProcessConfig) => {
+  const { agent } = config
   return JSON.stringify({
-    provider: config.agent.model?.provider,
+    provider: agent.model?.provider,
     settings: config.settings,
-    cwd: config.agent.cwd,
-    maxTurns: config.agent.maxTurns,
+    cwd: agent.cwd,
+    target: agent.target,
+    maxTurns: agent.maxTurns,
     rootConversation: config.rootConversation,
+    ...(isMember(agent)
+      ? { own: ownTools(agent).map(({ name, description, parameters }) => ({ name, description, parameters })) }
+      : {}),
   })
 }
 
@@ -254,29 +290,61 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     }
     const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, options) =>
       (await callbacksOf(options.agentID, options.signal)).canUseTool(tool, input, options)
-    const settingSources: SettingSource[] = ["user", "project", "local"]
+    const { member } = config
+    // In member mode nothing comes from the person's Claude Code settings, and Claude Code's own tools, connectors and
+    // folders are off: it acts only through sigma's tools, on the target (D9, D10, Q3).
+    const settingSources: SettingSource[] = member === undefined ? ["user", "project", "local"] : []
     const env = {
       ...claudeEnvironment(settings.env),
       SIGMA_ROOT_CONVERSATION: config.rootConversation,
       CLAUDE_AGENT_SDK_CLIENT_APP: "sigma",
+      ...(member === undefined
+        ? {}
+        : {
+            CLAUDE_CONFIG_DIR: member.folder.config,
+            ENABLE_TOOL_SEARCH: "true",
+            ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+            MCP_TOOL_TIMEOUT: String(MEMBER_TOOL_TIMEOUT_MS),
+          }),
     }
-    const toolSearch = yield* toolSearchSettings(agent.cwd, settingSources, env)
+    const toolSearch = member === undefined ? yield* toolSearchSettings(agent.cwd, settingSources, env) : undefined
+    const cwd = member === undefined ? agent.cwd : member.folder.cwd
+    const append = member === undefined ? agent.instructions : member.append
     const messages = query({
       prompt: inbox,
       options: {
-        ...(agent.cwd === undefined ? {} : { cwd: agent.cwd }),
+        ...(cwd === undefined ? {} : { cwd }),
         abortController: controller,
         includePartialMessages: true,
         canUseTool,
         hooks,
         settingSources,
+        ...(member === undefined
+          ? {}
+          : {
+              // ToolSearch stays so Claude Code can load a deferred tool; alwaysLoad keeps sigma's out of its search.
+              tools: ["ToolSearch"],
+              strictMcpConfig: true,
+              mcpServers: {
+                sigma: createSdkMcpServer({
+                  name: "sigma",
+                  alwaysLoad: true,
+                  tools: ownTools(agent).map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    inputSchema: z.fromJSONSchema(tool.parameters as z.core.JSONSchema.JSONSchema),
+                    handler: (input: unknown, extra: unknown) => current().runOwn(tool.name)(input, extra),
+                  })),
+                }),
+              },
+            }),
         // Claude Code's own idle compaction would compact with no run to commit its summary; sigma's does it (D7).
         settings: { ...toolSearch, idleCompaction: false },
         extraArgs: { ...extraArgs(settings.args ?? []), "replay-user-messages": null },
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
-          ...(agent.instructions === undefined ? {} : { append: agent.instructions }),
+          ...(append === undefined ? {} : { append }),
         },
         env,
         ...(modelId === "" ? {} : { model: modelId }),

@@ -19,7 +19,14 @@ import { Effect } from "effect"
 import type { Job } from "./links.ts"
 import { promptOf, type Said } from "./retell.ts"
 import { ClaudeSessionDoc } from "./session.ts"
-import { assistantMessage, type Callbacks, type Hosting, makeTranscript, type Position } from "./transcript.ts"
+import {
+  assistantMessage,
+  type Callbacks,
+  type Hosting,
+  makeTranscript,
+  type Member,
+  type Position,
+} from "./transcript.ts"
 
 /** How a run ended: it answered, the session is gone, Claude Code failed, or its process exited. */
 export type Ended =
@@ -45,6 +52,8 @@ export type RunContext = {
   readonly agent: Agent
   /** The tasks its subagents are hosted with. */
   readonly hosting: Hosting
+  /** A run of a remote conversation, in member mode (D9). */
+  readonly member?: Member
 }
 
 /** What a run reaches of the process serving it. */
@@ -132,6 +141,7 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
     hosting: ctx.hosting,
     started: process.started,
     position,
+    ...(ctx.member === undefined ? {} : { member: ctx.member }),
   })
 
   /** Claude Code's summary of its own compaction, mirrored as a compaction entry that starts a new context. */
