@@ -366,7 +366,8 @@ export const openProcess = (
                     name: tool.name,
                     description: tool.description,
                     inputSchema: z.fromJSONSchema(tool.parameters as z.core.JSONSchema.JSONSchema),
-                    handler: (input: unknown, extra: unknown) => current().runOwn(tool.name)(input, extra),
+                    handler: async (input: unknown, extra: unknown) =>
+                      (await current(undefined)).runOwn(tool.name)(input, extra),
                   })),
                 }),
               },

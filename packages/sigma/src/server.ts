@@ -317,11 +317,10 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
                     reachingIn(() => harness, agent.conversationId),
                   ),
                 ),
-              viewDocs: [ReachingDoc],
               runEnded,
               inputWithdrawn,
               runTasks: claudeRuns.runTasks,
-              viewDocs: [ClaudeJobsDoc],
+              viewDocs: [ReachingDoc, ClaudeJobsDoc],
               // A prompt queued behind a run that fails runs next, as one queued behind an answer does.
               settings: { afterFailedRun: "continue" },
               readOnly,
