@@ -321,3 +321,73 @@ test("gemini-remote: a Gemini conversation on a target is refused, saying agy's 
   ])
   expect(agy.spawns()).toBe(0)
 })
+
+test("gemini-interrupt: stopping a run while agy's command runs records the call as interrupted, and Gemini is told nothing more", async () => {
+  using agy = new FakeAgy("interrupt_call")
+  await using session = await conversationWith(agy)
+  await session.submit("Run the shell command `sleep 3 && echo started && sleep 60`, then reply with exactly: slept")
+  await session.answer(true)
+  // agy runs the command once it hears the allow.
+  await agy.logged((fake) => fake.received().some((frame) => frame.result?.outcome?.optionId === "allow"))
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  await session.view.until(settled(1))
+  const [call] = calls(session.view.seen())
+  expect(results(session.view.seen())).toEqual([
+    { call: call!.id, text: "interrupted; it may or may not have taken effect", isError: true },
+  ])
+  expect(runEnds(session.view.seen())).toEqual([expect.objectContaining({ outcome: "interrupted" })])
+  // Nothing of the cut-off call outlives the run as a job.
+  expect(jobsOf(session.view)).toEqual([])
+
+  await session.submit("Did your last command finish? Reply with exactly one word: finished or interrupted")
+  await session.view.until(settled(2))
+  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: interrupted", "run_end: answered"])
+  expect(agy.prompts()).toHaveLength(2)
+})
+
+test("gemini-wake, gemini-interrupt: stopping a wake run cancels agy's turn and ends the run, and the next prompt is answered", async () => {
+  using agy = new FakeAgy("wake_interrupted")
+  await using session = await conversationWith(agy, { approvals: "auto" })
+  await session.submit(
+    "Run the shell command `sleep 15; echo wake-marker`. When it finishes, write a 600-word essay about rivers that mentions what it printed.",
+  )
+  // The wake run, once Gemini writes in it.
+  await session.view.until(
+    (watch) =>
+      runEnds(watch.seen()).length === 1 &&
+      transcript(watch.seen()).some((line) => line.startsWith("report: ")) &&
+      (watch.view().docs["pi.live"] as { generation?: object } | undefined)?.generation !== undefined,
+  )
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  await session.view.until(settled(2))
+  expect(runEnds(session.view.seen()).at(-1)).toMatchObject({ outcome: "interrupted" })
+  await agy.logged((fake) => fake.received("session/cancel").length === 1)
+
+  await session.submit("Reply with exactly: after the wake")
+  await session.view.until(settled(3))
+  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: after the wake", "run_end: answered"])
+  expect(runEnds(session.view.seen())).toHaveLength(3)
+})
+
+test("gemini-health, provider-signed-out: a signed-out agy is listed as signed out with how to sign in, and a run on it fails saying so", async () => {
+  using agy = new FakeAgy("signed_out", "models_signed_out")
+  await using session = await conversationWith(agy)
+  const providers = (await session.client.call("providers/list", {})).result as Array<ProviderSnapshot>
+  expect(providers.find((provider) => provider.id === "agy")).toMatchObject({
+    signIn: [],
+    health: { status: "signed_out", message: "not signed in to agy: run `agy` in a terminal and sign in" },
+  })
+  // Sigma cannot sign agy in, and says how a person does.
+  const started = await session.client.call("auth/start", { provider: "agy" })
+  expect(JSON.stringify(started.error)).toContain("run `agy` in a terminal and sign in")
+
+  await session.submit("Reply with exactly: hello")
+  await session.view.until(settled(1))
+  expect(runEnds(session.view.seen())).toEqual([
+    expect.objectContaining({
+      outcome: "failed",
+      message: expect.stringContaining("run `agy` in a terminal and sign in"),
+    }),
+  ])
+  expect(agy.prompts()).toEqual([])
+})

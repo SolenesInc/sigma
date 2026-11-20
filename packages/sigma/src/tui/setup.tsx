@@ -70,7 +70,8 @@ const statusText = (provider: ProviderSnapshot) => {
     case "ready":
       return health.account ?? "ready"
     case "signed_out":
-      return "signed out"
+      // A provider sigma cannot sign in, such as agy, says how to sign in yourself.
+      return provider.signIn.length === 0 ? (health.message ?? "signed out") : "signed out"
     default:
       return health.message ?? "unavailable"
   }
@@ -91,7 +92,9 @@ export const ProviderList = (props: { providers: ReadonlyArray<ProviderSnapshot>
           </box>
         )}
       </For>
-      <Show when={props.providers.some((provider) => provider.health.status === "signed_out")}>
+      <Show
+        when={props.providers.some((provider) => provider.health.status === "signed_out" && provider.signIn.length > 0)}
+      >
         <box marginTop={1}>
           <KeyCap cap="^L" what="sign in" />
         </box>

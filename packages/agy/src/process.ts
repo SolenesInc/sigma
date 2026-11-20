@@ -130,15 +130,13 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
 
     const close = async (process: Acp) => {
       closing = true
-      if (session !== "" && (await ready) === undefined) {
-        // The tripwire: a session/close agy does not answer must not hold the server's stop.
-        let timer: ReturnType<typeof setTimeout> | undefined
-        await Promise.race([
-          process.call("session/close", { sessionId: session }),
-          new Promise<void>((done) => (timer = setTimeout(done, CLOSE_PATIENCE_MS))),
-        ])
-        clearTimeout(timer)
-      }
+      // The tripwire covers the open too: an agy that never finishes loading must not hold the server's stop.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const patience = new Promise<"late">((done) => (timer = setTimeout(() => done("late"), CLOSE_PATIENCE_MS)))
+      const opened = await Promise.race([ready, patience])
+      if (session !== "" && opened === undefined)
+        await Promise.race([process.call("session/close", { sessionId: session }), patience])
+      clearTimeout(timer)
       process.kill()
       events.close()
     }
@@ -198,12 +196,17 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       /** `agy` is in a turn: one sigma prompted, or one it began by itself (`waking`). */
       let turn = false
       let waking = false
+      /**
+       * A wake a person stopped: agy fires no Stop for a cancel, so what it had in flight is dropped instead of
+       * waking the conversation again, until it is next prompted or a job ends.
+       */
+      let hushed = false
       let text = ""
       let responses = 0
       let positions = 0
       let spent = { ...ZERO }
       /** The permission requests not answered yet, by their ids. */
-      const asking = new Map<number | string, Json>()
+      const asking = new Map<number | string, { readonly params: Json; readonly aborted: AbortController }>()
 
       const at = () => `${session}/${++positions}`
       const responseId = () => `${session}/r${responses}`
@@ -219,6 +222,7 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       /** An update outside a turn that is not a job's end: `agy` began a turn by itself (s-7bmc8w D4). */
       const wake = (): Frame[] => {
         if (turn) return []
+        hushed = false
         turn = true
         waking = true
         return [{ type: "woke" }]
@@ -268,9 +272,24 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
         return out
       }
 
-      /** The turn is over: its calls still running are jobs, then what it spent and its answer (D12). */
-      const turnOver = (turnLimit: boolean): Frame[] => {
-        const out: Frame[] = [...flush(), ...background()]
+      /** The calls a cancel or a failure ended: they get no result, so the run records them as interrupted. */
+      const cutOff = (): Frame[] => {
+        const out: Frame[] = []
+        for (const [id, known] of calls) {
+          if (known.job) continue
+          if (known.refused)
+            out.push({ type: "results", at: at(), results: [{ call: id, text: DENIED, isError: true }] })
+          calls.delete(id)
+        }
+        return out
+      }
+
+      /**
+       * The turn is over: its calls still running are jobs, then what it spent and its answer (D12). In a cancelled
+       * turn they were cut off instead.
+       */
+      const turnOver = (turnLimit: boolean, cancelled = false): Frame[] => {
+        const out: Frame[] = [...flush(), ...(cancelled ? cutOff() : background())]
         const used = spent
         spent = { ...ZERO }
         if (used.input + used.output + used.cacheRead + used.cacheWrite > 0) {
@@ -297,21 +316,25 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
         switch (change?.sessionUpdate) {
           case "agent_message_chunk": {
             const delta = String(change.content?.text ?? "")
+            if (hushed && !turn) return []
             const moved = [...wake(), ...background()]
             text += delta
             return [...moved, { type: "text", delta }]
           }
           case "agent_thought_chunk":
-            return wake()
+            return hushed && !turn ? [] : wake()
           case "tool_call":
           case "tool_call_update": {
             const id = String(change.toolCallId)
             const known = calls.get(id)
             const status = change.status
+            // A job's progress is not a turn of agy's own (not seen from 1.5.13, whose commands report only their end).
+            if (known?.job && status !== "completed" && status !== "failed") return []
             if (status !== "completed" && status !== "failed") return [...wake(), ...sight(change)]
             if (known?.job) {
               // A job's end: news from outside the turn, which the hosted process reports (D2).
               calls.delete(id)
+              hushed = false
               const ended = known.stopped ? "stopped" : status === "completed" ? "completed" : "failed"
               const summary = outputOf(change)
               return [{ type: "job-ended", id, status: ended, ...(summary === "" ? {} : { summary }) }]
@@ -339,11 +362,12 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       const ask = (id: number | string, params: Json): Frame[] => {
         const change = params.toolCall as Json
         const out = [...wake(), ...sight(change)]
-        asking.set(id, params)
+        const aborted = new AbortController()
+        asking.set(id, { params, aborted })
         const call = calls.get(String(change.toolCallId))!.call
         void host
           .callbacks(undefined)
-          .then((callbacks) => callbacks.approve(call))
+          .then((callbacks) => callbacks.approve(call, aborted.signal))
           .then(
             (allow) => events.push({ type: "decided", request: id, allow }),
             () => events.push({ type: "decided", request: id, allow: undefined }),
@@ -353,10 +377,15 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
 
       /** Answers a permission request: once only, so whatever is remembered is sigma's (D9). */
       const answer = (id: number | string, allow: boolean | undefined) => {
-        const params = asking.get(id)
-        if (params === undefined) return
+        const waiting = asking.get(id)
+        if (waiting === undefined) return
         asking.delete(id)
-        if (allow === undefined) return acp.reply(id, { outcome: { outcome: "cancelled" } })
+        const params = waiting.params
+        if (allow === undefined) {
+          // A cancel answered it: the person's question is withdrawn.
+          waiting.aborted.abort()
+          return acp.reply(id, { outcome: { outcome: "cancelled" } })
+        }
         const options = (params.options ?? []) as Array<{ optionId: string; kind: string }>
         const option = options.find((each) => each.kind === (allow ? "allow_once" : "reject_once"))
         const known = calls.get(String(params.toolCall?.toolCallId))
@@ -386,7 +415,14 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
             } else if (prompts.delete(item.id)) {
               const result = item.answer
               if (result.error) {
-                if (prompts.size === 0) turn = false
+                if (prompts.size === 0) {
+                  // What the turn said stays; its calls are cut off, and nothing of it reaches the next run.
+                  yield* flush()
+                  yield* cutOff()
+                  spent = { ...ZERO }
+                  turn = false
+                  waking = false
+                }
                 yield { type: "failed", message: `agy failed: ${result.error.message}` }
                 continue
               }
@@ -399,7 +435,8 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
                 total: spent.total + Number(usage?.totalTokens ?? 0),
               }
               // A prompt a later one steered returns at once; the turn goes on to the newest one's result (F24).
-              if (prompts.size === 0) yield* turnOver(result.result?.stopReason === "max_turn_requests")
+              const stopReason = result.result?.stopReason
+              if (prompts.size === 0) yield* turnOver(stopReason === "max_turn_requests", stopReason === "cancelled")
             }
             break
           }
@@ -412,6 +449,7 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
             prompts.add(sent.id)
             turn = true
             waking = false
+            hushed = false
             yield { type: "took", id: event.id }
             break
           }
@@ -426,13 +464,17 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
             }
             cancel()
             // A turn agy began by itself has no result to end it, and a cancel fires no Stop.
-            if (prompts.size === 0) yield* turnOver(false)
+            if (prompts.size === 0) {
+              yield* turnOver(false, true)
+              hushed = true
+            }
             break
           case "stop-job": {
             const known = calls.get(event.job)
             if (known === undefined) break
             known.stopped = true
-            // A cancel with no turn open ends agy's background command (s-7bmc8w F7).
+            // A job is stopped only while its conversation has no run (interrupt-idle), so no turn is open: a cancel
+            // ends agy's background command (s-7bmc8w F7).
             cancel()
             break
           }
@@ -462,6 +504,7 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
         }
         if (wanted.modelId !== "" && wanted.modelId !== selected.modelId) {
           await set("model", wanted.modelId)
+          // Each model has its own levels, so the level is set again after a switch.
           selected = { modelId: wanted.modelId }
         }
         if (wanted.effort !== undefined && wanted.effort !== selected.effort) {

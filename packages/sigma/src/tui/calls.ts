@@ -19,7 +19,8 @@ export const describeCall = (tool: string, input: unknown) => {
     field(input, "cell_id") ??
     field(input, "task_name") ??
     field(input, "target") ??
-    // agy's names for the same.
+    // agy's names for the same, as its own plugins read them (agy 1.5.13's swarm_board reads AbsolutePath or
+    // TargetFile; run_command and list_dir calls carry CommandLine and DirectoryPath).
     field(input, "CommandLine") ??
     field(input, "TargetFile") ??
     field(input, "AbsolutePath") ??

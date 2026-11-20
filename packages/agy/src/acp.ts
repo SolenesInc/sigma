@@ -112,6 +112,7 @@ export const startAcp = (command: AcpCommand): Acp => {
   let stderrTail = ""
   const stderr = (async () => {
     const decoder = new TextDecoder()
+    // Only what fits in the failed run's message: agy's error is its last line or two.
     for await (const chunk of child.stderr) stderrTail = (stderrTail + decoder.decode(chunk)).slice(-500)
   })().catch(() => undefined)
 

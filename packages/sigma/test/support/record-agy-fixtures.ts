@@ -5,12 +5,13 @@
 //   bun packages/sigma/test/support/record-agy-fixtures.ts [journey...]   (no journey: all of them)
 //
 // Read every recording before committing it: what Gemini writes may quote the recording machine.
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect } from "effect"
 import { agyAccount } from "@sigma/agy"
 import { RawClient } from "./raw.ts"
-import { person, runningServer, settled, submit, tempHome, type ViewWatch, watchView } from "./server.ts"
+import { person, runEnds, runningServer, settled, submit, tempHome, type ViewWatch, watchView } from "./server.ts"
 
 const MODEL = "gemini-4-hydrogen"
 const EFFORT = "low"
@@ -30,12 +31,28 @@ type Session = {
   readonly settle: (runs: number) => Promise<void>
 }
 
-type Journey = { readonly ask?: "ask" | "auto"; readonly run: (session: Session) => Promise<void> }
+type Journey = {
+  readonly ask?: "ask" | "auto"
+  /** agy signed out: it runs in an empty home of its own. */
+  readonly signedOut?: boolean
+  readonly run: (session: Session) => Promise<void>
+}
+
+/** The real agy binary, not a version manager's shim, which needs the person's own home. */
+const REAL = (await Bun.$`mise which agy`.nothrow().text()).trim() || "agy"
+const signedOutEnv = () => ({ HOME: mkdtempSync(join(tmpdir(), "agy-signed-out-")), RECORD_AGY_REAL: REAL })
 
 const approvals = (view: ViewWatch) =>
   Object.keys((view.view().docs["sigma.approvals"] as { requests?: object } | undefined)?.requests ?? {})
 
 const journeys: Record<string, Journey> = {
+  signed_out: {
+    signedOut: true,
+    run: async (s) => {
+      await s.submit("Reply with exactly: hello")
+      await s.settle(1)
+    },
+  },
   text: {
     run: async (s) => {
       await s.submit("Reply with exactly: fixture text ok")
@@ -94,6 +111,47 @@ const journeys: Record<string, Journey> = {
       await s.settle(2)
     },
   },
+  interrupt_call: {
+    run: async (s) => {
+      await s.submit("Run the shell command `sleep 3 && echo started && sleep 60`, then reply with exactly: slept")
+      await s.answer(true)
+      // Stopped while the command runs, before agy would move it to the background.
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await s.interrupt()
+      await s.settle(1)
+      await s.submit("Did your last command finish? Reply with exactly one word: finished or interrupted")
+      await s.settle(2)
+    },
+  },
+  wake_interrupted: {
+    ask: "auto",
+    run: async (s) => {
+      await s.submit(
+        "Run the shell command `sleep 15; echo wake-marker`. When it finishes, write a 600-word essay about rivers that mentions what it printed.",
+      )
+      await s.settle(1)
+      // The wake run, once Gemini is writing in it.
+      await s.view.until(
+        (watch) =>
+          runEnds(watch.seen()).length === 1 &&
+          (watch.view().docs["pi.live"] as { generation?: object } | undefined)?.generation !== undefined,
+        TURN,
+      )
+      await s.interrupt()
+      await s.settle(2)
+      await s.submit("Reply with exactly: after the wake")
+      await s.settle(3)
+    },
+  },
+  job_progress: {
+    ask: "auto",
+    run: async (s) => {
+      await s.submit(
+        "Run the shell command `for i in 1 2 3 4; do echo tick $i; sleep 4; done` and tell me its last line when it ends.",
+      )
+      await s.settle(2)
+    },
+  },
   subagent_wake: {
     ask: "auto",
     run: async (s) => {
@@ -113,7 +171,10 @@ const record = async (name: string, journey: Journey) => {
     `${JSON.stringify({ type: "transcript_start", provider: "agy", scenario: name, metadata: { agy: VERSION, model: MODEL, effort: EFFORT, recorded: "record-agy" } })}\n`,
   )
   const home = tempHome()
-  const options = { home, agy: { executable: RECORDER, env: { RECORD_AGY_TO: to } } }
+  const options = {
+    home,
+    agy: { executable: RECORDER, env: { RECORD_AGY_TO: to, ...(journey.signedOut ? signedOutEnv() : {}) } },
+  }
   let server = await runningServer([], options)
   let client = await RawClient.connect(home.socket)
   const conversation = (
@@ -165,19 +226,20 @@ const record = async (name: string, journey: Journey) => {
 }
 
 /** The account's probe: the fake plays it for every process whose folder is a probe's. */
-const recordModels = async () => {
-  const to = join(FIXTURES, "models.ndjson")
+const recordProbe = async (name: string, env: Record<string, string> = {}) => {
+  const to = join(FIXTURES, `${name}.ndjson`)
   writeFileSync(
     to,
-    `${JSON.stringify({ type: "transcript_start", provider: "agy", scenario: "models", metadata: { agy: VERSION } })}\n`,
+    `${JSON.stringify({ type: "transcript_start", provider: "agy", scenario: name, metadata: { agy: VERSION } })}\n`,
   )
-  await Effect.runPromise(agyAccount({ executable: RECORDER, env: { RECORD_AGY_TO: to } }).health(true))
-  console.log("recorded models")
+  await Effect.runPromise(agyAccount({ executable: RECORDER, env: { RECORD_AGY_TO: to, ...env } }).health(true))
+  console.log(`recorded ${name}`)
 }
 
 mkdirSync(FIXTURES, { recursive: true })
 const wanted = process.argv.slice(2)
-if (wanted.length === 0 || wanted.includes("models")) await recordModels()
+if (wanted.length === 0 || wanted.includes("models")) await recordProbe("models")
+if (wanted.length === 0 || wanted.includes("models_signed_out")) await recordProbe("models_signed_out", signedOutEnv())
 for (const [name, journey] of Object.entries(journeys)) {
   if (wanted.length === 0 || wanted.includes(name)) await record(name, journey)
 }

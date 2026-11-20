@@ -1028,3 +1028,12 @@ test("gemini-approval: agy's permission request shows the command it would run o
   expect(screen).toMatch(/^.*touched\s*$/m)
   await quit(session)
 })
+
+test("gemini-health, signin-status: a signed-out agy is listed with how to sign in to it, which sigma cannot do", async () => {
+  const session = await open([], [], home(), {
+    FAKE_AGY_PROBE: join(import.meta.dir, "../../../fixtures/agy/models_signed_out.ndjson"),
+  })
+  const screen = await session.waitFor((screen) => /○ agy +not signed in/.test(screen))
+  expect(screen).toMatch(/○ agy +not signed in to agy: run `agy` in a terminal and sign in/)
+  await quit(session)
+})

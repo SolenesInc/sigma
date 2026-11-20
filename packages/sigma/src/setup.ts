@@ -164,12 +164,16 @@ export class Setup extends Context.Service<
             const driver = yield* driverOf(provider)
             const chosen = method ?? driver.signInMethods[0]
             if (chosen === undefined || !driver.signInMethods.includes(chosen)) {
+              // A provider that signs in by itself, such as agy, says how when it is signed out.
+              const health = chosen === undefined ? yield* driver.health(false) : undefined
               return yield* new CannotSignIn({
                 provider,
                 message:
-                  chosen === undefined
-                    ? `${provider} has nothing to sign in to`
-                    : `${provider} can't sign in by ${chosen}`,
+                  chosen !== undefined
+                    ? `${provider} can't sign in by ${chosen}`
+                    : health?.status === "signed_out" && health.message !== undefined
+                      ? `sigma cannot sign in to ${provider}: ${health.message}`
+                      : `${provider} has nothing to sign in to`,
               })
             }
             // A second start while one runs gets that one: the check and the install share the lock.

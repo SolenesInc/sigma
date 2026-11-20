@@ -592,7 +592,7 @@ export type ProviderHealth = typeof ProviderHealth.Type
 
 export const ProviderSnapshot = Schema.Struct({
   id: Schema.String,
-  driver: Schema.String.annotate({ description: "Its kind: claude, openai or script." }),
+  driver: Schema.String.annotate({ description: "Its kind: claude, openai, agy or script." }),
   signIn: Schema.Array(AuthMethod).annotate({ description: "The ways to sign in, the first one preferred." }),
   health: ProviderHealth,
 })

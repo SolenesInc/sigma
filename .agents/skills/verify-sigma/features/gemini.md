@@ -119,8 +119,11 @@ Steps:
 
 ## Tests
 
-- Provider: `packages/sigma/test/agy.test.ts`, every use case above but
-  `gemini-remote`'s TUI path, over `fixtures/agy`.
+- Provider: `packages/sigma/test/agy.test.ts`, every use case above, over
+  `fixtures/agy`.
+- Screen: `packages/sigma/test/screen.test.ts`, `gemini-approval` (the card
+  shows the command) and `gemini-health` (a signed-out agy says how to sign
+  in).
 - Record new fixtures with `bun packages/sigma/test/support/record-agy-fixtures.ts [journey...]`.
 
 ## Gotchas
@@ -132,15 +135,21 @@ Steps:
   so what it spent is not counted.
 - An idle `Esc` on a job runs `session/cancel`, which in a turn would also
   cancel the turn.
-- `agy`'s own subagents show as plain calls; their late answer is a wake with no report.
+- `agy`'s own subagents show as plain calls; their late answer is a wake with no
+  report. They are not jobs, so a process closed while one works (a server stop,
+  the idle release) ends it without a report.
+- A turn ended by `Esc`, a denial or an error fires no Stop and no result for
+  what agy had in flight; sigma drops what agy says after stopping a wake
+  until it is next prompted or a job ends.
 - Each health probe opens and closes one `agy` session.
 
 ## With a real account
 
 Proves what `agy` does today. Follow the skill's
 [Real accounts](../SKILL.md#real-accounts): one run, `drive.ts r up --real-agy`,
-which runs the `agy` on your PATH with your own sign-in, in its default
-permission mode: never `--dangerously-skip-permissions`, never mode `auto` or
+which runs the `agy` on your PATH with your own sign-in and settings, in its
+default permission mode (a mode your agy settings set would skip
+`allow this call?`): never `--dangerously-skip-permissions`, never mode `auto` or
 `accept-edits`. First `drive.ts r serve` and
 `drive.ts r rpc providers/list '{}' --timeout 60000`: `agy` is `ready` with a
 version; otherwise stop and report what it shows. Give every wait

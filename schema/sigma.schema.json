@@ -2143,7 +2143,7 @@
             },
             "driver": {
               "type": "string",
-              "description": "Its kind: claude, openai or script."
+              "description": "Its kind: claude, openai, agy or script."
             },
             "signIn": {
               "type": "array",
@@ -2562,7 +2562,7 @@
           },
           "driver": {
             "type": "string",
-            "description": "Its kind: claude, openai or script."
+            "description": "Its kind: claude, openai, agy or script."
           },
           "signIn": {
             "type": "array",

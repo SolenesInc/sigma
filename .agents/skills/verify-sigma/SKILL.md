@@ -56,6 +56,7 @@ exchange instead of a model:
 drive.ts r1 up --fake-openai tool_call                 # fixtures/openai/tool_call.ndjson
 drive.ts r1 up --fake-openai text_answer,text_answer   # one after the other
 drive.ts r1 up --fake-claude bash_allowed              # fixtures/claude/bash_allowed.ndjson
+drive.ts r1 up --fake-agy approval_allowed             # fixtures/agy/approval_allowed.ndjson
 ```
 
 `--fake-openai` signs the run's home in to a fake ChatGPT that answers each
@@ -72,6 +73,9 @@ each to `evidence/fake-claude/log.ndjson`. Without `--fake-claude` it plays
 `models`, a signed-in Claude Code that answers the probe and nothing else, so
 a scripted run never starts a real Claude Code. The spawns count across
 the whole run, so a recording covers one journey: drive another in a new run.
+`agy` is the same: a fake `agy` plays `fixtures/agy/<fixture>.ndjson`, or
+`models` without `--fake-agy`, and logs what sigma sent it to
+`evidence/fake-agy/log.ndjson`.
 
 Type what the recording's user typed, in the same conversation: the fakes play
 their recordings whatever they are sent, and `differs` or a stalled run means
@@ -240,9 +244,15 @@ holding the account drives it cold, like this.
   waits on as `allow this call?`, and Claude Code withdraws a question it can
   answer itself. A sign-in that lives in those settings, such as an
   `apiKeyHelper` or an `env` block, does not reach the run.
+- **agy.** `drive.ts r up --real-agy` runs the `agy` on your PATH with your
+  own sign-in and settings, under your own `USER`. Sigma never changes its
+  permission mode, so it asks in agy's default mode, unless your agy settings
+  set another: check that an approval step shows `allow this call?`. Never
+  start it with `--dangerously-skip-permissions`.
 - **First check.** Before any step, `drive.ts r serve` and
   `drive.ts r rpc providers/list '{}'`: the provider is `ready`. ChatGPT names
-  your account; Claude shows its version and names your account and plan.
+  your account; Claude shows its version and names your account and plan;
+  `agy` shows its version.
   `drive.ts` runs everything else with `USER=ada`, but runs Claude Code under
   your own `USER`: on macOS Claude Code finds its sign-in in the keychain by
   `USER`, and under another name it signs in without your subscription, names

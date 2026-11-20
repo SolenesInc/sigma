@@ -588,7 +588,9 @@ export const setupOf = (client: SetupClient, scope: Scope.Scope, renderer: () =>
       closePicker: () => setView("picker", undefined),
       signIn: (current) => {
         if (view.signIn && view.signIn.phase !== "failed") return
-        const signedOut = view.providers.filter((provider) => provider.health.status === "signed_out")
+        const signedOut = view.providers.filter(
+          (provider) => provider.health.status === "signed_out" && provider.signIn.length > 0,
+        )
         const target = signedOut.find((provider) => provider.id === current) ?? signedOut[0]
         if (!target) return
         const method = remote() && target.signIn.includes("device_code") ? "device_code" : undefined

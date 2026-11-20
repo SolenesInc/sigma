@@ -245,7 +245,7 @@ const execCommand = Command.make(
 ).pipe(Command.withDescription("Send one prompt, print the answer, and exit"))
 
 const providerArgument = Argument.String("provider").pipe(
-  Argument.withDescription("The provider, such as claude or openai, or one config.toml names"),
+  Argument.withDescription("The provider, such as claude, openai or agy, or one config.toml names"),
 )
 
 const loginCommand = Command.make(

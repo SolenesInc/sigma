@@ -3,14 +3,17 @@
 // the frame sigma sends (a request by method, an answer by id, a notification by method); `emit_inbound` writes what
 // agy said; `hook` runs the Stop hook sigma gave the session as `additionalDirectories`, as agy does at a turn-over; and
 // `exit` ends the process. The ids sigma chose are mapped to the ones it sends now; `<workspace>` is the session's
-// folder. An account probe, a process whose folder is a `sigma-agy-probe-` one, plays `models.ndjson` instead.
+// folder. An account probe, a process whose folder is a `sigma-agy-probe-` one, plays FAKE_AGY_PROBE instead, by
+// default `models.ndjson`.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
 
 const dir = process.env.FAKE_AGY_DIR!
 mkdirSync(dir, { recursive: true })
 const probe = basename(process.cwd()).startsWith("sigma-agy-probe-")
-const fixture = probe ? join(import.meta.dir, "../../../../fixtures/agy/models.ndjson") : process.env.FAKE_AGY_FIXTURE!
+const fixture = probe
+  ? (process.env.FAKE_AGY_PROBE ?? join(import.meta.dir, "../../../../fixtures/agy/models.ndjson"))
+  : process.env.FAKE_AGY_FIXTURE!
 
 // A test's FakeAgy listens on log.sock to learn when a line is logged; without one, nothing listens.
 const pings = await Bun.connect({ unix: join(dir, "log.sock"), socket: { data: () => undefined } }).catch(
@@ -80,7 +83,7 @@ void (async () => {
 
 const write = (frame: unknown) => process.stdout.write(`${JSON.stringify(frame)}\n`)
 
-/** The next frame sigma sent that `wanted` takes; what it sends that the journey does not expect is logged and answered. */
+/** The next frame sigma sent that `wanted` takes; what it sends that the journey does not expect waits unanswered. */
 const receive = async (wanted: (frame: any) => boolean) => {
   while (true) {
     const index = inbound.findIndex(wanted)

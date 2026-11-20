@@ -25,12 +25,20 @@ export class FakeAgy {
     socket: { data: () => this.#wake(), close: () => this.#wake() },
   })
 
-  constructor(readonly journey: string) {}
+  /** `probe` is the journey each account probe plays. */
+  constructor(
+    readonly journey: string,
+    readonly probe = "models",
+  ) {}
 
   get options(): AgySettings {
     return {
       executable: EXECUTABLE,
-      env: { FAKE_AGY_FIXTURE: join(FIXTURES, `${this.journey}.ndjson`), FAKE_AGY_DIR: this.dir },
+      env: {
+        FAKE_AGY_FIXTURE: join(FIXTURES, `${this.journey}.ndjson`),
+        FAKE_AGY_PROBE: join(FIXTURES, `${this.probe}.ndjson`),
+        FAKE_AGY_DIR: this.dir,
+      },
     }
   }
 
