@@ -38,6 +38,11 @@ const usage = `usage: drive.ts <run> <command> [args]
   sigma <args...>                  run the sigma CLI against the run's home
   serve [sigma serve args...]      start the run's server in the foreground of a tmux window,
                                    e.g. serve --read-only, or --restart to replace the running one
+  fake-mcp <name> [header=value...]
+                                   serve a fake MCP server with one tool, echo, and register it with the
+                                   running server as <name>, with these headers, while its window runs;
+                                   each request it receives goes to evidence/fake-mcp-<name>.ndjson
+  fake-mcp-stop <name>             close that window, which ends the registration
   kill-server                      SIGKILL the server that holds the run's home lock
   rpc <method> [params-json] [--timeout MS]
                                    one raw JSON-RPC call over the run's socket (5 s)
@@ -649,6 +654,29 @@ const commands: Record<string, () => Promise<void> | void> = {
     if (!(await until(() => existsSync(socket) && holder() !== undefined && holder() !== replaced, 20_000)))
       fail(`the server did not take ${lock} in 20s:\n${tmux("capture-pane", "-p", "-t", "serve").stdout}`)
     console.log(`serving, pid ${lockOwner()!.pid}`)
+  },
+
+  "fake-mcp": async () => {
+    requireUp()
+    const [name, ...headers] = args
+    if (!name) fail(usage)
+    const log = join(evidence, `fake-mcp-${name}.ndjson`)
+    rmSync(log, { force: true })
+    openWindow(`mcp-${name}`, [join(import.meta.dir, "fake-mcp.ts"), socket, log, name!, ...headers])
+    const registered = () => tmux("capture-pane", "-p", "-t", `sigma:mcp-${name}`).stdout.includes("registered at")
+    if (!(await until(registered, 10_000)))
+      fail(`the fake MCP server did not register:\n${tmux("capture-pane", "-p", "-t", `sigma:mcp-${name}`).stdout}`)
+    record(`fake-mcp ${name} ${headers.map((header) => header.slice(0, header.indexOf("=") + 1) + "…").join(" ")}`)
+    console.log(`fake MCP server ${name} registered; its requests go to ${log}`)
+  },
+
+  "fake-mcp-stop": async () => {
+    requireUp()
+    const [name] = args
+    if (!name) fail(usage)
+    tmux("kill-window", "-t", `sigma:mcp-${name}`)
+    record(`fake-mcp-stop ${name}`)
+    console.log(`fake MCP server ${name} stopped; its registration ends with its connection`)
   },
 
   "kill-server": async () => {

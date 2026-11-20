@@ -1,5 +1,5 @@
 import { BunSocket } from "@effect/platform-bun"
-import { type Approvals, SigmaRpcs } from "@sigma/protocol"
+import { type Approvals, type McpServerRef, SigmaRpcs } from "@sigma/protocol"
 import { spawn } from "node:child_process"
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
@@ -27,6 +27,7 @@ export interface StartOptions {
   readonly effort?: string
   readonly approvals?: Approvals
   readonly instructions?: string
+  readonly mcpServers?: ReadonlyArray<McpServerRef>
 }
 
 const CLOSE_GRACE = "1 second"

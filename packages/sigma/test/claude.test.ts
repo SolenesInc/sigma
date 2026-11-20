@@ -2,7 +2,7 @@
 // Claude Code played by the fake `claude` replaying a recorded process per spawn.
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { type Duration, Effect } from "effect"
 import { TestClock } from "effect/testing"
@@ -14,6 +14,7 @@ import {
   type ProviderSnapshot,
   USER_KIND,
 } from "@sigma/protocol"
+import { ECHO_TOOL, FAKE_INSTRUCTIONS, FakeMcpServer } from "./support/mcp.ts"
 import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
 import { TestTargets } from "./support/targets.ts"
 import {
@@ -1178,6 +1179,133 @@ test("subagent-claude: a Claude subagent that hands back its report answers with
   expect(transcript(child.view.seen()).slice(-2)).toEqual(["assistant: noon in CET", "run_end: answered"])
   // The parent's Agent call keeps the report too, so a retelling of the parent still has it.
   expect(results(session.view.seen())).toEqual([expect.objectContaining({ text: "noon in CET", isError: false })])
+})
+
+/** A header value the fake MCP server is registered with, which nothing but the request to it may hold. */
+const SECRET = "Bearer s3cret-header-value"
+const FAKE_SERVERS = [{ name: "fake", description: "Echoes text" }]
+
+/** Registers `mcp` as `fake` from `client`, with `SECRET` as its Authorization; it lasts while the client is connected. */
+const registerFake = async (client: RawClient, mcp: FakeMcpServer) => {
+  const registered = client.watch<{ name: string }>("mcp/register", {
+    name: "fake",
+    url: mcp.url,
+    headers: { Authorization: SECRET },
+  })
+  await registered.until((items) => items.length > 0)
+  expect(registered.items).toEqual([{ name: "fake" }])
+}
+
+/** Starts a Claude conversation named `id` that uses `fake`, runs mcp_tool's prompt in it, and waits for its end. */
+const runWithFake = async (client: RawClient, cwd: string, id: string) => {
+  const started = await client.call("conversation/start", {
+    author: person("ada"),
+    cwd,
+    id,
+    provider: "claude",
+    approvals: "auto",
+    mcpServers: FAKE_SERVERS,
+  })
+  expect(started.result.conversation).toBe(id)
+  const view = watchView(client, id)
+  await view.until(() => true)
+  await submit(client, id, "echo root, then have a subagent echo sub")
+  await view.until((watch) => watch.seen().some((entry) => entry.kind === "sigma.subagent"))
+  const subagent = String(
+    (view.seen().find((entry) => entry.kind === "sigma.subagent")!.data as { conversation: number }).conversation,
+  )
+  const child = watchView(client, subagent)
+  await child.until(childEnded)
+  await view.until(settled(1))
+  return { view, child }
+}
+
+/** Every file under `dir`, as bytes read as text. */
+const filesUnder = (dir: string): string[] =>
+  readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), "latin1"))
+
+test("mcp-claude, mcp-register, mcp-start: Claude Code and its subagent call a registered server's tool through sigma, with its headers and the conversation's id", async () => {
+  using mcp = new FakeMcpServer()
+  using claude = new FakeClaude("mcp_tool")
+  await using server = await runningServer([], { claude: claude.options })
+  const client = await RawClient.connect(server.home.socket)
+  try {
+    await registerFake(client, mcp)
+    const { view, child } = await runWithFake(client, server.home.dir, "talk")
+    // Claude Code was offered the server's instructions and its tool as the server listed them, under its own name.
+    const initialize = claude.log().find((entry) => entry.initialize)!.initialize
+    expect(initialize.sdkMcpServerManifests.fake.initializeResult.instructions).toBe(FAKE_INSTRUCTIONS)
+    expect(initialize.sdkMcpServerManifests.fake.toolsListResult.tools).toEqual([ECHO_TOOL])
+    // The root's call and its subagent's reached the server with the registered header and the root's id.
+    expect(
+      mcp
+        .calls()
+        .map((call) => [call.body.params, call.headers.authorization, call.headers["sigma-root-conversation"]]),
+    ).toEqual([
+      [{ name: "echo", arguments: { text: "root" } }, SECRET, "talk"],
+      [{ name: "echo", arguments: { text: "sub" } }, SECRET, "talk"],
+    ])
+    // Claude Code got each result as the server gave it, structured content too.
+    expect(claude.mcpAnswers().map((answer) => answer.result)).toEqual([
+      { content: [{ type: "text", text: "root" }], structuredContent: { echoed: "root" } },
+      { content: [{ type: "text", text: "sub" }], structuredContent: { echoed: "sub" } },
+    ])
+    // The conversation lists the server it uses; no header value is in what a client reads, or in the home's files.
+    const listed = (await client.call("conversation/list")).result as Array<{ id: string; mcpServers?: unknown }>
+    expect(listed.find((info) => info.id === "talk")?.mcpServers).toEqual(FAKE_SERVERS)
+    expect(JSON.stringify([listed, view.seen(), child.seen()])).not.toContain("s3cret")
+    expect(filesUnder(server.home.dir).some((text) => text.includes("s3cret"))).toBe(false)
+  } finally {
+    client.close()
+  }
+})
+
+test("mcp-claude: two conversations on one server each name themselves to the MCP server", async () => {
+  using mcp = new FakeMcpServer()
+  using claude = new FakeClaude("mcp_tool", "mcp_tool")
+  await using server = await runningServer([], { claude: claude.options })
+  const client = await RawClient.connect(server.home.socket)
+  try {
+    await registerFake(client, mcp)
+    await runWithFake(client, server.home.dir, "one")
+    await runWithFake(client, server.home.dir, "two")
+    expect(mcp.calls().map((call) => call.headers["sigma-root-conversation"])).toEqual(["one", "one", "two", "two"])
+  } finally {
+    client.close()
+  }
+})
+
+test("mcp-gone: once the client that registered a server disconnects, each call of its tools is refused with a message naming it", async () => {
+  using mcp = new FakeMcpServer()
+  using claude = new FakeClaude("mcp_tool", "mcp_tool")
+  await using server = await runningServer([], { claude: claude.options })
+  const registering = await RawClient.connect(server.home.socket)
+  const client = await RawClient.connect(server.home.socket)
+  try {
+    await registerFake(registering, mcp)
+    await runWithFake(client, server.home.dir, "one")
+    registering.close()
+    // Sigma ends its session with the server once the registration is gone.
+    await mcp.until((fake) => fake.ended(), "sigma to end its session with the MCP server")
+    await runWithFake(client, server.home.dir, "two")
+    expect(mcp.calls()).toHaveLength(2)
+    // What sigma answered each call; the replayed Claude Code goes on as it was recorded.
+    const refused = "The MCP server fake is not available: no client connected to sigma registers it now."
+    expect(
+      claude
+        .mcpAnswers()
+        .slice(2)
+        .map((answer) => answer.result),
+    ).toEqual([
+      { content: [{ type: "text", text: refused }], isError: true },
+      { content: [{ type: "text", text: refused }], isError: true },
+    ])
+  } finally {
+    registering.close()
+    client.close()
+  }
 })
 
 /**

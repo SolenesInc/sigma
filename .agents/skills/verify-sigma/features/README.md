@@ -154,6 +154,10 @@ lists when a change touches them.
 - [Instructions and skills](./skills.md) (people, agents): `skills/list`, `/name` and `$name`
   carry a skill's `SKILL.md` with a message; OpenAI is told the `AGENTS.md`
   files and skills; Claude Code runs its own skills, but on a target is told them too.
+- [MCP servers](./mcp-servers.md) (people, agents): a client registers a server with
+  `mcp/register`, `conversation/start` or `--mcp-server` names those a conversation
+  uses, and Claude Code calls their tools through sigma with the registered headers
+  and `Sigma-Root-Conversation`; a server no client registers refuses each call.
 - [Code mode](./code-mode.md) (people, agents): ChatGPT's code-mode-only models get one
   `codemode` tool whose scripts call sigma's tools in a sandbox, asking like
   direct calls, and survive a server restart.

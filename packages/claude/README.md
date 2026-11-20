@@ -4,12 +4,17 @@ Claude Code as a harness of the hosted run (`@sigma/hosted`): the only package t
 `claudeAdapter(settings)` is the adapter, whose runs are `claude.run` tasks; `claudeAccount` is a Claude Code
 instance's account.
 
+A conversation's MCP servers (`ProcessConfig.mcp`) are each an in-process server under the server's name, offering
+its instructions and tools as the server listed them; each call goes back to sigma, which holds the server's address
+and headers and makes the request, so Claude Code never holds them.
+
 Sigma's own tools (`ProcessConfig.own`) are served on the in-process `sigma` MCP server with `alwaysLoad`: a local
 conversation's Claude Code gets the worker tools there beside its own tools and the person's settings. Each call,
 `mcp__sigma__<name>`, is framed under sigma's name, its permission prompt allowed at once, and handed to `runOwn` of
 the conversation that made it, the run's or, by the `agent_id` its PreToolUse named, a subagent's job, which runs it
 as a `pi.tool` task. A conversation on a target other than `local` runs with remote hands: Claude Code's own tools,
-settings, connectors and MCP servers are off, and it acts only through sigma's tools, on the target. Its processes run in the target's own working folder, and
+settings, connectors and MCP servers are off, and it acts only through sigma's tools, on the target, and the
+conversation's MCP servers. Its processes run in the target's own working folder, and
 their system prompt's `append` is the conversation's prompt sections, rendered through its env (`@sigma/hosted`'s
 remote hands).
 

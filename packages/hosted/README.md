@@ -17,6 +17,8 @@ server: the worker tools), and whose prompt sections go to its system prompt bef
 harness calls sigma's tools (`ownTools`, `ProcessConfig.own`) each through `Host.runOwn`: `Callbacks.recordOwn` of the
 run or the job that made it commits it with a `pi.tool` task, even when the harness gives up on it, and
 `Callbacks.runOwn` answers with that task's result.
+`options.mcp` gives a run the conversation's MCP servers (`ProcessConfig.mcp`, `McpOffer`): each one's listing and
+a call that reaches it, which an adapter that `takesMcp` offers its harness. The listing is part of the process key.
 `options.remoteHands` is how a remote conversation's runs reach sigma with remote hands (D9): the harness's own tools are off
 and every tool of the conversation but code mode is its own, each call's answer followed by `remoteHands.notice`. Its process starts in the target's working folder
 (`remoteHands.cwd`), with the conversation's sections as its system prompt's addition, and `remoteHands.retell` says what a

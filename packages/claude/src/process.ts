@@ -22,6 +22,7 @@ import {
   type Host,
   Inbox,
   type LastRequest,
+  type McpOffer,
   type OwnResult,
   type Part,
   type ProcessConfig,
@@ -32,6 +33,8 @@ import {
   textOf,
 } from "@sigma/hosted"
 import type { ToolCall, Usage } from "@sigma/models"
+import { Server } from "@modelcontextprotocol/sdk/server/index.js"
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { Clock, Effect } from "effect"
 import { z } from "zod"
 import { claudeEnvironment, toolSearchSettings } from "./environment.ts"
@@ -71,6 +74,25 @@ const mcpResult = (result: OwnResult): { content: McpPart[]; isError: boolean } 
   ),
   isError: result.isError,
 })
+
+/**
+ * One of the conversation's MCP servers as an in-process server of Claude Code's: its instructions and tools as the
+ * server gave them, and each call passed to it through sigma, which holds its address and headers, and answered with
+ * its result unchanged. Claude Code names its tools `mcp__<server>__<tool>`.
+ */
+const proxyServer = (offer: McpOffer) => {
+  const server = new Server(
+    { name: offer.name, version: "1.0.0" },
+    { capabilities: { tools: {} }, ...(offer.instructions === undefined ? {} : { instructions: offer.instructions }) },
+  )
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: offer.tools as never }))
+  server.setRequestHandler(
+    CallToolRequestSchema,
+    async (request, extra) =>
+      (await offer.call(request.params.name, request.params.arguments ?? {}, extra.signal)) as never,
+  )
+  return { type: "sdk" as const, name: offer.name, instance: server as never }
+}
 
 /** The call id Claude Code gives an MCP tool's handler. */
 const toolUseOf = (extra: unknown) => {
@@ -335,10 +357,11 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
         settingSources,
         // With remote hands Claude Code has sigma's tools alone; ToolSearch stays so it can load a deferred tool.
         ...(remoteHands === undefined ? {} : { tools: ["ToolSearch"], strictMcpConfig: true }),
-        ...(config.own.length === 0
-          ? {}
-          : {
-              mcpServers: {
+        mcpServers: {
+          ...Object.fromEntries(config.mcp.map((offer) => [offer.name, proxyServer(offer)])),
+          ...(config.own.length === 0
+            ? {}
+            : {
                 sigma: createSdkMcpServer({
                   name: "sigma",
                   // Kept out of Claude Code's tool search, which would hide them until it searched (F55).
@@ -361,8 +384,8 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
                     },
                   })),
                 }),
-              },
-            }),
+              }),
+        },
         // Claude Code's own idle compaction would compact with no run to commit its summary; sigma's does it (D7).
         settings: { ...toolSearch, idleCompaction: false },
         extraArgs: { ...extraArgs(settings.args ?? []), "replay-user-messages": null },
@@ -583,4 +606,5 @@ export const claudeAdapter = (
   api: "claude-code",
   settings,
   open: openConnection,
+  takesMcp: true,
 })

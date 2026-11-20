@@ -54,6 +54,50 @@
       },
       "stream": false
     },
+    "mcp/register": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Letters, digits, - and _; not sigma, which names sigma's own tools. Its tools are named mcp__<name>__<tool>."
+          },
+          "url": {
+            "type": "string",
+            "description": "Its Streamable HTTP endpoint, http or https."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Sent on every request to it. Kept in the server's memory only: never stored, logged or shown to a client."
+          }
+        },
+        "required": [
+          "name",
+          "url"
+        ],
+        "additionalProperties": true
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": true,
+        "description": "Once, when it is registered. The registration lasts while the stream does: ending the stream, or the connection, removes it. A later registration of the same name stands in for it while both last."
+      },
+      "error": {
+        "$ref": "#/$defs/InvalidMcpServerEncoded"
+      },
+      "stream": true
+    },
     "conversation/start": {
       "params": {
         "type": "object",
@@ -92,6 +136,28 @@
           "instructions": {
             "type": "string",
             "description": "Instructions the model follows in this conversation, beside its own. They are fixed for the conversation's life, and its subagents start from them."
+          },
+          "mcpServers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Letters, digits, - and _; not sigma, which names sigma's own tools. Its tools are named mcp__<name>__<tool>."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "One line that says what the server is for."
+                }
+              },
+              "required": [
+                "name",
+                "description"
+              ],
+              "additionalProperties": true
+            },
+            "description": "The MCP servers whose tools it is offered, each by the name a client registers it with (mcp/register). Fixed for the conversation's life; its forks and subagents use them too. A name no client has registered offers no tools, or the tools it listed last, and each call is refused."
           },
           "author": {
             "type": "object",
@@ -170,6 +236,9 @@
           },
           {
             "$ref": "#/$defs/TargetUnavailableEncoded"
+          },
+          {
+            "$ref": "#/$defs/InvalidMcpServerEncoded"
           }
         ]
       },
@@ -293,6 +362,28 @@
             "instructions": {
               "type": "string",
               "description": "What the client that started it asked the model to follow, beside its own."
+            },
+            "mcpServers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Letters, digits, - and _; not sigma, which names sigma's own tools. Its tools are named mcp__<name>__<tool>."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "One line that says what the server is for."
+                  }
+                },
+                "required": [
+                  "name",
+                  "description"
+                ],
+                "additionalProperties": true
+              },
+              "description": "The MCP servers it uses, as it started with them."
             },
             "ended": {
               "type": "object",
@@ -2898,6 +2989,29 @@
     }
   },
   "$defs": {
+    "InvalidMcpServerEncoded": {
+      "type": "object",
+      "properties": {
+        "_tag": {
+          "type": "string",
+          "enum": [
+            "InvalidMcpServer"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "_tag",
+        "name",
+        "message"
+      ],
+      "additionalProperties": true
+    },
     "ReadOnlyServerEncoded": {
       "type": "object",
       "properties": {

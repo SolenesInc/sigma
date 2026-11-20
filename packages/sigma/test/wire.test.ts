@@ -625,6 +625,56 @@ test("start-with-id: starting a conversation with an id it already has answers w
   client.close()
 })
 
+test("mcp-register: a name or address sigma cannot register is refused by name, as is a conversation that names sigma's own tools", async () => {
+  await using server = await runningServer()
+  const client = await RawClient.connect(server.home.socket)
+  const refusal = async (params: unknown) => {
+    const reply = await client.watch("mcp/register", params).ended
+    return [errorTag(reply), reply.error?.message]
+  }
+  expect(await refusal({ name: "sigma", url: "http://127.0.0.1:1/mcp" })).toEqual([
+    "InvalidMcpServer",
+    expect.stringContaining("sigma names sigma's own tools"),
+  ])
+  expect(await refusal({ name: "files", url: "file:///etc/passwd" })).toEqual([
+    "InvalidMcpServer",
+    expect.stringContaining("the MCP server files needs an http or https URL"),
+  ])
+  expect(
+    (await client.watch("mcp/register", { name: "two words", url: "http://127.0.0.1:1/mcp" }).ended).error,
+  ).toBeDefined()
+  const own = await client.call("conversation/start", {
+    author: person("ada"),
+    cwd: "/work",
+    mcpServers: [{ name: "sigma", description: "mine" }],
+  })
+  expect(errorTag(own)).toBe("InvalidMcpServer")
+  client.close()
+})
+
+test("mcp-start: a conversation keeps the MCP servers it started with, and a fork of it uses them too", async () => {
+  await using server = await runningServer([{ text: "hello" }])
+  const client = await RawClient.connect(server.home.socket)
+  const servers = [
+    { name: "attn", description: "Tracks work" },
+    { name: "docs", description: "Reads the docs" },
+  ]
+  await client.call("conversation/start", { author: person("ada"), id: "with", cwd: "/work", mcpServers: servers })
+  await client.call("conversation/start", { author: person("ada"), id: "without", cwd: "/work" })
+  const view = watchView(client, "with")
+  await submit(client, "with", "hi")
+  await view.until(settled(1))
+  const at = view.seen().at(-1)!.id
+  await client.call("conversation/fork", { author: person("ada"), conversation: "with", at, id: "forked" })
+  const listed = (await client.call("conversation/list")).result as Array<{ id: string; mcpServers?: unknown }>
+  expect(Object.fromEntries(listed.map((info) => [info.id, info.mcpServers]))).toEqual({
+    with: servers,
+    without: undefined,
+    forked: servers,
+  })
+  client.close()
+})
+
 const call = (name: string, input: Record<string, unknown>, agent?: string) => ({
   tool: { name, input },
   ...(agent === undefined ? {} : { agent }),

@@ -38,6 +38,7 @@ import {
   UsageDoc,
   type Harness,
   LiveDoc,
+  type McpServerRef,
 } from "@sigma/harness"
 import {
   type ConversationId,
@@ -82,6 +83,8 @@ import {
   CONTINUED_KIND,
   COMPACTION_KIND,
   WITHDRAWN_KIND,
+  InvalidMcpServer,
+  OWN_MCP_SERVER,
   type View,
   type ViewItem,
   type Window,
@@ -140,6 +143,7 @@ import {
   targetSection,
 } from "./targets.ts"
 import { lineageOf, listConversations, rootName, titleOf, wireId } from "./conversations.ts"
+import { makeMcpServers, type McpServers } from "./mcp.ts"
 import { readableNdJsonRpc } from "./wire-errors.ts"
 
 /**
@@ -176,6 +180,8 @@ export type KernelHarnessService = {
     env: ExecutionEnv,
     conversation?: ConversationId,
   ) => Workspace
+  /** The MCP servers connected clients register, which conversations name. */
+  readonly mcpServers: McpServers
 }
 
 export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessService>()("sigma/KernelHarness") {
@@ -214,6 +220,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         })
         const stoppedTooOften = new Map<ConversationId, number>()
         const registry = createRegistry()
+        const mcpServers = makeMcpServers()
         // Closed after the harness, which stops the scripts first. Closing asks a stuck worker to stop and does not wait
         // for it (F19).
         const sandbox = yield* Effect.acquireRelease(
@@ -295,6 +302,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           title: (conversation) => titleOf(harness, conversation),
           rootConversation: (conversation) => rootName(harness, conversation),
           processes,
+          mcp: (agent, root) => mcpServers.offers(agent.mcpServers ?? [], root),
           remoteHands: {
             cwd: (target) => targetLoop(home, target),
             notice: targetNotice(targets, () => harness),
@@ -382,7 +390,19 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         if (!readOnly) for (const [id, stops] of yield* countStops(harness)) stoppedTooOften.set(id, stops)
         if (!readOnly) yield* forgetReaching(harness)
         const status = yield* followTreeStatus(harness)
-        return { home, harness, stoppedTooOften, status, images, models, readOnly, targets, envOf, workspaceOf }
+        return {
+          home,
+          harness,
+          stoppedTooOften,
+          status,
+          images,
+          models,
+          readOnly,
+          targets,
+          envOf,
+          workspaceOf,
+          mcpServers,
+        }
       }).pipe(Effect.orDie),
     )
 }
@@ -442,8 +462,19 @@ const toWindow = (window: Window | undefined): ConversationWindow | undefined =>
 
 const Handlers = SigmaRpcs.toLayer(
   Effect.gen(function* () {
-    const { home, harness, stoppedTooOften, status, images, models, readOnly, targets, envOf, workspaceOf } =
-      yield* KernelHarness
+    const {
+      home,
+      harness,
+      stoppedTooOften,
+      status,
+      images,
+      models,
+      readOnly,
+      targets,
+      envOf,
+      workspaceOf,
+      mcpServers,
+    } = yield* KernelHarness
     const connectionQueue = yield* ConnectionQueue
     const providers = yield* Providers
     const setup = yield* Setup.make(providers.instances, yield* committedSignIns(harness, readOnly))
@@ -555,6 +586,7 @@ const Handlers = SigmaRpcs.toLayer(
       id: string | undefined,
       approvals: "ask" | "auto" | undefined,
       instructions: string | undefined,
+      mcpServers: ReadonlyArray<McpServerRef> | undefined,
       ask: ModelAsk,
       author: Author,
     ) =>
@@ -575,6 +607,7 @@ const Handlers = SigmaRpcs.toLayer(
             ownership: { kind: "ownerless" },
             agent: { ...model, cwd, ...(instructions === undefined ? {} : { instructions }) },
             ...(remote === undefined ? {} : { target: remote }),
+            ...(mcpServers === undefined ? {} : { mcpServers }),
             init: (tx, created) =>
               Effect.gen(function* () {
                 started = created
@@ -694,10 +727,23 @@ const Handlers = SigmaRpcs.toLayer(
 
     return SigmaRpcs.of({
       initialize: () => Effect.succeed({ version: VERSION, protocol: PROTOCOL_VERSION, readOnly }),
-      "conversation/start": ({ cwd, target, id, approvals, instructions, author, ...ask }) =>
+      "mcp/register": ({ name, url, headers }) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            // A registration lasts while its stream does, which the connection's end ends; it holds the server.
+            yield* lifetime.hold
+            yield* mcpServers.register(name, url, headers ?? {})
+            return Stream.concat(Stream.make({ name }), Stream.never)
+          }),
+        ),
+      "conversation/start": ({ cwd, target, id, approvals, instructions, mcpServers: servers, author, ...ask }) =>
         Effect.gen(function* () {
-          if (id === undefined)
-            return yield* startConversation(cwd, yield* reach(target), undefined, approvals, instructions, ask, author)
+          const own = servers?.find((server) => server.name === OWN_MCP_SERVER)
+          if (own !== undefined)
+            return yield* new InvalidMcpServer({ name: own.name, message: `${OWN_MCP_SERVER} names sigma's own tools` })
+          const start = (id: string | undefined, reached: Parameters<typeof startConversation>[1]) =>
+            startConversation(cwd, reached, id, approvals, instructions, servers, ask, author)
+          if (id === undefined) return yield* start(undefined, yield* reach(target))
           // A conversation's number opens it, as its chosen id does, and answers with the id every other call names it
           // by; a number that names none is refused below.
           const numbered = kernelNumber(id)
@@ -722,9 +768,7 @@ const Handlers = SigmaRpcs.toLayer(
           const reached = yield* reach(target)
           return yield* choosing.withPermits(1)(
             Effect.gen(function* () {
-              return (
-                (yield* chosen) ?? (yield* startConversation(cwd, reached, id, approvals, instructions, ask, author))
-              )
+              return (yield* chosen) ?? (yield* start(id, reached))
             }),
           )
         }),

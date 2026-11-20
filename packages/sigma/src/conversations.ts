@@ -169,6 +169,7 @@ const info = (harness: Harness, conversation: ConversationRecord): Effect.Effect
       approvals: approvals?.auto === true ? "auto" : "ask",
       ...(lineage === undefined ? {} : { lineage }),
       ...(instructions === undefined ? {} : { instructions }),
+      ...(agent.mcpServers === undefined ? {} : { mcpServers: agent.mcpServers }),
       ...(ended === undefined ? {} : { ended }),
     }
   })

@@ -29,6 +29,8 @@ export interface Adapter<S = any> {
    * does, returns within it; `undefined` when the harness waits as long as the tool takes (D15).
    */
   readonly ownToolLimit?: Duration.Input
+  /** Whether the harness is offered a conversation's MCP servers (`ProcessConfig.mcp`); one that is not gets none. */
+  readonly takesMcp?: boolean
 }
 
 /** What a process is started with. */
@@ -47,6 +49,31 @@ export type ProcessConfig<S = unknown> = {
   readonly own: ReadonlyArray<ToolRegistration>
   /** A remote conversation's process, with remote hands (D9); absent for a local conversation's. */
   readonly remoteHands?: RemoteHandsProcess
+  /**
+   * The MCP servers of the conversation, with the tools each listed, which the harness is offered under the server's
+   * name. A live process keeps the tools it started with, so they are part of its key.
+   */
+  readonly mcp: ReadonlyArray<McpOffer>
+}
+
+/** A JSON object as an MCP server sent it, passed on unchanged. */
+export type McpObject = Readonly<Record<string, unknown>>
+
+/**
+ * One MCP server of a conversation as a harness is offered it: what it said of itself and its tools, passed on as it
+ * sent them, and how a call reaches it. Sigma makes every request, so no harness holds its address or headers.
+ */
+export interface McpOffer {
+  readonly name: string
+  /** What the server's `initialize` told its clients to follow; absent when it said nothing. */
+  readonly instructions?: string
+  /** Its `tools/list`, each tool as the server listed it. */
+  readonly tools: ReadonlyArray<McpObject & { readonly name: string }>
+  /**
+   * Calls `tool` for the conversation, answering with the server's `tools/call` result. A server no client has
+   * registered now, or one that cannot be reached, answers an error result that names it.
+   */
+  readonly call: (tool: string, args: McpObject, signal?: AbortSignal) => Promise<McpObject>
 }
 
 /**
@@ -106,6 +133,7 @@ export const processKey = (config: ProcessConfig) => {
     maxTurns: agent.maxTurns,
     rootConversation: config.rootConversation,
     own: config.own.map(({ name, description, parameters }) => ({ name, description, parameters })),
+    mcp: config.mcp.map(({ name, instructions, tools }) => ({ name, instructions, tools })),
   })
 }
 

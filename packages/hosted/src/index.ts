@@ -6,6 +6,8 @@ export {
   type Host,
   usesRemoteHands,
   type LastRequest,
+  type McpObject,
+  type McpOffer,
   type RemoteHandsProcess,
   type OwnResult,
   ownTools,

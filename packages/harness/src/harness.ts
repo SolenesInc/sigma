@@ -93,6 +93,7 @@ import type {
   DocumentReader,
   HarnessSettings,
   HookApi,
+  McpServerRef,
   RegistryReader,
   RegistrySnapshot,
   Settings,
@@ -149,6 +150,8 @@ export type ConversationCreateOptions = {
    * get their parent's.
    */
   readonly target?: string
+  /** The MCP servers it uses, written in the creating commit; no later change can set them. A fork and a subagent get their parent's. */
+  readonly mcpServers?: ReadonlyArray<McpServerRef>
   readonly init?: ConversationInit
 }
 
@@ -663,6 +666,11 @@ class HarnessHost<T extends ToolRegistration> implements Harness<T> {
                 : yield* tx.createConversation({ ownership: target.ownership })
           if (options.agent !== undefined) yield* configure(tx, record.id, options.agent)
           if (options.target !== undefined) (yield* tx.doc(AgentDoc, record.id)).target = options.target
+          if (options.mcpServers !== undefined && options.mcpServers.length > 0)
+            (yield* tx.doc(AgentDoc, record.id)).mcpServers = options.mcpServers.map(({ name, description }) => ({
+              name,
+              description,
+            }))
           if (options.init !== undefined) yield* options.init(tx, record.id)
           return record.id
         }),

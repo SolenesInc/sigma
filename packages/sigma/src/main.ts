@@ -48,6 +48,13 @@ const instructionsFlag = Flag.String("instructions").pipe(
   Flag.optional,
 )
 
+const mcpServerFlag = Flag.String("mcp-server").pipe(
+  Flag.withDescription(
+    "Start the conversation with this MCP server, as <name>=<description>; a connected client registers its address. Repeat for each",
+  ),
+  Flag.atLeast(0),
+)
+
 const targetFlag = Flag.String("target").pipe(
   Flag.withDescription(
     "Start the conversation on this target, as the home's target_connector names it: its tools act on that computer",
@@ -68,6 +75,13 @@ const startFlags = {
   model: modelFlag,
   effort: effortFlag,
   instructions: instructionsFlag,
+  mcpServers: mcpServerFlag,
+}
+
+/** `--mcp-server <name>=<description>` as the server it names. */
+const mcpServerOf = (value: string) => {
+  const at = value.indexOf("=")
+  return at === -1 ? { name: value, description: "" } : { name: value.slice(0, at), description: value.slice(at + 1) }
 }
 
 const startWith = (flags: {
@@ -78,6 +92,7 @@ const startWith = (flags: {
   readonly model: Option.Option<string>
   readonly effort: Option.Option<string>
   readonly instructions: Option.Option<string>
+  readonly mcpServers: ReadonlyArray<string>
 }): StartOptions => ({
   ...Option.match(flags.target, { onNone: () => ({}), onSome: (target) => ({ target }) }),
   // A local folder is the one the person means from here; a path on another computer is taken as given.
@@ -90,6 +105,7 @@ const startWith = (flags: {
   ...Option.match(flags.model, { onNone: () => ({}), onSome: (model) => ({ model }) }),
   ...Option.match(flags.effort, { onNone: () => ({}), onSome: (effort) => ({ effort }) }),
   ...Option.match(flags.instructions, { onNone: () => ({}), onSome: (instructions) => ({ instructions }) }),
+  ...(flags.mcpServers.length === 0 ? {} : { mcpServers: flags.mcpServers.map(mcpServerOf) }),
 })
 
 /** Why these flags cannot start a conversation, if they cannot: a folder here means nothing on another computer. */

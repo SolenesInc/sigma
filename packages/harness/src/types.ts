@@ -166,6 +166,12 @@ export type CompactionSettings = Partial<CompactionPolicy> & {
   readonly modelOverrides?: Readonly<Record<string, Partial<CompactionPolicy>>>
 }
 
+/**
+ * An MCP server a conversation uses: its name, which a connected client registers with its address and headers, and a
+ * line that says what it is for. No secret is stored with it.
+ */
+export type McpServerRef = { readonly name: string; readonly description: string }
+
 /** A conversation's stored choices: names, not objects. Unset fields follow the host. */
 export type AgentState = {
   model?: ModelRef
@@ -182,6 +188,8 @@ export type AgentState = {
   cwd?: string
   /** The computer its tools act on: set when the conversation is created, never changed; absent for `local`. */
   target?: string
+  /** The MCP servers it uses, by name: set when the conversation is created, never changed. */
+  mcpServers?: McpServerRef[]
   /** Tool rounds one run takes at most. */
   maxTurns?: number
   compaction?: CompactionSettings
@@ -227,6 +235,8 @@ export type Agent<T extends ToolRegistration = ToolRegistration> = {
   readonly cwd?: string
   /** Absent for `local`. */
   readonly target?: string
+  /** The MCP servers it uses; absent for none. */
+  readonly mcpServers?: readonly McpServerRef[]
   readonly maxTurns?: number
   readonly compaction?: CompactionSettings
 }

@@ -10,6 +10,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, wr
 import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
 import type { ScriptStep } from "@sigma/models"
+import { FakeMcpServer } from "./mcp.ts"
 import { deadline, RawClient } from "./raw.ts"
 import { sigmaEnv, stopServer } from "./terminal.ts"
 import {
@@ -74,6 +75,11 @@ interface Journey {
   readonly start?: Record<string, unknown>
   /** Run the `sigma` binary as the server, so it can be killed, rather than a server in process. */
   readonly binary?: true
+  /**
+   * Serve a fake MCP server, register it as `fake` before the conversation starts, and start the conversation with it,
+   * as the provider tests do.
+   */
+  readonly mcp?: true
   /** The steps of the home's `script` provider, which a worker the journey's Claude starts there plays. */
   readonly script?: ReadonlyArray<ScriptStep>
   readonly play: (session: Session) => Promise<void>
@@ -267,6 +273,17 @@ const journeys: Record<string, Journey> = {
         "Use the mcp__sigma__start_worker tool with task_name echo and message: Reply with exactly: echo ok. Then call mcp__sigma__wait_worker with timeout_ms 120000, and reply with exactly the text the worker sent.",
       ),
   },
+  mcp_tool: {
+    ask: "auto",
+    mcp: true,
+    play: async (s) => {
+      await s.submit(
+        "Call the mcp__fake__echo tool with text root. Then use the Agent tool to start a general-purpose subagent with this task: call the mcp__fake__echo tool with text sub and reply with exactly what it returned. Then reply with exactly the subagent's answer.",
+      )
+      await (await s.subagent()).until(settled(1), TURN)
+      await s.settle()
+    },
+  },
   worker_subagent: {
     play: async (s) => {
       await s.submit(
@@ -355,6 +372,15 @@ const open = async (name: string, journey: Journey) => {
   }
   let server = await serve()
   let client = await RawClient.connect(home.socket)
+  const mcp = journey.mcp ? new FakeMcpServer() : undefined
+  if (mcp !== undefined) {
+    const registered = client.watch("mcp/register", {
+      name: "fake",
+      url: mcp.url,
+      headers: { Authorization: "Bearer recorded" },
+    })
+    await registered.until((items) => items.length > 0)
+  }
   const conversation = (
     await client.call("conversation/start", {
       author: person("ada"),
@@ -362,6 +388,7 @@ const open = async (name: string, journey: Journey) => {
       provider: "claude",
       model: MODEL,
       approvals: journey.ask ?? "ask",
+      ...(mcp === undefined ? {} : { mcpServers: [{ name: "fake", description: "Echoes text" }] }),
       ...journey.start,
     })
   ).result.conversation as string
@@ -483,6 +510,7 @@ const open = async (name: string, journey: Journey) => {
     close: async () => {
       client.close()
       await server.stop()
+      mcp?.[Symbol.dispose]()
       await recorderIdle(to)
       rmSync(home.dir, { recursive: true, force: true })
     },

@@ -293,6 +293,47 @@ export const ModelSelection = Schema.Struct({
 })
 export type ModelSelection = typeof ModelSelection.Type
 
+/** A name an MCP server can be registered and listed by: letters, digits, `-` and `_`, as tool names allow. */
+export const McpServerName = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]+$/)).annotate({
+  description:
+    "Letters, digits, - and _; not sigma, which names sigma's own tools. Its tools are named mcp__<name>__<tool>.",
+})
+
+/** An MCP server a conversation uses, by the name a client registers it with. */
+export const McpServerRef = Schema.Struct({
+  name: McpServerName,
+  description: Schema.String.annotate({ description: "One line that says what the server is for." }),
+})
+export type McpServerRef = typeof McpServerRef.Type
+
+/** The name sigma's own tools are served under, which no MCP server can take. */
+export const OWN_MCP_SERVER = "sigma"
+
+/** An MCP server's registration or listing was refused: the message names the server and why. */
+export class InvalidMcpServer extends Schema.TaggedError<InvalidMcpServer>()("InvalidMcpServer", {
+  name: Schema.String,
+  message: Schema.String,
+}) {}
+
+export const RegisterMcpServer = Rpc.make("mcp/register", {
+  payload: {
+    name: McpServerName,
+    url: Schema.String.annotate({ description: "Its Streamable HTTP endpoint, http or https." }),
+    headers: Schema.optionalKey(
+      Schema.Record(Schema.String, Schema.String).annotate({
+        description:
+          "Sent on every request to it. Kept in the server's memory only: never stored, logged or shown to a client.",
+      }),
+    ),
+  },
+  success: Schema.Struct({ name: Schema.String }).annotate({
+    description:
+      "Once, when it is registered. The registration lasts while the stream does: ending the stream, or the connection, removes it. A later registration of the same name stands in for it while both last.",
+  }),
+  error: InvalidMcpServer,
+  stream: true,
+})
+
 export const StartConversation = Rpc.make("conversation/start", {
   payload: {
     cwd: Schema.String.annotate({ description: "The directory the conversation works in, a path on its target." }),
@@ -324,6 +365,12 @@ export const StartConversation = Rpc.make("conversation/start", {
           "Instructions the model follows in this conversation, beside its own. They are fixed for the conversation's life, and its subagents start from them.",
       }),
     ),
+    mcpServers: Schema.optionalKey(
+      Schema.Array(McpServerRef).annotate({
+        description:
+          "The MCP servers whose tools it is offered, each by the name a client registers it with (mcp/register). Fixed for the conversation's life; its forks and subagents use them too. A name no client has registered offers no tools, or the tools it listed last, and each call is refused.",
+      }),
+    ),
     author: Author.annotate({
       description: `Who started it; a new conversation's first entry, ${STARTED_KIND}, names them. An id that names a conversation records nothing.`,
     }),
@@ -335,7 +382,14 @@ export const StartConversation = Rpc.make("conversation/start", {
         "The model it runs, defaults applied, with the provider's default model when none was named; for an id that names one, that conversation's.",
     }),
   }),
-  error: Schema.Union([ReadOnlyServer, InvalidConversationId, UnknownProvider, UnknownEffort, TargetUnavailable]),
+  error: Schema.Union([
+    ReadOnlyServer,
+    InvalidConversationId,
+    UnknownProvider,
+    UnknownEffort,
+    TargetUnavailable,
+    InvalidMcpServer,
+  ]),
 })
 
 /** An image a person attaches to their input. */
@@ -468,6 +522,9 @@ export const ConversationInfo = Schema.Struct({
     Schema.String.annotate({
       description: "What the client that started it asked the model to follow, beside its own.",
     }),
+  ),
+  mcpServers: Schema.optionalKey(
+    Schema.Array(McpServerRef).annotate({ description: "The MCP servers it uses, as it started with them." }),
   ),
   ended: Schema.optionalKey(
     Schema.Struct({
@@ -943,6 +1000,7 @@ export const WatchTasks = Rpc.make("tasks/watch", {
 
 export const SigmaRpcs = RpcGroup.make(
   Initialize,
+  RegisterMcpServer,
   StartConversation,
   ListConversations,
   Submit,

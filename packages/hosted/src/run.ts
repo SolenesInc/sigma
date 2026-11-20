@@ -48,6 +48,7 @@ import { Effect } from "effect"
 import {
   type Adapter,
   usesRemoteHands,
+  type McpOffer,
   ownTools,
   type ProcessConfig,
   processKey,
@@ -91,6 +92,11 @@ export interface HostedRunOptions {
   readonly offered?: (agent: Agent) => ReadonlyArray<Extension>
   /** How a remote conversation's runs reach sigma with remote hands (D9). */
   readonly remoteHands: RemoteHandsOptions
+  /**
+   * The MCP servers a conversation's harness is offered, for the root conversation `root`, which every request names.
+   * Default none.
+   */
+  readonly mcp?: (agent: Agent, root: string) => Effect.Effect<ReadonlyArray<McpOffer>>
 }
 
 export interface RemoteHandsOptions {
@@ -461,7 +467,7 @@ const makeRunTask = (
           const offered = shared.options.offered?.(agent) ?? []
           const instructions = yield* instructionsOf(runtime, api, agent, offered)
           const own = ownTools(agent, offered)
-          const config: ProcessConfig = {
+          const draft: Omit<ProcessConfig, "mcp"> = {
             agent,
             settings,
             rootConversation: yield* shared.options.rootConversation(runtime.conversationId),
@@ -469,6 +475,12 @@ const makeRunTask = (
             ...(instructions === undefined ? {} : { instructions }),
             ...(cwd === undefined ? {} : { remoteHands: { cwd, append: appendOf(runtime, api, agent, own) } }),
           }
+          // The servers' requests name the conversation's root.
+          const mcp =
+            adapter.takesMcp === true
+              ? yield* shared.options.mcp?.(agent, draft.rootConversation) ?? Effect.succeed([])
+              : []
+          const config: ProcessConfig = { ...draft, mcp }
           const notice = target === undefined ? undefined : remoteHands.notice(runtime.conversationId, target, "run")
           const run: RunContext = {
             runtime,
