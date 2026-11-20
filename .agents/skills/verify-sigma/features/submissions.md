@@ -8,7 +8,8 @@ model goes on from where it was; with no run ended yet, or after one that
 answered, it is refused `NothingToContinue` with a message saying why. `/withdraw` takes
 back the newest prompt waiting in the queue, shown as `withdrew: <text>`, and
 `submission/withdraw` takes back any queued submission; a withdrawn prompt
-never runs.
+never runs. `submission/update` changes a waiting prompt instead of taking
+it back ([Queue](./queue.md), `queue-update`).
 
 ## Sub-features
 

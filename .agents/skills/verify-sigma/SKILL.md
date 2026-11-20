@@ -157,7 +157,7 @@ to settle and stops it, and the next client starts one on the new code.
   `models/list`, `auth/start`, `auth/respond`, `auth/cancel`, `auth/logout`,
   `server/stop`, `conversation/fork`,
   `conversation/reset`, `conversation/compact`, `conversation/continue`,
-  `submission/withdraw`, `conversation/configure`, `conversation/context`,
+  `submission/withdraw`, `submission/update`, `conversation/configure`, `conversation/context`,
   `usage/get` and `tasks/watch` (a stream: `rpc` prints its first chunk).
   `conversation/list` and `server/stop` take no params. `providers/list` and
   `models/list` take an object, at least `'{}'`; `skills/list` takes

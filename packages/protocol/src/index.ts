@@ -829,7 +829,7 @@ export const Update = Rpc.make("submission/update", {
     conversation: ConversationId,
     submission: Schema.Int.annotate({ description: "An `id` of the view's pi.inbox `items`, a person's input." }),
     author: Author.annotate({
-      description: `Who changed it; the ${USER_KIND} entry it is placed as names them as \`editedBy\`. It keeps the author who wrote it.`,
+      description: `Who changed it; the ${USER_KIND} entry it is placed as names them as \`editedBy\`. It keeps the author who wrote it; after several edits only the last editor is named.`,
     }),
     text: Schema.optionalKey(
       Schema.String.annotate({

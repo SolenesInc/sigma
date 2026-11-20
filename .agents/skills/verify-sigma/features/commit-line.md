@@ -76,7 +76,7 @@ Preconditions:
 - **Refusals.** Each of `conversation/start`, `conversation/submit`,
   `conversation/interrupt`, `conversation/reset`, `conversation/configure`,
   `conversation/fork`, `conversation/compact`, `conversation/continue`,
-  `submission/withdraw` and `conversation/select_model`, called with valid
+  `submission/withdraw`, `submission/update` and `conversation/select_model`, called with valid
   params through `drive.ts r rpc`, fails `ReadOnlyServer` with
   `the server opened /tmp/sigma-verify/r/home read-only, so it changes nothing; stop it and run sigma serve to make changes`.
   `drive.ts r sigma exec hi` exits 1 with the same line on stderr.

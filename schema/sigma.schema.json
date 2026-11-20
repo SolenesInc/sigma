@@ -1382,7 +1382,7 @@
               "name"
             ],
             "additionalProperties": true,
-            "description": "Who changed it; the sigma.user entry it is placed as names them as `editedBy`. It keeps the author who wrote it."
+            "description": "Who changed it; the sigma.user entry it is placed as names them as `editedBy`. It keeps the author who wrote it; after several edits only the last editor is named."
           },
           "text": {
             "type": "string",
