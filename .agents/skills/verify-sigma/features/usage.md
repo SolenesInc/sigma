@@ -6,7 +6,8 @@ what the conversation spent and how full its context is after the newest
 answer. `/usage` opens a `USAGE` panel with this conversation's tokens and
 every conversation's, by model, with the input the provider read from its
 prompt cache apart, in [Prompt cache](./prompt-cache.md); `usage/get` answers
-the same ledger.
+the same ledger. An [ephemeral run](./ephemeral-run.md) is counted nowhere:
+its spend goes only to its caller.
 
 ## Sub-features
 

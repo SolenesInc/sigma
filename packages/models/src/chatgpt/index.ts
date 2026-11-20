@@ -215,7 +215,8 @@ const post = (chatgpt: ChatGpt, baseUrl: string, body: unknown, sessionId: strin
 const responseEvents = (
   chatgpt: ChatGpt,
   options: ChatGptOptions,
-  template: AssistantMessage,
+  /** Made as the stream runs, so its timestamp is the request's. */
+  makeTemplate: () => AssistantMessage,
   made: () => { readonly body: unknown; readonly inputs: ReadonlyMap<string, string> },
   sessionId: string | undefined,
   onPayload?: (body: unknown) => Promise<unknown>,
@@ -226,6 +227,7 @@ const responseEvents = (
         Effect.sync(() => new AbortController()),
         (controller) => Effect.sync(() => controller.abort()),
       )
+      const template = makeTemplate()
       let inputs: ReadonlyMap<string, string> = new Map()
       let body: unknown
       try {
@@ -288,7 +290,7 @@ export const chatGptProvider = (id: string, chatgpt: ChatGpt, options: ChatGptOp
     responseEvents(
       chatgpt,
       options,
-      templateOf(model.api, model.provider, model.id),
+      () => templateOf(model.api, model.provider, model.id),
       () => ({
         inputs: grammarInputs(getCurrentTools(context.messages)),
         body: requestBody(
@@ -310,9 +312,9 @@ export const chatGptProvider = (id: string, chatgpt: ChatGpt, options: ChatGptOp
  * The body of an ephemeral run's one request: the caller's system prompt alone as `instructions`, the prompt, no tools,
  * and a schema as ChatGPT's strict structured output, as `codex exec --output-schema` asks for it.
  */
-export const onceBody = (model: string, request: OnceRequest) => ({
+const onceBody = (model: string, request: OnceRequest) => ({
   model,
-  ...(request.effort === undefined || request.effort === "off" ? {} : { reasoning: { effort: request.effort } }),
+  ...(request.effort === undefined ? {} : { reasoning: { effort: request.effort } }),
   instructions: request.system ?? "",
   input: [{ type: "message", role: "user", content: [{ type: "input_text", text: request.prompt }] }],
   tools: [],
@@ -325,7 +327,7 @@ export const onceBody = (model: string, request: OnceRequest) => ({
     : { text: { format: { type: "json_schema", name: "answer", schema: request.schema, strict: true } } }),
 })
 
-/** An ephemeral run: one request, so one turn, whose answer's text is the schema's value when there is a schema. */
+/** An ephemeral run: one request, so one turn; with a schema, the answer's text is its value as JSON. */
 const once = (id: string, chatgpt: ChatGpt, options: ChatGptOptions) => (request: OnceRequest) =>
   Effect.gen(function* () {
     const model = request.model ?? (yield* defaultModelOf(chatgpt.account))
@@ -334,7 +336,7 @@ const once = (id: string, chatgpt: ChatGpt, options: ChatGptOptions) => (request
     const ended = yield* responseEvents(
       chatgpt,
       options,
-      templateOf(CHATGPT_API, id, model),
+      () => templateOf(CHATGPT_API, id, model),
       () => ({ body, inputs: new Map() }),
       undefined,
     ).pipe(Stream.runLast)
@@ -343,21 +345,7 @@ const once = (id: string, chatgpt: ChatGpt, options: ChatGptOptions) => (request
     if (final === undefined || final.stopReason === "error" || final.stopReason === "aborted")
       return yield* failure(final?.errorMessage ?? STREAM_CUT)
     const text = final.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("")
-    let output: unknown
-    if (request.schema !== undefined) {
-      try {
-        output = JSON.parse(text)
-      } catch {
-        return yield* failure(`the answer is not JSON: ${text}`)
-      }
-    }
-    return {
-      text,
-      ...(output === undefined ? {} : { output }),
-      model,
-      turns: 1,
-      usage: final.usage,
-    } satisfies OnceAnswer
+    return { text, model, turns: 1, usage: final.usage } satisfies OnceAnswer
   })
 
 /** A ChatGPT instance: its account, and the provider its conversations run on. */

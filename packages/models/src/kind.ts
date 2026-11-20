@@ -92,7 +92,10 @@ export interface OnceRequest {
 
 export interface OnceAnswer {
   readonly text: string
-  /** The value a schema asked for, as the provider returned it; the caller checks it against the schema. */
+  /**
+   * The value a schema asked for, when the provider returns one of its own, as Claude Code's structured output; absent,
+   * the text is that value as JSON. The caller checks it against the schema.
+   */
   readonly output?: unknown
   /** The model that answered, as the provider names it. */
   readonly model: string

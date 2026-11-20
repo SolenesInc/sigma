@@ -14,6 +14,8 @@ own. ChatGPT, Claude Code and the scripted model answer one; `agy` does not.
 - `ephemeral-schema` with a JSON Schema, answers a value that matches it, or fails saying where it does not
 - `ephemeral-turn-limit` a turn limit ends a Claude Code run that reaches it, saying so
 - `ephemeral-concurrent` runs at once each answer their own prompt, beside a conversation's working run
+- `ephemeral-refused` is refused saying why on `agy`, which cannot run one, on an unknown provider, and on a read-only server
+- `ephemeral-stop` a server asked to stop, or replaced by `serve --restart`, answers the runs in flight first
 - `ephemeral-cli` `sigma ephemeral` starts a server when none runs, prints the answer or `--json`, reads `-` from stdin, and exits 1 saying why it failed
 
 ## How to get to it
@@ -52,6 +54,23 @@ Preconditions:
   `--schema is not JSON`, exit 1. With the fake's replies used up,
   `drive.ts r sigma ephemeral --provider openai --model gpt-6.1-terra go`
   exits 1 and stderr says what ChatGPT answered.
+  `drive.ts r rpc ephemeral/run '{"prompt": "hi", "provider": "agy"}'` fails
+  `EphemeralFailed`, `agy cannot answer an ephemeral run`.
+
+Claude Code, each journey in a run of its own with a fake Claude Code
+replaying its recording, then `down`:
+
+- **The answer.** `drive.ts c1 up --fake-claude ephemeral_text`, then
+  `drive.ts c1 sigma ephemeral --json --provider claude --model claude-haiku-5-5 --max-turns 1 --system 'You answer in one word.' 'Is the sky blue on a clear day?'`:
+  `"text":"Yes."`, `"turns":1`. `evidence/fake-claude/log.ndjson` shows the
+  spawn's argv with `--tools=`, `--setting-sources=` and
+  `--no-session-persistence`, and `initialize` with that `systemPrompt`.
+- **A schema.** `drive.ts c2 up --fake-claude ephemeral_schema`, then the same
+  command with `--max-turns 2 --system 'You classify questions.'` and the
+  schema above: `"output":{"answer":"yes"}`, `"turns":2`.
+- **The turn limit.** `drive.ts c3 up --fake-claude ephemeral_turn_limit`, then
+  the schema command again: stderr
+  `Claude Code ended the run at its turn limit of 2`, exit 1.
 
 ## Contexts
 
@@ -66,8 +85,8 @@ Preconditions:
   StructuredOutput tool, which it counts as a second turn, and a turn limit it
   reaches ends the run. The scripted model answers with its next step, or
   `You said: <prompt>`. `agy` fails `EphemeralFailed`.
-- **Idle.** A run holds the server like a watch, so an idle server outlives
-  it.
+- **Server restart.** `server/stop` and `serve --restart` wait for the runs
+  in flight, as they wait for a conversation's.
 
 ## Tests
 
@@ -85,16 +104,22 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - ephemeral-turn-limit: an ephemeral run that reaches its turn limit on Claude Code fails saying so
 - ephemeral-concurrent: ephemeral runs on Claude Code at once each answer their own prompt, while a conversation's run works beside them
 
+Wire, `packages/sigma/test/wire.test.ts`:
+
+- ephemeral-refused: an ephemeral run is refused saying why on agy, which cannot run one, and on a read-only server
+
 Stack, `packages/sigma/test/stack.test.ts`:
+
+- ephemeral-stop, ephemeral-cli: sigma ephemeral answers when the server is asked to stop mid-run, since a stop waits for it
 
 - ephemeral-cli, server-on-demand: sigma ephemeral starts a server, prints the answer, and leaves no conversation
 - ephemeral-cli, ephemeral-schema: sigma ephemeral --json reads a prompt from stdin and prints the answer and the value its schema matches
-- ephemeral-cli, ephemeral-schema: sigma ephemeral exits 1 saying why, for a schema that is not JSON and an answer that is not
+- ephemeral-cli, ephemeral-schema: sigma ephemeral exits 1 saying why, for a schema that is not JSON, no turns and an answer that is not
 
 ## Gotchas
 
-- `server/stop` does not wait for an ephemeral run: a run in flight when the
-  server stops fails its caller, and nothing of it needs recovering.
+- A run cut off by a crash is not resumed: nothing of it was committed, and
+  its caller sees the error.
 - A read-only server refuses it with `ReadOnlyServer`, since it spends on the
   person's account.
 - `fixtures/claude/ephemeral_turn_limit.ndjson` is hand-built from the schema

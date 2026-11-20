@@ -109,7 +109,8 @@ client                  a program connected to the server's socket that draws
 approval                a tool call waiting for a person to allow or deny it;
                         the first answer counts
 ephemeral run           one prompt a provider answers with no tools, outside
-                        any conversation; nothing of it is committed
+                        any conversation: not a run of one, with no entries
+                        and no run_end; nothing of it is committed
 ```
 
 ## Rules that keep it what it is

@@ -2964,3 +2964,20 @@ test("target-worker-fork: a worker's calls and a fork's calls act on their paren
   expect([await targetOf(spawned(view, "/root/helper")), await targetOf(fork)]).toEqual(["box", "box"])
   client.close()
 })
+
+test("ephemeral-refused: an ephemeral run is refused saying why on agy, which cannot run one, and on a read-only server", async () => {
+  await using server = await runningServer()
+  const client = await RawClient.connect(server.home.socket)
+  const onAgy = await client.call("ephemeral/run", { provider: "agy", prompt: "hi" })
+  expect(errorTag(onAgy)).toBe("EphemeralFailed")
+  expect(onAgy.error!.message).toBe("agy cannot answer an ephemeral run")
+  const unknown = await client.call("ephemeral/run", { provider: "nope", prompt: "hi" })
+  expect(errorTag(unknown)).toBe("UnknownProvider")
+  client.close()
+
+  await using viewer = await runningServer([], { readOnly: true })
+  const reader = await RawClient.connect(viewer.home.socket)
+  const readOnly = await reader.call("ephemeral/run", { provider: "script", prompt: "hi" })
+  expect(errorTag(readOnly)).toBe("ReadOnlyServer")
+  reader.close()
+})

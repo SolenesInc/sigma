@@ -103,6 +103,7 @@ import {
   Scope,
   Semaphore,
   Stream,
+  SubscriptionRef,
 } from "effect"
 import * as RpcServer from "effect/rpc/RpcServer"
 import type { ModelAsk } from "./config.ts"
@@ -496,8 +497,14 @@ const Handlers = SigmaRpcs.toLayer(
     // The harness's idle leaves out work under background tasks, such as a subagent and its reporter, so the hold also
     // waits for every task left; a blocked task waits for a person, not for the server. A Claude Code job lives as long
     // as its process, whose own hold keeps the server up, and which a stop closes, cutting the job off (D5).
+    // Ephemeral runs in flight: they are no task, so a stop waits for them by this count.
+    const ephemerals = yield* SubscriptionRef.make(0)
     const quiet = Effect.gen(function* () {
       for (;;) {
+        yield* SubscriptionRef.changes(ephemerals).pipe(
+          Stream.takeUntil((count) => count === 0),
+          Stream.runDrain,
+        )
         yield* harness.waitForIdle
         const live = (yield* harness.inspect).tasks.filter(
           (task) => task.state.kind !== "blocked" && !JOB_KINDS.has(task.record.kind),
@@ -1034,9 +1041,18 @@ const Handlers = SigmaRpcs.toLayer(
               return usage ?? { models: {}, tools: {} }
             }),
       "tasks/watch": () => watchTasks,
-      // Held like a run, so an idle server outlives it; it commits nothing.
+      // Held like a run, so an idle server outlives it and a stop waits for it; it commits nothing.
       "ephemeral/run": writing((payload) =>
-        Effect.scoped(Effect.andThen(lifetime.hold, runEphemeral(providers, payload))),
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* lifetime.hold
+            yield* Effect.acquireRelease(
+              SubscriptionRef.update(ephemerals, (count) => count + 1),
+              () => SubscriptionRef.update(ephemerals, (count) => count - 1),
+            )
+            return yield* runEphemeral(providers, payload)
+          }),
+        ),
       ),
       "conversation/interrupt": writing(({ conversation: id, author }) =>
         Effect.gen(function* () {

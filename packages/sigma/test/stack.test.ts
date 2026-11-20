@@ -7,6 +7,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, watch
 import { open, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
+import { FakeOpenAi, signIn } from "./support/openai.ts"
 import { TestTargets } from "./support/targets.ts"
 import { DEADLINE, deadline, RawClient, TEST_TIMEOUT } from "./support/raw.ts"
 import {
@@ -465,7 +466,7 @@ test("ephemeral-cli, server-on-demand: sigma ephemeral starts a server, prints t
   )
   expect(result).toMatchObject({ code: 0, stdout: "You said: hello there\n", stderr: "" })
   expect(await conversationsOf(sigmaHome)).toEqual([])
-}, 30_000)
+})
 
 test("ephemeral-cli, ephemeral-schema: sigma ephemeral --json reads a prompt from stdin and prints the answer and the value its schema matches", async () => {
   const env = await scriptEnv(home(), [{ text: '{"answer":"yes"}' }])
@@ -484,15 +485,49 @@ test("ephemeral-cli, ephemeral-schema: sigma ephemeral --json reads a prompt fro
     provider: "script",
     turns: 1,
   })
-}, 30_000)
+})
 
-test("ephemeral-cli, ephemeral-schema: sigma ephemeral exits 1 saying why, for a schema that is not JSON and an answer that is not", async () => {
+test("ephemeral-cli, ephemeral-schema: sigma ephemeral exits 1 saying why, for a schema that is not JSON, no turns and an answer that is not", async () => {
   const env = await scriptEnv(home())
   const unreadable = await finished(sigma(["ephemeral", "--schema", "{nope", "go"], env))
   expect(unreadable).toMatchObject({ code: 1, stdout: "", stderr: "--schema is not JSON\n" })
+  const noTurns = await finished(sigma(["ephemeral", "--max-turns", "0", "go"], env))
+  expect(noTurns).toMatchObject({ code: 1, stdout: "", stderr: "--max-turns takes 1 or more\n" })
   const notJson = await finished(sigma(["ephemeral", "--schema", '{"type":"object"}', "go"], env))
   expect(notJson).toMatchObject({ code: 1, stdout: "", stderr: "the answer is not JSON: You said: go\n" })
-}, 30_000)
+})
+
+test("ephemeral-stop, ephemeral-cli: sigma ephemeral answers when the server is asked to stop mid-run, since a stop waits for it", async () => {
+  await using fake = new FakeOpenAi()
+  const gate = Promise.withResolvers<void>()
+  fake.play("ephemeral_text", {}, gate.promise)
+  const sigmaHome = home()
+  await signIn(sigmaHome)
+  const run = sigma(
+    [
+      "ephemeral",
+      "--provider",
+      "openai",
+      "--model",
+      "gpt-6.1-terra",
+      "--effort",
+      "low",
+      "--system",
+      "You answer in one word.",
+      "Is the sky blue on a clear day?",
+    ],
+    sigmaEnv(sigmaHome, { SIGMA_OPENAI_URL: fake.base }),
+  )
+  await deadline(fake.requested(1), DEADLINE, "the ephemeral run's request")
+  const client = await RawClient.connect(sigmaHome.socket)
+  const stopped = client.call("server/stop")
+  // Answered after the stop on the same connection, so the server has the stop in hand.
+  await client.call("conversation/list")
+  gate.resolve()
+  expect(await finished(run)).toMatchObject({ code: 0, stdout: "Yes.\n", stderr: "" })
+  await deadline(stopped, DEADLINE, "the stop's answer")
+  client.close()
+})
 
 test("target-cli, target-unavailable: sigma exec refuses --target without --cwd, and says why a target cannot be reached", async () => {
   const env = await scriptEnv(home(), [{ text: "never" }])

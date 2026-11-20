@@ -190,16 +190,7 @@ const scriptOnce =
       const message = event?.type === "done" ? event.message : event?.type === "error" ? event.error : undefined
       if (message === undefined || message.stopReason === "error")
         return yield* new ProviderError({ message: message?.errorMessage ?? "the script ended without an answer" })
-      const text = contentText(message.content)
-      let output: unknown
-      if (request.schema !== undefined) {
-        try {
-          output = JSON.parse(text)
-        } catch {
-          return yield* new ProviderError({ message: `the answer is not JSON: ${text}` })
-        }
-      }
-      return { text, ...(output === undefined ? {} : { output }), model: model.id, turns: 1, usage: message.usage }
+      return { text: contentText(message.content), model: model.id, turns: 1, usage: message.usage }
     })
 
 /** The `script` provider as a home's instance: always ready, its two models, nothing to sign in to. */

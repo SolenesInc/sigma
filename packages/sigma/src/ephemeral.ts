@@ -41,20 +41,28 @@ export const runEphemeral = (providers: Providers["Service"], payload: Payload) 
         ...(payload.maxTurns === undefined ? {} : { maxTurns: payload.maxTurns }),
       })
       .pipe(Effect.mapError((error) => new EphemeralFailed({ message: error.message })))
+    let value = answer.output
+    if (checker !== undefined && value === undefined) {
+      try {
+        value = JSON.parse(answer.text)
+      } catch {
+        return yield* new EphemeralFailed({ message: `the answer is not JSON: ${answer.text}` })
+      }
+    }
     if (checker !== undefined) {
-      const checked = checker.validate(answer.output)
+      const checked = checker.validate(value)
       if (!checked.ok) {
         const [first] = checked.errors
         const where = first === undefined ? "" : ` (${first.path || "/"}: ${first.message})`
         return yield* new EphemeralFailed({
-          message: `the answer does not match the schema${where}: ${JSON.stringify(answer.output) ?? "no value"}`,
+          message: `the answer does not match the schema${where}: ${JSON.stringify(value)}`,
         })
       }
     }
     const { cost, input, output, cacheRead, cacheWrite, totalTokens } = answer.usage
     return {
       text: answer.text,
-      ...(checker === undefined ? {} : { output: answer.output }),
+      ...(checker === undefined ? {} : { output: value }),
       provider: selection.provider,
       model: answer.model,
       turns: answer.turns,
