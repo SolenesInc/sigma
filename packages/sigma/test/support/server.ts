@@ -16,7 +16,7 @@ import type { AgySettings } from "@sigma/agy"
 import type { ClaudeProcessSettings } from "@sigma/claude"
 import { REPORT_KIND } from "@sigma/hosted"
 import { mkdtempSync, realpathSync, rmSync } from "node:fs"
-import { type Clock, type Duration, Effect, Exit, Layer, Logger, Scope } from "effect"
+import { Clock, type Duration, Effect, Exit, Layer, Logger, Scope } from "effect"
 import type { HomeConfig } from "../../src/config.ts"
 import { homeAt, type Home } from "../../src/home.ts"
 import { openAiOptions, type OpenAiOptions, type ProviderOptions } from "../../src/providers.ts"
@@ -109,14 +109,16 @@ export const servingUntilIdle = async (
   home: Home,
   idleGrace: Duration.Input,
   script: ReadonlyArray<ScriptStep> = [],
-  options: ServerOptions = {},
+  options: ServerOptions & { readonly idleClock?: Clock.Clock } = {},
 ) => {
   const listening = Promise.withResolvers<void>()
   const exited = Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Lifetime
       listening.resolve()
-      yield* lifetime.ended
+      yield* options.idleClock === undefined
+        ? lifetime.ended
+        : Effect.provideService(lifetime.ended, Clock.Clock, options.idleClock)
     }).pipe(
       Effect.provide(
         serverLayer(home, {
@@ -131,6 +133,22 @@ export const servingUntilIdle = async (
   )
   await Promise.race([listening.promise, exited])
   return { exited }
+}
+
+/**
+ * A clock for the server's idle wait under which no grace passes until the test calls `pass`, and every grace passes
+ * at once after it: the test, not the machine's speed, decides when the server would go idle.
+ */
+export const idleGrace = () => {
+  const passed = Promise.withResolvers<void>()
+  const clock: Clock.Clock = new Proxy(Clock.Clock.defaultValue(), {
+    get: (target, key) => {
+      if (key === "sleep") return () => Effect.promise(() => passed.promise)
+      const value = Reflect.get(target, key)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
+  return { clock, pass: () => passed.resolve() }
 }
 
 /** The environment of a `sigma` binary answering from `script`. */

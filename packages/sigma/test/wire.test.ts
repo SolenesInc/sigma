@@ -6,6 +6,7 @@ import { TestTargets } from "./support/targets.ts"
 import type { ScriptStep } from "@sigma/models"
 import { DEADLINE, deadline, errorTag, hangUpMidAnswer, RawClient } from "./support/raw.ts"
 import {
+  idleGrace,
   person,
   runEnds,
   runningServer,
@@ -233,18 +234,25 @@ test("wire-unknown: watching a conversation that does not exist says so", async 
 
 test("server-idle-exit: the server exits once no client is connected and nothing is running", async () => {
   const home = tempHome()
-  const served = await deadline(servingUntilIdle(home, "200 millis"), DEADLINE, "server listening")
+  const grace = idleGrace()
+  const served = await deadline(
+    servingUntilIdle(home, "1 hour", [], { idleClock: grace.clock }),
+    DEADLINE,
+    "server listening",
+  )
   const client = await RawClient.connect(home.socket)
   const conversation = await start(client)
   await opened(watchView(client, conversation))
   client.close()
+  grace.pass()
   await deadline(served.exited, DEADLINE, "server exit")
 })
 
 test("server-idle-exit: a submission's run keeps the server up after its client leaves, past the idle grace", async () => {
   const home = tempHome()
+  const grace = idleGrace()
   const served = await deadline(
-    servingUntilIdle(home, "50 millis", [{ text: "one two three four", delayMs: 100 }]),
+    servingUntilIdle(home, "1 hour", [{ text: "one two three four", delayMs: 100 }], { idleClock: grace.clock }),
     DEADLINE,
     "server listening",
   )
@@ -253,6 +261,7 @@ test("server-idle-exit: a submission's run keeps the server up after its client 
   // No watch: only the submission's run keeps the server up once the client goes.
   await submit(client, conversation, "count")
   client.close()
+  grace.pass()
   await deadline(served.exited, DEADLINE, "server exit")
 
   // A server that went idle mid-run would have left no answer and no run_end.
@@ -271,13 +280,19 @@ test("server-idle-exit: a submission's run keeps the server up after its client 
 
 test("server-idle-exit, child-tools: a subagent's work keeps the server up after its client leaves, past the idle grace", async () => {
   const home = tempHome()
+  const grace = idleGrace()
   const served = await deadline(
-    servingUntilIdle(home, "50 millis", [
-      call("start_worker", { task_name: "writer", message: "count", fork_turns: "none" }),
-      { text: "spawned" },
-      { text: "one two three four", delayMs: 100, agent: "/root/writer" },
-      { text: "heard it" },
-    ]),
+    servingUntilIdle(
+      home,
+      "1 hour",
+      [
+        call("start_worker", { task_name: "writer", message: "count", fork_turns: "none" }),
+        { text: "spawned" },
+        { text: "one two three four", delayMs: 100, agent: "/root/writer" },
+        { text: "heard it" },
+      ],
+      { idleClock: grace.clock },
+    ),
     DEADLINE,
     "server listening",
   )
@@ -285,6 +300,7 @@ test("server-idle-exit, child-tools: a subagent's work keeps the server up after
   const conversation = await start(client)
   await submit(client, conversation, "delegate")
   client.close()
+  grace.pass()
   await deadline(served.exited, DEADLINE, "server exit")
 
   // A server that went idle while the subagent worked would have mailed nothing back to the parent.
