@@ -1,4 +1,4 @@
-// The messages a Claude Code process is fed, as the async iterable the SDK reads its prompt from.
+// A queue read as an async iterable: the frames a job takes in turn, or the messages an adapter feeds its harness.
 export class Inbox<T> implements AsyncIterable<T> {
   readonly #queued: T[] = []
   #waiting: ((result: IteratorResult<T>) => void) | undefined

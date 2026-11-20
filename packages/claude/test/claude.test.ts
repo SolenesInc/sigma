@@ -13,13 +13,15 @@ import {
   type Conversation,
   createRegistry,
   defineExtension,
+  type Extension,
   type Harness,
   openHarness,
   ResetEntry,
   UsageDoc,
   UserEntry,
 } from "@sigma/harness"
-import { type ClaudeProcessesOptions, claudeRunTasks, makeClaudeProcesses } from "../src/index.ts"
+import { type HostedProcessesOptions, type HostedRunOptions, hostedRunTasks, makeHostedProcesses } from "@sigma/hosted"
+import { claudeAdapter } from "../src/index.ts"
 
 const FIXTURES = join(import.meta.dir, "../../../fixtures/claude")
 const FAKE = join(import.meta.dir, "../../sigma/test/support/fake-claude")
@@ -58,17 +60,25 @@ const spawns = (claude: Fake) =>
     .map((entry) => entry.argv as string[])
 
 /** A Harness running Claude conversations on `claude`, closed with the scope. */
-const open = (claude: Fake, reports: Array<unknown> = [], processes: ClaudeProcessesOptions = {}) =>
+const open = (
+  claude: Fake,
+  reports: Array<unknown> = [],
+  processes: HostedProcessesOptions = {},
+  extensions: ReadonlyArray<Extension> = [],
+  offered?: HostedRunOptions["offered"],
+) =>
   Effect.gen(function* () {
     // The fake writes the conversation's directory into its recorded paths as given; on macOS /tmp is /private/tmp.
     const dir = realpathSync(mkdtempSync("/tmp/sigma-harness-"))
     dirs.push(dir)
     const registry = createRegistry()
-    const tasks = claudeRunTasks({
-      settings: (provider) => (provider === "claude" ? claude.settings : undefined),
-      processes: yield* makeClaudeProcesses(processes),
+    const tasks = hostedRunTasks({
+      adapters: [claudeAdapter((provider) => (provider === "claude" ? claude.settings : undefined))],
+      processes: yield* makeHostedProcesses(processes),
+      ...(offered === undefined ? {} : { offered }),
     })
     registry.install(defineExtension({ name: "claude", tasks: tasks.tasks }))
+    for (const extension of extensions) registry.install(extension)
     const harness = yield* Effect.acquireRelease(
       Effect.flatMap(openSqliteStorage(join(dir, "kernel.sqlite")), (storage) =>
         openHarness(storage, {
@@ -130,6 +140,36 @@ test("image-input: an image in a prompt reaches Claude Code beside its text", as
     { type: "text", text: "what is this" },
     { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
   ])
+})
+
+test("claude-offered-sections: Claude Code's system prompt gets the sections of the extensions it is offered, before the instructions, and no others", async () => {
+  const claude = fake("text")
+  const offered = defineExtension({
+    name: "offered",
+    sections: [{ key: "workers", render: () => Effect.succeed("Workers are agents of their own.") }],
+  })
+  const other = defineExtension({
+    name: "other",
+    sections: [{ key: "elsewhere", render: () => Effect.succeed("Not for Claude Code.") }],
+  })
+  await run(
+    Effect.gen(function* () {
+      const { harness, cwd } = yield* open(claude, [], {}, [offered, other], (agent) =>
+        agent.extensions.filter((extension) => extension.name === "offered"),
+      )
+      const conversation = yield* harness.createConversation({
+        ownership: { kind: "ownerless" },
+        agent: { model: { provider: "claude", modelId: "" }, cwd, instructions: "Report with attn when done." },
+        init: (tx, created) => approveAutomatically(tx, created),
+      })
+      yield* ask(conversation, "Reply with exactly: fixture text ok")
+    }),
+  )
+  const initialize = claude.log().find((entry) => entry.initialize)?.initialize
+  expect(initialize.systemPrompt).toBeUndefined()
+  expect(initialize.appendSystemPrompt).toBe(
+    "<workers>\nWorkers are agents of their own.\n</workers>\n\nReport with attn when done.",
+  )
 })
 
 test("claude-live, claude-resume: an edit to the context closes the live process and starts a fresh session told the edited conversation", async () => {

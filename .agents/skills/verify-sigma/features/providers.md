@@ -262,7 +262,7 @@ the skill's [Real accounts](../SKILL.md#real-accounts). Give every
   `as <account>` when Claude Code names one),
   `/tmp/sigma-verify/r3/claude-alt` holds that login, and `providers/list`
   shows `claude-alt` `ready` while `claude` stays `ready`. Where
-  Claude Code is signed in by its environment, as in a hosted session,
+  Claude Code is signed in by its environment, as in a cloud session that runs sigma,
   `claude-alt` is `ready` from the start and there is nothing to sign in to;
   report that instead.
 

@@ -1,9 +1,8 @@
-// What sigma commits of one conversation a Claude Code process writes to: the run's own, or a hosted subagent's, which
-// its `claude.job` task writes (D1). Each commits through its own task: its texts, its calls and their results, the
-// questions it asks a person, and the jobs it starts. A call Claude Code runs itself is committed before its
-// PreToolUse hook is answered, so the intent is durable before the effect; a question for a person waits on
+// What sigma commits of one conversation a harness process writes to: the run's own, or a hosted subagent's, which
+// its `hosted.job` task writes (D1). Each commits through its own task: its texts, its calls and their results, the
+// questions it asks a person, and the jobs it starts. A call the harness runs itself is committed before its
+// `beforeRun` callback returns, so the intent is durable before the effect; a question for a person waits on
 // `sigma.approvals`, keyed `<task>/<call>`.
-import type { HookCallback, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { copyJson } from "@sigma/delta/json"
 import type { Draft } from "@sigma/delta"
 import {
@@ -24,22 +23,16 @@ import {
 import type { AnyTask, ConversationId, EntryId, JsonObject, TaskId, TaskRuntime, Tx } from "@sigma/kernel"
 import type { AssistantMessage, ToolCall, Usage } from "@sigma/models"
 import { Deferred, Effect, Option, Stream } from "effect"
+import type { Adapter, Callbacks, Frame, Part } from "./adapter.ts"
 import { recordJob } from "./jobs.ts"
 import type { Job, JobLinks } from "./links.ts"
-import { textOf } from "./retell.ts"
-
-/** The callbacks Claude Code makes for the calls of one conversation. */
-export interface Callbacks {
-  readonly preToolUse: HookCallback
-  readonly canUseTool: NonNullable<Options["canUseTool"]>
-}
 
 /** The entry that places a hosted subagent's conversation in its parent's transcript. */
 export const SUBAGENT_ENTRY_KIND = "sigma.subagent"
 
 export type SubagentEntry = { call: string; conversation: number; title: string; agentType?: string }
 
-/** What a call Claude Code asked a person about gets when they deny it. */
+/** What a call the harness asked a person about gets when they deny it. */
 export const DENIED = "the person did not allow this call"
 
 const ZERO_USAGE: Usage = {
@@ -51,8 +44,9 @@ const ZERO_USAGE: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 }
 
-/** An assistant message as Claude Code's responses are committed: their usage is the process's, at its result. */
+/** An assistant message as a harness's responses are committed: their usage is the process's, at its result. */
 export const assistantMessage = (
+  api: string,
   provider: string,
   model: string,
   timestamp: number,
@@ -64,7 +58,7 @@ export const assistantMessage = (
     {
       role: "assistant",
       content,
-      api: "claude-code",
+      api,
       provider,
       model,
       responseId,
@@ -75,22 +69,11 @@ export const assistantMessage = (
     { omitUndefinedProperties: true },
   ) as unknown as JsonObject
 
-/** A frame that starts a job: Claude Code's `task_started` for a subagent, or for a background command. */
-export type Started = {
-  readonly task_id: string
-  readonly tool_use_id: string
-  readonly description: string
-  /** Claude Code runs it in the background: the turn can end while it works. */
-  readonly background: boolean
-  readonly subagent_type?: string
-  readonly prompt?: string
-}
-
 /** The tasks a conversation hosts its jobs with, and where their jobs are handed over. */
 export type Hosting = {
-  /** `claude.job`: the run of a subagent's conversation. */
+  /** `hosted.job`: the run of a subagent's conversation. */
   readonly job: AnyTask<any>
-  /** `claude.command`: a background command, in the background of the conversation that started it. */
+  /** `hosted.command`: a background command, in the background of the conversation that started it. */
   readonly command: AnyTask<any>
   /** The background task that owns a subagent's conversation in its parent (F6). */
   readonly anchor: AnyTask<any>
@@ -115,10 +98,12 @@ export type TranscriptScope = {
   readonly commit: (body: (tx: Tx) => Effect.Effect<unknown, unknown>) => Effect.Effect<unknown, unknown>
   /** Runs `effect` alone among this conversation's frames and callbacks. */
   readonly serially: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>
+  /** The harness writing it. */
+  readonly adapter: Adapter
   readonly provider: string
   readonly modelId: string
   readonly hosting: Hosting
-  /** The job the process made for a subagent Claude Code started, by the Agent call that started it; once. */
+  /** The job the process made for a subagent the harness started, by the call that started it; once. */
   readonly started: (call: string) => Job
   /** The run's own conversation: its entries move its position. A job's has none. */
   readonly position?: Position
@@ -135,7 +120,7 @@ type Sighting = { readonly call: ToolCall; readonly response: string; readonly a
 
 /** The transcript of the conversation `scope` writes. */
 export const makeTranscript = (scope: TranscriptScope) => {
-  const { runtime, api, agent, commit, serially, provider, modelId, position } = scope
+  const { runtime, api, agent, commit, serially, adapter, provider, modelId, position } = scope
   const conversationId = runtime.conversationId
   const task = runtime.taskId
   const main = position !== undefined
@@ -153,7 +138,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
   const sight = (seen: Sighting) => Deferred.succeed(sighting(seen.call.id), seen)
 
   const assistant = (content: AssistantMessage["content"], responseId: string, stop: "stop" | "toolUse") =>
-    assistantMessage(provider, modelId, runtime.now(), content, responseId, stop)
+    assistantMessage(adapter.api, provider, modelId, runtime.now(), content, responseId, stop)
 
   /** Starts a new response's slots: the calls of the response before it are done, so they go. */
   const respond = (live: Draft<LiveState>, next: string) => {
@@ -208,7 +193,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
     })
   const record = (seen: Sighting, input: unknown = seen.call.arguments) => serially(recordNow(seen, input))
 
-  /** Commits a call's result as Claude Code reported it. */
+  /** Commits a call's result as the harness reported it. */
   const recordResult = (call: ToolCall, text: string, isError: boolean, at: string | undefined) =>
     commit((tx) =>
       Effect.gen(function* () {
@@ -243,7 +228,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
   const autoApproved = Effect.map(runtime.snapshot(ApprovalsDoc, conversationId), (doc) => doc?.auto === true)
 
   /** Asks a person about the call in the conversation's `sigma.approvals`, and waits for the first answer. */
-  const approve = (call: ToolCall) =>
+  const ask = (call: ToolCall) =>
     Effect.scoped(
       Effect.gen(function* () {
         const key = `${task}/${call.id}`
@@ -277,79 +262,39 @@ export const makeTranscript = (scope: TranscriptScope) => {
   const run = <A>(effect: Effect.Effect<A, unknown>, signal: AbortSignal | undefined) =>
     Effect.runPromise(effect, signal === undefined ? undefined : { signal })
 
-  /** Commits each call Claude Code runs itself before it runs, so the intent is durable before the effect. */
-  const preToolUse: HookCallback = async (input, _toolUseID, { signal }) => {
-    if (input.hook_event_name !== "PreToolUse") return {}
-    const asked: ToolCall = {
-      type: "toolCall",
-      id: input.tool_use_id,
-      name: input.tool_name,
-      arguments: input.tool_input as ToolCall["arguments"],
-    }
-    return run(
-      Effect.map(
-        // Claude Code runs the call with these arguments, which it may have normalized, such as a path made absolute.
-        Effect.flatMap(sighted(asked), (seen) => record(seen, asked.arguments)),
-        () => ({}),
-      ),
-      signal,
-    )
-  }
+  /**
+   * Commits each call the harness runs itself before it runs, so the intent is durable before the effect. The harness
+   * runs it with `asked.arguments`, which it may have normalized, such as a path made absolute.
+   */
+  const beforeRun: Callbacks["beforeRun"] = (asked, signal) =>
+    run(Effect.asVoid(Effect.flatMap(sighted(asked), (seen) => record(seen, asked.arguments))), signal)
 
-  const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, { signal, toolUseID }) => {
-    const allow = { behavior: "allow" as const, updatedInput: input, toolUseID }
-    const asked: ToolCall = {
-      type: "toolCall",
-      id: toolUseID,
-      name: tool,
-      arguments: input as ToolCall["arguments"],
-    }
-    const allowed = await run(
+  const approve: Callbacks["approve"] = (asked, signal) =>
+    run(
       Effect.gen(function* () {
         const seen = yield* sighted(asked)
         if (yield* autoApproved) return true
-        const call = yield* record(seen, input)
-        return yield* approve({ ...call, arguments: input as ToolCall["arguments"] })
+        const call = yield* record(seen, asked.arguments)
+        return yield* ask({ ...call, arguments: asked.arguments })
       }),
       signal,
     )
-    if (allowed) return allow
-    return { behavior: "deny", message: DENIED, toolUseID }
-  }
 
-  /** Commits the texts of an assistant frame and sights its calls, which their hooks or results commit. */
-  const said = (content: AssistantMessage["content"] | ReadonlyArray<any>, responseId: string, at?: string) =>
+  /** Commits the texts of a message and sights its calls, which their callbacks or results commit. */
+  const said = (content: ReadonlyArray<Part>, responseId: string, at?: string) =>
     Effect.gen(function* () {
-      for (const block of content) {
-        if (block.type === "text") yield* recordText(block.text, responseId, at)
-        else if (block.type === "tool_use") {
-          yield* sight({
-            call: {
-              type: "toolCall",
-              id: block.id,
-              name: block.name,
-              arguments: block.input as ToolCall["arguments"],
-            },
-            response: responseId,
-            ...(at === undefined ? {} : { at }),
-          })
-        }
+      for (const part of content) {
+        if (part.type === "text") yield* recordText(part.text, responseId, at)
+        else yield* sight({ call: part, response: responseId, ...(at === undefined ? {} : { at }) })
       }
     })
 
-  /** Commits the results of a user frame; whether any of them was the result of a call of this conversation. */
-  const results = (message: Extract<SDKMessage, { type: "user" }>, at: string | undefined) =>
+  /** Commits the results of a frame; whether any of them was the result of a call of this conversation. */
+  const results = (frame: Extract<Frame, { type: "results" }>) =>
     Effect.gen(function* () {
-      if (!Array.isArray(message.message.content)) return false
-      // An Agent call whose subagent handed back its report gets a placeholder as its result; the frame's
-      // `tool_use_result` holds the report, which the SDK's types do not declare yet. Keeping the report means
-      // a retelling of the conversation, to a new session or another provider, still has it.
-      const handback = (message as { tool_use_result?: { handbackReport?: { text?: string } } }).tool_use_result
-        ?.handbackReport?.text
       let anyResult = false
-      for (const block of message.message.content) {
-        if (block.type !== "tool_result") continue
-        const id = block.tool_use_id
+      for (const result of frame.results) {
+        const id = result.call
         if (answered.has(id)) {
           anyResult = true
           continue
@@ -359,23 +304,23 @@ export const makeTranscript = (scope: TranscriptScope) => {
         const call = yield* recordNow(seen, seen.call.arguments)
         anyResult = true
         answered.add(id)
-        yield* recordResult(call, handback || textOf(block.content), block.is_error === true, at)
+        yield* recordResult(call, result.text, result.isError, frame.at)
       }
       return anyResult
     })
 
   /**
-   * Hosts a subagent Claude Code started as a conversation of its own, under this one, which its `claude.job` task
+   * Hosts a subagent the harness started as a conversation of its own, under this one, which its `hosted.job` task
    * writes (D1). A background anchor owns the conversation of a run's subagent; a job owns its subagent's own.
    */
-  const host = (frame: Started) =>
+  const host = (frame: Extract<Frame, { type: "subagent" }>) =>
     Effect.gen(function* () {
-      // The Agent call that started it comes first in this conversation.
-      if (Deferred.isDoneUnsafe(sighting(frame.tool_use_id))) {
-        yield* recordNow(yield* Deferred.await(sighting(frame.tool_use_id)), undefined)
+      // The call that started it comes first in this conversation.
+      if (Deferred.isDoneUnsafe(sighting(frame.call))) {
+        yield* recordNow(yield* Deferred.await(sighting(frame.call)), undefined)
       }
       const auto = yield* autoApproved
-      const job = scope.started(frame.tool_use_id)
+      const job = scope.started(frame.call)
       let hosted: TaskId | undefined
       yield* commit((tx) =>
         Effect.gen(function* () {
@@ -394,9 +339,10 @@ export const makeTranscript = (scope: TranscriptScope) => {
           hosted = yield* tx.createTask(
             scope.hosting.job,
             {
-              call: frame.tool_use_id,
+              call: frame.call,
               title: frame.description,
-              task: frame.task_id,
+              task: frame.task,
+              harness: adapter.name,
               ...(reported ? { parent: Number(conversationId) } : {}),
             },
             { ownership: { kind: "conversation" }, conversationId: created.id, abandonOnRestart: true },
@@ -404,19 +350,19 @@ export const makeTranscript = (scope: TranscriptScope) => {
           job.conversation = Number(created.id)
           if (reported) {
             yield* recordJob(tx, conversationId, {
-              task: frame.task_id,
+              task: frame.task,
               kind: "agent",
               title: frame.description,
-              call: frame.tool_use_id,
+              call: frame.call,
               conversation: Number(created.id),
               taskId: Number(hosted),
               state: "working",
             })
           }
           yield* recordOrigin(tx, created.id, {
-            call: frame.tool_use_id,
+            call: frame.call,
             title: frame.description,
-            ...(frame.subagent_type === undefined ? {} : { agentType: frame.subagent_type }),
+            ...(frame.agentType === undefined ? {} : { agentType: frame.agentType }),
           })
           const live = yield* tx.doc(LiveDoc, created.id)
           live.run = { taskId: hosted, inputs: [], turns: 0 }
@@ -424,10 +370,10 @@ export const makeTranscript = (scope: TranscriptScope) => {
           const prompt = { role: "user", content: frame.prompt ?? "", timestamp: runtime.now() }
           yield* tx.appendEntry(UserEntry, created.id, { model: [prompt as unknown as JsonObject] })
           const data: SubagentEntry = {
-            call: frame.tool_use_id,
+            call: frame.call,
             conversation: Number(created.id),
             title: frame.description,
-            ...(frame.subagent_type === undefined ? {} : { agentType: frame.subagent_type }),
+            ...(frame.agentType === undefined ? {} : { agentType: frame.agentType }),
           }
           yield* tx.appendEntry(conversationId, { kind: SUBAGENT_ENTRY_KIND, data })
           return undefined
@@ -436,23 +382,23 @@ export const makeTranscript = (scope: TranscriptScope) => {
       const { hosting, started } = scope
       yield* Deferred.succeed(hosting.links.link(hosted!), {
         job,
-        from: { agent, provider, modelId, hosting, started },
+        from: { agent, adapter, provider, modelId, hosting, started },
       })
     })
 
   /**
-   * Hosts a background command the run's Claude Code started as a `claude.command` task in the background of this
-   * conversation, which ends the command's job when Claude Code says it ended, or cuts it off (D6).
+   * Hosts a background command the run's harness started as a `hosted.command` task in the background of this
+   * conversation, which ends the command's job when the harness says it ended, or cuts it off (D6).
    */
-  const hostCommand = (frame: Started) =>
+  const hostCommand = (frame: Extract<Frame, { type: "command" }>) =>
     Effect.gen(function* () {
-      const job = scope.started(frame.tool_use_id)
+      const job = scope.started(frame.call)
       let hosted: TaskId | undefined
       yield* commit((tx) =>
         Effect.gen(function* () {
           hosted = yield* tx.createTask(
             scope.hosting.command,
-            { task: frame.task_id },
+            { task: frame.task, harness: adapter.name },
             {
               ownership: { kind: "conversation" },
               conversationId,
@@ -461,10 +407,10 @@ export const makeTranscript = (scope: TranscriptScope) => {
             },
           )
           yield* recordJob(tx, conversationId, {
-            task: frame.task_id,
+            task: frame.task,
             kind: "command",
             title: frame.description,
-            call: frame.tool_use_id,
+            call: frame.call,
             taskId: Number(hosted),
             state: "working",
           })
@@ -474,12 +420,12 @@ export const makeTranscript = (scope: TranscriptScope) => {
       const { hosting, started } = scope
       yield* Deferred.succeed(hosting.links.link(hosted!), {
         job,
-        from: { agent, provider, modelId, hosting, started },
+        from: { agent, adapter, provider, modelId, hosting, started },
       })
     })
 
   /** The callbacks for this conversation's calls. */
-  const callbacks: Callbacks = { preToolUse, canUseTool }
+  const callbacks: Callbacks = { beforeRun, approve }
 
   return { callbacks, said, results, host, hostCommand, recordText }
 }

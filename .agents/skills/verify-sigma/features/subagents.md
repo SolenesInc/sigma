@@ -76,7 +76,7 @@ subagent's requests keep of the prompt cache is in
 - `subagent-claude` gives each subagent Claude Code starts a conversation of
   its own: the parent shows a `⧉ <description> (<agent type>)` card in place
   of the `Agent` call, the subagent's conversation holds its prompt, calls, results and last
-  message, and its `lineage` has no `task`. Its own `claude.job` task writes
+  message, and its `lineage` has no `task`. Its own `hosted.job` task writes
   that conversation after the prompt, not its parent's run: those entries'
   `byTaskId` is the job's, and its approvals are keyed `<job task>/<call>`.
   Its calls wait on a person there and on its card. Input to it is refused with `TakesNoInput`, and its TUI

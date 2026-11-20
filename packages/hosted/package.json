@@ -1,0 +1,16 @@
+{
+  "name": "@sigma/hosted",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@sigma/delta": "workspace:*",
+    "@sigma/harness": "workspace:*",
+    "@sigma/kernel": "workspace:*",
+    "@sigma/models": "workspace:*",
+    "effect": "4.0.6"
+  }
+}

@@ -1,25 +1,25 @@
-// What Claude Code is told of the conversation: the opening a fresh session gets, and what a resumed one missed after
-// its position. Claude Code holds its own session, so whatever sigma committed that the session does not hold is told
+// What a harness is told of the conversation: the opening a fresh session gets, and what a resumed one missed after
+// its position. The harness holds its own session, so whatever sigma committed that the session does not hold is told
 // to it as text in the run's first message.
 import type { EntryRecord } from "@sigma/kernel"
 import type { ImageContent, Message } from "@sigma/models"
 
 /** Opens a fresh session that a conversation with history joins, before that history. */
-export const JOINING =
-  "This Claude Code session joins a conversation it does not hold. This is the conversation so far; continue it."
+export const joining = (harness: string) =>
+  `This ${harness} session joins a conversation it does not hold. This is the conversation so far; continue it.`
 
 /** About what a retelling of a long conversation keeps, besides its first prompt and the prompts being answered. */
 export const RETOLD_CHARACTERS = 64_000
 
-/** The result of a call a stop cut off, as sigma records it and Claude Code is told. */
+/** The result of a call a stop cut off, as sigma records it and the harness is told. */
 export const INTERRUPTED = "interrupted; it may or may not have taken effect"
 
 type Part = { readonly type: string; readonly text?: string }
 
-/** One part of a message Claude Code is sent: a text, or an image a prompt carried. */
+/** One part of a message a harness is sent: a text, or an image a prompt carried. */
 export type Said = string | ImageContent
 
-/** A prompt as Claude Code is sent it: its text, then its images. */
+/** A prompt as a harness is sent it: its text, then its images. */
 export const promptOf = (content: unknown): Said[] => {
   const text = textOf(content)
   const images = Array.isArray(content) ? (content as ImageContent[]).filter((part) => part.type === "image") : []
@@ -37,7 +37,7 @@ export const textOf = (content: unknown): string =>
 const messagesOf = (entry: EntryRecord): readonly Message[] => (entry.model ?? []) as unknown as readonly Message[]
 
 /**
- * What a resumed session missed: the entries after its position, as text. Prompts are told as they are; what Claude
+ * What a resumed session missed: the entries after its position, as text. Prompts are told as they are; what the model
  * wrote and sigma kept although the session lost it, and the results sigma recorded for calls the session holds no
  * result of, are told as cut off.
  */
