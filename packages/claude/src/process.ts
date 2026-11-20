@@ -78,8 +78,9 @@ export const isMember = (agent: Agent) => agent.target !== undefined && agent.ta
  * How long Claude Code waits for a call of sigma's tools in member mode: as long as sigma's bash may run (its largest
  * `timeout`, `MAX_TIMEOUT_SECONDS` in packages/tools' bash.ts), so each tool's own limit, such as bash's 1800 s
  * default, is the one the model sees. Claude Code 2.1.312 waits `MCP_TOOL_TIMEOUT` ms when set, which a person's
- * environment may set lower, and otherwise 1e8 ms (read from its bundle); measured, `MCP_TOOL_TIMEOUT=3000` aborted an
- * 8 s call and the model read `MCP server "sigma" tool "sleep" timed out after 3s`.
+ * environment may set lower, and otherwise 1e8 ms (read from its bundle). Measured against a fake Anthropic API: a
+ * 1830 s call of an in-process MCP tool reached the model whole, unset and with this value; `MCP_TOOL_TIMEOUT=3000`
+ * aborted an 8 s call and the model read `MCP server "sigma" tool "sleep" timed out after 3s`.
  */
 const MEMBER_TOOL_TIMEOUT_MS = 2_147_483_647
 

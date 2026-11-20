@@ -137,11 +137,13 @@ Preconditions:
 - Provider: `target-start, agents-md, skills-found: ...` in
   `packages/sigma/test/openai.test.ts`; `target-member-mode: ...`,
   `target-member-mode, claude-resume: ...`,
-  `target-member-mode, target-subagent-fork: ...` and
+  `target-member-mode, target-subagent-fork: ...`,
+  `target-member-mode, claude-sign-in-error: ...`,
+  `target-member-mode, target-server-restart: ...` and
   `target-restarted, target-member-mode: ...` in
   `packages/sigma/test/claude.test.ts`, on the fake `claude`'s
-  `member_bash` and `member_restart`, which `derive-claude-fixtures.ts`
-  derives from `bash_allowed`.
+  `member_bash`, `member_restart` and `member_sleep`, which
+  `derive-claude-fixtures.ts` derives from `bash_allowed`.
 - Stack: `target-server-restart: ...` and `target-cli, target-unavailable: ...`
   in `packages/sigma/test/stack.test.ts`.
 - Screen: `target-cli: ...` and `target-restarted, target-replaced: ...` in
