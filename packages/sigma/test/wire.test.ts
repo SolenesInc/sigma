@@ -691,6 +691,34 @@ test("worker-wait: a wait that nothing reaches in time returns timed out, with t
   client.close()
 }, 30_000)
 
+test("worker-wait: two waits at once never both return the same answer: one returns it, the other times out", async () => {
+  await using server = await runningServer([
+    call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
+    {
+      tools: [
+        { name: "wait_worker", input: { timeout_ms: 10_000 } },
+        { name: "wait_worker", input: { timeout_ms: 10_000 } },
+      ],
+    },
+    { text: "the note is written", agent: "/root/writer" },
+    { text: "done waiting" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = await start(client, server.home.dir)
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "delegate it")
+  await view.until(settled(1), 20_000)
+  const waits = toolResults(view)
+    .slice(1)
+    .map((result) => JSON.parse(result.text))
+  expect(waits.flatMap((wait) => wait.received)).toEqual([
+    { from: "/root/writer", kind: "final_answer", text: "the note is written" },
+  ])
+  expect(waits.map((wait) => wait.timed_out).sort()).toEqual([false, true])
+  expect(mails(view)).toEqual([])
+  client.close()
+}, 30_000)
+
 test("worker-person: a person's message to a worker is answered in the worker's conversation, and its parent is told nothing", async () => {
   await using server = await runningServer([
     call("start_worker", { task_name: "helper", message: "first", fork_turns: "none" }),

@@ -524,6 +524,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - worker-answer: a worker's answer reaches its idle parent as input that starts a run, so the parent acts on it
 - worker-provider: start_worker refuses a provider the home does not have and one that is not ready, naming the ready ones, and a fork onto another provider
 - worker-wait: a wait that nothing reaches in time returns timed out, with the minimum it was clamped to, and the worker keeps working
+- worker-wait: two waits at once never both return the same answer: one returns it, the other times out
 - worker-person: a person's message to a worker is answered in the worker's conversation, and its parent is told nothing
 
 Screen, `packages/sigma/test/screen.test.ts`:

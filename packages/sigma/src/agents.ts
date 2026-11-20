@@ -329,12 +329,12 @@ const providerList = (providers: WorkerProviders) =>
   [...providers.values()].map((each) => `${each.id} (${KIND_NAMES[each.kind] ?? each.kind})`).join(", ")
 
 /** The providers a worker can start on now, by id, in the home's order. */
-const readyProviders = (providers: WorkerProviders) =>
+const readyList = (providers: WorkerProviders) =>
   Effect.map(
     Effect.forEach([...providers.values()], (each) =>
       Effect.map(each.health(false), (health) => (health.status === "ready" ? [each.id] : [])),
     ),
-    (ids) => ids.flat(),
+    (ids) => (ids.flat().length === 0 ? "none" : ids.flat().join(", ")),
   )
 
 const startDescription = (providers: WorkerProviders) => {
@@ -407,10 +407,12 @@ const startWorker = (limits: AgentLimits, agentTypes: AgentTypes, providers: Wor
         // On another provider the worker starts from its brief alone: a provider cannot take another's history (D5).
         const other = named !== undefined && named !== parentModel?.provider
         if (other) {
-          const ready = yield* readyProviders(providers)
-          if (!ready.includes(named))
+          const asked = providers.get(named)
+          const ready = asked === undefined ? false : (yield* asked.health(false)).status === "ready"
+          // The others' health is read only to name them in the refusal.
+          if (!ready)
             return failed(
-              `${providers.has(named) ? `provider ${named} is not ready` : `no provider ${named}`}; the ready providers are ${ready.length === 0 ? "none" : ready.join(", ")}`,
+              `${asked === undefined ? `no provider ${named}` : `provider ${named} is not ready`}; the ready providers are ${yield* readyList(providers)}`,
             )
           if (input.fork_turns === "all")
             return failed('a worker on another provider starts from your message alone; set fork_turns to "none"')
@@ -597,8 +599,17 @@ const assignWorker = (limits: AgentLimits) =>
 /** What `wait_worker` returns of one mail: who sent it, whether it is a final answer, and its text. */
 type Received = { from: string; kind: "final_answer" | "message"; text: string }
 
-/** What a wait took from the inbox, kept so a rerun after a restart returns the same. */
-type Taken = { ids: number[]; received: Received[] }
+/**
+ * What a `wait_worker` call took from its caller's inbox, in the commit that took it, so a rerun after a restart
+ * returns the same; it goes with the call's task.
+ */
+const TakenDoc = defineDoc<{ received?: Received[] }>({
+  kind: "sigma.wait_taken",
+  version: 1,
+  scope: "task",
+  initial: () => ({}),
+  checkpointWhen: () => true,
+})
 
 type Queued = { readonly id: unknown; readonly mode: string; readonly content?: unknown; readonly entry?: unknown }
 
@@ -620,6 +631,33 @@ const receivedOf = (item: Queued): Received => {
         : ""
   return { from: data.sender, kind: data.kind, text: mailPayload(text) }
 }
+
+/** The settlement reason of mail `wait_worker` took: its reporter has nothing more to deliver. */
+const TAKEN = "taken"
+
+/**
+ * Takes the workers' mail queued in the caller's inbox, in one commit, so it is not also steered in after the call
+ * (F49) and two waits never take the same mail; a rerun gets what this call took before. Mail taken by a call that is
+ * then stopped before its result is stored reaches the parent only through the worker's own transcript and
+ * `list_workers`: a window of one commit, accepted.
+ */
+const takeMail = (api: ToolExecutionApi) =>
+  api.commit((tx) =>
+    Effect.gen(function* () {
+      const taken = yield* tx.doc(TakenDoc, api.taskId)
+      if (taken.received !== undefined) return taken.received as Received[]
+      const inbox = yield* tx.doc(InboxDoc, api.conversationId)
+      const mail = inbox.items.filter((item) => takeable(item as Queued))
+      if (mail.length === 0) return []
+      const received = mail.map((item) => receivedOf(item as Queued))
+      for (const item of mail) {
+        yield* tx.settleSubmission(item.id, { status: "unanswered", reason: TAKEN })
+        inbox.items.splice(inbox.items.indexOf(item), 1)
+      }
+      taken.received = received
+      return received
+    }),
+  )
 
 const waitWorker = defineTool({
   name: "wait_worker",
@@ -644,63 +682,39 @@ const waitWorker = defineTool({
           requested !== undefined && requested < timeout
             ? { message: `Requested timeout of ${requested}ms was clamped to the minimum of ${timeout}ms.` }
             : {}
-        // A rerun after a restart returns what this call took before it.
-        const before = yield* api.memo<Taken>(TAKEN)
-        if (before !== undefined) {
-          yield* take(api, before.ids)
-          return json({ timed_out: false, received: before.received, ...clamped })
-        }
         const watch = yield* api.watchDoc(InboxDoc, api.conversationId)
-        // A steered item reaches the model after this turn, so it is news: mail or input steered while the turn ran
-        // ends the wait at once. A follow-up waits for the run to end, so it does not.
-        const woke = (items: ReadonlyArray<Queued>) => (items.some((item) => item.mode === "steer") ? items : undefined)
-        const first = watch === undefined ? undefined : woke(watch.value.items)
-        const items =
-          first ??
-          (watch === undefined
-            ? undefined
-            : Option.getOrUndefined(
-                Option.flatten(
-                  yield* watch.changes.pipe(
-                    Stream.map((change) => woke(change.value.items)),
-                    Stream.filter((found) => found !== undefined),
-                    Stream.runHead,
-                    Effect.timeoutOption(Duration.millis(timeout)),
-                  ),
-                ),
-              ))
-        if (items === undefined) return json({ timed_out: true, received: [], ...clamped })
-        const mail = items.filter(takeable)
-        if (mail.length === 0)
-          return json({ timed_out: false, received: [], message: "Wait interrupted by new input." })
-        // Taken out of the inbox, so the answer is not also steered in after this call (F49). Kept first, so a restart
-        // between the two returns it again instead of losing it.
-        const taken = yield* api.memo<Taken>(TAKEN, {
-          ids: mail.map((item) => Number(item.id)),
-          received: mail.map(receivedOf),
-        })
-        yield* take(api, taken.ids)
-        return json({ timed_out: false, received: taken.received, ...clamped })
+        if (watch === undefined) return json({ timed_out: true, received: [], ...clamped })
+        // A steered item reaches the model after this turn, so it is news. Workers' mail is taken and returned; other
+        // input steered while the turn runs, such as a person's, ends the wait with nothing received. A follow-up
+        // waits for the run to end, so it does not. Mail another call or a step took first is waited past.
+        const outcome = yield* Stream.concat(
+          Stream.make({ inbox: watch.value, first: true }),
+          watch.changes.pipe(Stream.map((change) => ({ inbox: change.value, first: false }))),
+        ).pipe(
+          // The first look also finds what a run of this call before a restart took; after it, only a steered item
+          // is worth a commit.
+          Stream.filter(
+            ({ inbox, first }) => first || (inbox.items as ReadonlyArray<Queued>).some((item) => item.mode === "steer"),
+          ),
+          Stream.mapEffect(({ inbox }) =>
+            Effect.map(takeMail(api), (received) => {
+              if (received.length > 0) return json({ timed_out: false, received, ...clamped })
+              const steered = (inbox.items as ReadonlyArray<Queued>).some(
+                (item) => item.mode === "steer" && !takeable(item),
+              )
+              return steered
+                ? json({ timed_out: false, received: [], message: "Wait interrupted by new input." })
+                : undefined
+            }),
+          ),
+          Stream.filter((result) => result !== undefined),
+          Stream.runHead,
+          Effect.timeoutOption(Duration.millis(timeout)),
+        )
+        return Option.getOrUndefined(Option.flatten(outcome)) ?? json({ timed_out: true, received: [], ...clamped })
       }),
     ),
 })
-
-/** The settlement reason of mail `wait_worker` took: its reporter has nothing more to deliver. */
-const TAKEN = "taken"
-
-/** Takes the queued mail `ids` out of the caller's inbox, settled as taken; one already gone is left alone. */
-const take = (api: ToolExecutionApi, ids: ReadonlyArray<number>) =>
-  api.commit((tx) =>
-    Effect.gen(function* () {
-      const inbox = yield* tx.doc(InboxDoc, api.conversationId)
-      for (const id of ids) {
-        const at = inbox.items.findIndex((item) => Number(item.id) === id)
-        if (at === -1) continue
-        yield* tx.settleSubmission(inbox.items[at]!.id, { status: "unanswered", reason: TAKEN })
-        inbox.items.splice(at, 1)
-      }
-    }),
-  )
 
 const isMail = (item: { readonly entry?: unknown }) =>
   (item.entry as { readonly kind?: string } | undefined)?.kind === MAIL_ENTRY_KIND
@@ -822,8 +836,14 @@ export const agentTools = (
         key: "workers",
         tag: false,
         // A code-mode model is offered only codemode, whose scripts call start_worker, so the callable tools decide.
+        // Only a model on sigma's own loop: a harness, as Claude Code in member mode, names the tools its own way.
         render: ({ agent }) =>
-          Effect.succeed(agent.callable.some((tool) => tool.name === "start_worker") ? WORKERS_SECTION : undefined),
+          Effect.succeed(
+            agent.callable.some((tool) => tool.name === "start_worker") &&
+              providers.get(agent.model?.provider ?? "")?.provider !== undefined
+              ? WORKERS_SECTION
+              : undefined,
+          ),
       },
     ],
   })
