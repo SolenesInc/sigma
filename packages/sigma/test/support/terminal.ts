@@ -14,6 +14,8 @@ export const sigmaEnv = (home: ReturnType<typeof tempHome>, extra: Record<string
   SIGMA_CLAUDE: join(import.meta.dir, "fake-claude"),
   FAKE_CLAUDE_FIXTURE: join(import.meta.dir, "../../../../fixtures/claude/models.ndjson"),
   FAKE_CLAUDE_DIR: join(home.dir, "fake-claude"),
+  SIGMA_AGY: join(import.meta.dir, "fake-agy"),
+  FAKE_AGY_DIR: join(home.dir, "fake-agy"),
   USER: "ada",
   TERM: "xterm-256color",
   ...extra,

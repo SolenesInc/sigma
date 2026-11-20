@@ -654,10 +654,10 @@ test("worker-provider: start_worker refuses a provider the home does not have an
   const view = watchView(client, conversation)
   await submit(client, conversation, "start them")
   await view.until(settled(1), 20_000)
-  // The test home's ChatGPT is not signed in; its fake Claude Code is.
+  // The test home's ChatGPT is not signed in; its fake Claude Code and agy are.
   expect(toolResults(view)).toEqual([
-    { text: "no provider gemini; the ready providers are script, claude", isError: true },
-    { text: "provider openai is not ready; the ready providers are script, claude", isError: true },
+    { text: "no provider gemini; the ready providers are script, claude, agy", isError: true },
+    { text: "provider openai is not ready; the ready providers are script, claude, agy", isError: true },
     {
       text: 'a worker on another provider starts from your message alone; set fork_turns to "none"',
       isError: true,

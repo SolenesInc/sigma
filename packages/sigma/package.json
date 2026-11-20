@@ -10,6 +10,7 @@
     "@effect/platform-bun": "4.0.6",
     "@opentui/core": "0.7.0",
     "@opentui/solid": "0.7.0",
+    "@sigma/agy": "workspace:*",
     "@sigma/claude": "workspace:*",
     "@sigma/codemode": "workspace:*",
     "@sigma/env": "workspace:*",

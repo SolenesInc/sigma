@@ -1,5 +1,6 @@
 // The providers of a home: every instance its config names, opened from its kind, with the sign-ins, health and model
 // lists over them, and how a new conversation's model is chosen.
+import { agyAccount, type AgySettings } from "@sigma/agy"
 import { claudeAccount, type ClaudeProcessSettings } from "@sigma/claude"
 import { type Agent, type AgentLimits, DEFAULT_AGENT_LIMITS } from "@sigma/harness"
 import { defineDoc } from "@sigma/kernel"
@@ -34,6 +35,7 @@ export interface ProviderOptions {
   readonly script?: ReadonlyArray<ScriptStep>
   readonly openai: (id: string) => OpenAiOptions
   readonly claude: ClaudeProcessSettings
+  readonly agy: AgySettings
   readonly preferred: string
   readonly config: HomeConfig
 }
@@ -73,10 +75,21 @@ const claudeInstance = (base: ClaudeProcessSettings, instance: Instance): Claude
   }
 }
 
-/** The instances a home has: the built-in `claude` and `openai`, then those its `config.toml` names. */
+const agyInstance = (base: AgySettings, instance: Instance): AgySettings => {
+  const executable = instance.binary === undefined ? base.executable : expandHome(instance.binary)
+  const args = instance.args ?? base.args
+  return {
+    ...(executable === undefined ? {} : { executable }),
+    env: { ...base.env, ...instance.env },
+    ...(args === undefined ? {} : { args }),
+  }
+}
+
+/** The instances a home has: the built-in `claude`, `openai` and `agy`, then those its `config.toml` names. */
 const configured = (config: HomeConfig): Record<string, Instance> => ({
   claude: { driver: "claude" },
   openai: { driver: "openai" },
+  agy: { driver: "agy" },
   ...config.providers,
 })
 
@@ -84,6 +97,12 @@ const configured = (config: HomeConfig): Record<string, Instance> => ({
 const claudeKind = (base: ClaudeProcessSettings): ProviderKind<Instance> => ({
   kind: "claude",
   open: (id, settings) => Effect.succeed({ ...claudeAccount(claudeInstance(base, settings)), id }),
+})
+
+/** Antigravity's CLI: its account here; its conversations run as `agy.run` tasks, so it gives no `Models` provider. */
+const agyKind = (base: AgySettings): ProviderKind<Instance> => ({
+  kind: "agy",
+  open: (id, settings) => Effect.succeed({ ...agyAccount(agyInstance(base, settings)), id }),
 })
 
 /** ChatGPT, told sigma's instructions, which name the tools sigma gives it. */
@@ -100,13 +119,25 @@ const claudeInstances = (options: ProviderOptions): ReadonlyMap<string, ClaudePr
     ),
   )
 
+/** How each `agy` instance of a home is started, by instance id. */
+const agyInstances = (options: ProviderOptions): ReadonlyMap<string, AgySettings> =>
+  new Map(
+    Object.entries(configured(options.config)).flatMap(([id, instance]) =>
+      instance.driver === "agy" ? [[id, agyInstance(options.agy, instance)] as const] : [],
+    ),
+  )
+
 /**
  * Every provider instance of a home, by id: `script` when there is a script, then each one configured. `scriptAgent`
  * names the agent a script request is for, from its context.
  */
 const openInstances = (options: ProviderOptions, scriptAgent?: (context: TranscriptContext) => string | undefined) =>
   Effect.gen(function* () {
-    const kinds = { claude: claudeKind(options.claude), openai: openAiKind(options.openai) }
+    const kinds = {
+      claude: claudeKind(options.claude),
+      openai: openAiKind(options.openai),
+      agy: agyKind(options.agy),
+    }
     const instances = new Map<string, ProviderInstance>()
     if (options.script) instances.set("script", scriptInstance(options.script, scriptAgent))
     for (const [id, settings] of Object.entries(configured(options.config)))
@@ -155,6 +186,8 @@ export class Providers extends Context.Service<
     readonly agents: AgentLimits
     /** How the Claude Code of each instance Claude Code serves is started; their runs are `claude.run` tasks. */
     readonly claude: ReadonlyMap<string, ClaudeProcessSettings>
+    /** How the `agy` of each instance it serves is started; their runs are `agy.run` tasks. */
+    readonly agy: ReadonlyMap<string, AgySettings>
     /**
      * The agent types a conversation on `provider` in `workspace` can spawn: a ChatGPT instance's, from `.claude/agents`
      * and its Claude Code config directory; none for the rest, which find their own or have none.
@@ -183,6 +216,7 @@ export class Providers extends Context.Service<
           instances,
           agents: { maxThreads: agents?.max_threads ?? DEFAULT_AGENT_LIMITS.maxThreads },
           claude: claudeInstances(options),
+          agy: agyInstances(options),
           agentTypes: (provider, workspace) => {
             const kind = provider === undefined ? undefined : instances.get(provider)?.kind
             if (kind === "openai") return agentTypes(workspace, options.openai(provider!).claudeConfig)

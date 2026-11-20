@@ -18,7 +18,21 @@ const ALLOWED: Record<string, string[]> = {
   codemode: ["delta", "schema", "kernel", "harness", "models", "env", "tools"],
   hosted: ["delta", "schema", "kernel", "harness", "models", "env"],
   claude: ["delta", "schema", "kernel", "harness", "models", "env", "hosted"],
-  sigma: ["protocol", "delta", "schema", "kernel", "harness", "models", "env", "tools", "codemode", "hosted", "claude"],
+  agy: ["delta", "schema", "kernel", "harness", "models", "env", "hosted"],
+  sigma: [
+    "protocol",
+    "delta",
+    "schema",
+    "kernel",
+    "harness",
+    "models",
+    "env",
+    "tools",
+    "codemode",
+    "hosted",
+    "claude",
+    "agy",
+  ],
 }
 // May import anything, and nothing may import it.
 const CONFORMANCE = "conformance"

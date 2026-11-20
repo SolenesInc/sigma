@@ -18,7 +18,12 @@ export const describeCall = (tool: string, input: unknown) => {
     field(input, "path") ??
     field(input, "cell_id") ??
     field(input, "task_name") ??
-    field(input, "target")
+    field(input, "target") ??
+    // agy's names for the same.
+    field(input, "CommandLine") ??
+    field(input, "TargetFile") ??
+    field(input, "AbsolutePath") ??
+    field(input, "DirectoryPath")
   return subject === undefined ? tool : `${tool}(${firstLine(subject)})`
 }
 

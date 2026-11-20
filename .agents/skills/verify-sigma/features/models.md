@@ -12,7 +12,8 @@ next run. Switching providers keeps the conversation.
 ## Sub-features
 
 - `model-list` lists each provider's models, best first, with their efforts:
-  Claude Code's models and `its own choice`, ChatGPT's from ChatGPT, else the
+  Claude Code's models and `its own choice`, `agy`'s with its thinking levels
+  from `agy`, ChatGPT's from ChatGPT, else the
   list it sent last, else the one sigma ships.
 - `model-flags` starts a conversation with `--model` and `--effort` from the
   TUI or `exec`, or `model` and `effort` on `conversation/start`. A model

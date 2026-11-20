@@ -1,7 +1,7 @@
 # Providers
 
-Each conversation's model names a provider: `claude` and `openai` always
-exist, and `config.toml` in the home adds more, each with its own sign-in.
+Each conversation's model names a provider: `claude`, `openai` and `agy`
+always exist, and `config.toml` in the home adds more, each with its own sign-in.
 A conversation takes the provider named with `--provider`, or `provider` on
 `conversation/start`, else the default model's, as [Models](./models.md) says.
 Sigma refuses a provider it does not know before any conversation starts. A
@@ -18,16 +18,19 @@ failed with a message saying why, in every client.
 - `provider-unknown` refuses an unknown provider by name, exit 1.
 - `provider-signed-out` ends a run failed with the provider's sign-in error.
 - `provider-config` adds the providers `config.toml` names under
-  `[providers.<id>]`, with `driver = "claude"` or `"openai"`, beside the
+  `[providers.<id>]`, with `driver = "claude"`, `"openai"` or `"agy"`, beside the
   built-in ones; each lists, signs in and starts conversations on its own.
 - `provider-binary` runs a Claude provider's Claude Code from `binary`,
   with `env` added to its environment and `args` added to each run's command
   line; `SIGMA_CLAUDE` names the `claude` every Claude provider without a
-  `binary` runs. One that does not start is `unavailable`, saying why.
+  `binary` runs. An `agy` provider takes `binary`, `env` and `args` the same
+  way, and `SIGMA_AGY` names the `agy` one without a `binary` runs. One that
+  does not start is `unavailable`, saying why.
 - `provider-config-invalid` refuses to serve a home whose `config.toml` does
   not read, naming the file and the field.
-- `provider-claude` and `provider-openai` are the real journeys, in
-  [Claude](./claude.md) and [OpenAI](./openai.md); signing in is in
+- `provider-claude`, `provider-openai` and `provider-agy` are the real
+  journeys, in [Claude](./claude.md), [OpenAI](./openai.md) and
+  [Gemini](./gemini.md); signing in is in
   [Sign-in](./sign-in.md).
 
 ## How to get to it

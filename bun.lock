@@ -11,6 +11,15 @@
         "typescript": "6.0.3",
       },
     },
+    "packages/agy": {
+      "name": "@sigma/agy",
+      "version": "0.1.0",
+      "dependencies": {
+        "@sigma/hosted": "workspace:*",
+        "@sigma/models": "workspace:*",
+        "effect": "4.0.6",
+      },
+    },
     "packages/claude": {
       "name": "@sigma/claude",
       "version": "0.1.0",
@@ -129,6 +138,7 @@
         "@effect/platform-bun": "4.0.6",
         "@opentui/core": "0.7.0",
         "@opentui/solid": "0.7.0",
+        "@sigma/agy": "workspace:*",
         "@sigma/claude": "workspace:*",
         "@sigma/codemode": "workspace:*",
         "@sigma/env": "workspace:*",
@@ -311,6 +321,8 @@
     "@rolldown/binding-win32-x64-msvc": ["@rolldown/binding-win32-x64-msvc@1.2.18", "", { "os": "win32", "cpu": "x64" }, "sha512-XwRJxRQvkuEtS0hIIt29QrqPJ+JzMJSNYHJw4ae/mc6uEarfRG1ceyg4HmmWiBdL/YCb6g7N5BLbSvmRJRYZHw=="],
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.1.0", "", {}, "sha512-K+NU2HDCEem4sClgHH4ZZXwdJeNFkJo+hRk479DIwdIviAPN2hFJH1KHHwg8CxHQXvi0M5XY4deTXINfIiSG6w=="],
+
+    "@sigma/agy": ["@sigma/agy@workspace:packages/agy"],
 
     "@sigma/claude": ["@sigma/claude@workspace:packages/claude"],
 

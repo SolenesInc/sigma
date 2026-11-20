@@ -165,7 +165,8 @@ const serveCommand = Command.make(
 
 /**
  * The home's providers as its `config.toml` and the environment name them: `SIGMA_MODEL_SCRIPT` adds `script` and
- * prefers it, and `SIGMA_CLAUDE` names the `claude` every Claude provider without a `binary` runs.
+ * prefers it, `SIGMA_CLAUDE` names the `claude` every Claude provider without a `binary` runs, and `SIGMA_AGY` the
+ * `agy` every agy provider without one runs.
  */
 const providerOptions = (home: Home) =>
   Effect.gen(function* () {
@@ -175,6 +176,7 @@ const providerOptions = (home: Home) =>
       ...(scriptPath === undefined ? {} : { script: yield* readScript(scriptPath || undefined) }),
       openai: openAiOptions(home),
       claude: process.env.SIGMA_CLAUDE ? { executable: process.env.SIGMA_CLAUDE } : {},
+      agy: process.env.SIGMA_AGY ? { executable: process.env.SIGMA_AGY } : {},
       preferred: scriptPath === undefined ? "claude" : "script",
       config,
     } satisfies ProviderOptions

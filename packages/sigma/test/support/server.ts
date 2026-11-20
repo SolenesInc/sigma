@@ -12,6 +12,7 @@ import {
   type ViewItem,
   type Window,
 } from "@sigma/protocol"
+import type { AgySettings } from "@sigma/agy"
 import type { ClaudeProcessSettings } from "@sigma/claude"
 import { REPORT_KIND } from "@sigma/hosted"
 import { mkdtempSync, realpathSync, rmSync } from "node:fs"
@@ -21,6 +22,7 @@ import { homeAt, type Home } from "../../src/home.ts"
 import { openAiOptions, type OpenAiOptions, type ProviderOptions } from "../../src/providers.ts"
 import { serverLayer } from "../../src/server.ts"
 import { Lifetime } from "../../src/lifetime.ts"
+import { defaultAgy } from "./agy.ts"
 import { defaultClaude } from "./claude.ts"
 import { deadline, RawClient, type Reply } from "./raw.ts"
 import { sigma, sigmaEnv } from "./terminal.ts"
@@ -43,6 +45,7 @@ export interface ServerOptions {
   readonly home?: Home
   readonly openai?: (home: Home) => (id: string) => OpenAiOptions
   readonly claude?: ClaudeProcessSettings
+  readonly agy?: AgySettings
   readonly config?: HomeConfig
   /** How long a Claude Code process stays live after its run; 0 closes it when the run ends. */
   readonly claudeIdle?: Duration.Input
@@ -62,6 +65,7 @@ const testProviders = (
   script,
   openai: (options.openai ?? openAiOptions)(home),
   claude: options.claude ?? defaultClaude(home.dir),
+  agy: options.agy ?? defaultAgy(home.dir),
   preferred: "script",
   config: options.config ?? {},
 })

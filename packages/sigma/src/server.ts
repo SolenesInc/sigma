@@ -1,5 +1,6 @@
 // The server a home runs: one Harness over `kernel.sqlite`, served over the home's socket with the protocol
 // (`@sigma/protocol`). Conversations run on the home's providers (`./providers.ts`).
+import { agyAdapter } from "@sigma/agy"
 import { claudeAdapter } from "@sigma/claude"
 import {
   appendReport,
@@ -185,7 +186,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
     Layer.effect(
       KernelHarness,
       Effect.gen(function* () {
-        const { instances, agents, claude, agentTypes } = yield* Providers
+        const { instances, agents, claude, agy, agentTypes } = yield* Providers
         const lifetime = yield* Lifetime
         // An idle conversation compacts as a person's compact does, by its `/compact` input; one that is busy again by
         // then refuses it and goes on.
@@ -269,10 +270,11 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           ),
         )
         // A local conversation's Claude Code has its own tools and subagents, and is offered sigma's worker tools beside
-        // them (D17). A remote one's runs in member mode, with only sigma's (D9).
+        // them (D17). A remote one's runs in member mode, with only sigma's (D9). agy runs only locally, with its own.
         const hosted = hostedRunTasks({
-          adapters: [claudeAdapter((provider) => claude.get(provider))],
-          offered: offeredToHarness,
+          adapters: [claudeAdapter((provider) => claude.get(provider)), agyAdapter((provider) => agy.get(provider))],
+          // agy is offered none of sigma's tools, so its prompt does not name them.
+          offered: (agent) => (claude.has(agent.model?.provider ?? "") ? offeredToHarness(agent) : []),
           title: (conversation) => titleOf(harness, conversation),
           processes,
           member: {

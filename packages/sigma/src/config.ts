@@ -6,7 +6,7 @@ import { join, posix } from "node:path"
 import { Effect, Schema } from "effect"
 
 const Instance = Schema.Struct({
-  driver: Schema.Literals(["claude", "openai"]),
+  driver: Schema.Literals(["claude", "openai", "agy"]),
   config_dir: Schema.optionalKey(Schema.String),
   binary: Schema.optionalKey(Schema.String),
   env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),

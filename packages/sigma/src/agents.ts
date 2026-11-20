@@ -359,6 +359,7 @@ export type WorkerProviders = ReadonlyMap<string, ProviderInstance>
 const KIND_NAMES: Readonly<Record<string, string>> = {
   claude: "Claude Code",
   openai: "ChatGPT",
+  agy: "Antigravity's agy",
   script: "a scripted model",
 }
 

@@ -59,7 +59,9 @@ Preconditions:
 ## Contexts
 
 - **Provider.** The scripted model spends nothing unless its step names
-  `usage`; ChatGPT and Claude Code report their own.
+  `usage`; ChatGPT and Claude Code report their own. `agy` reports each
+  prompted turn's tokens in the prompt's result, under `agy/<model>`; a turn
+  it begins by itself has no result, so its spend is not counted.
 
 ## Sources
 

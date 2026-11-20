@@ -140,6 +140,10 @@ lists when a change touches them.
   `config.toml` adds more, Claude ones with their own `binary`, `env` and `args`, and
   `SIGMA_CLAUDE` names Claude Code; an unknown one is refused, a signed-out one
   fails the run.
+- [Gemini](./gemini.md) (people, agents): Gemini and `agy`'s other models
+  through Antigravity's `agy acp`: answers with usage, approvals showing the
+  command, denials, steers, stops, resume after a restart, background
+  commands that wake the conversation, health, and refusing remote targets.
 - [Claude](./claude.md) (people, agents): Claude Code's answers, approvals, reads that don't
   ask, session resume and lost sessions, cut-off calls, health, model and model
   switches, instructions, and the retelling when a conversation switches to

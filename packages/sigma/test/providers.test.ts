@@ -48,6 +48,7 @@ test("provider-config, signin-status, model-list: two instances of one provider 
     { id: "script", driver: "script", signIn: [], status: "ready" },
     { id: "claude", driver: "claude", signIn: ["terminal"], status: "ready" },
     { id: "openai", driver: "openai", signIn: ["browser", "device_code"], status: "ready" },
+    { id: "agy", driver: "agy", signIn: [], status: "ready" },
     { id: "openai-work", driver: "openai", signIn: ["browser", "device_code"], status: "signed_out" },
     { id: "claude-alt", driver: "claude", signIn: ["terminal"], status: "ready" },
   ])
@@ -65,6 +66,8 @@ test("provider-config, signin-status, model-list: two instances of one provider 
     ["claude", undefined],
     // ChatGPT can't be reached here, so the default is the first of the list sigma ships.
     ["openai", "gpt-6.1-sol"],
+    // agy's own default, the model a session it opens starts on.
+    ["agy", "gemini-4-neon"],
     ["openai-work", "gpt-6.1-sol"],
     ["claude-alt", undefined],
   ])

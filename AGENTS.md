@@ -4,8 +4,9 @@ Sigma is a coding agent designed to be durable, to integrate with agent SDKs,
 and to serve many clients on one conversation, with every change attributed.
 One server owns every conversation and commits each step to SQLite before
 anyone sees it. Clients draw what it commits; the first is a terminal UI.
-Models run through the Claude Agent SDK, which drives Claude Code, or through
-a ChatGPT sign-in, where sigma runs the loop and the tools itself.
+Models run through the Claude Agent SDK, which drives Claude Code, through
+Antigravity's `agy` over the Agent Client Protocol, which serves Gemini, or
+through a ChatGPT sign-in, where sigma runs the loop and the tools itself.
 
 ## Where we are
 
@@ -17,7 +18,7 @@ model: `packages/kernel` stores state and runs tasks, `packages/harness` runs
 conversations on it, and `packages/sigma` serves them over `packages/protocol`.
 A conversation whose model a harness such as Claude Code serves runs as a
 hosted run (`packages/hosted`), through that harness's adapter
-(`packages/claude`).
+(`packages/claude`, `packages/agy`).
 The kernel's features with no client path are marked `[kernel]` in the feature
 map, and are proven by package tests or pi-durable's own suite.
 
@@ -30,7 +31,8 @@ tests, docs and conversation.
 home                    one directory of state, SIGMA_HOME; like a tenant
 ├─ server (at most 1)   the process that owns the home's state and runs its work
 ├─ conversation (0..n)
-└─ provider (1..n)      a way to reach models: Claude Code or a ChatGPT sign-in
+└─ provider (1..n)      a way to reach models: Claude Code, agy or a ChatGPT
+                        sign-in
 ```
 
 ```text
@@ -51,6 +53,7 @@ conversation            one transcript and the work done in it; like one chat
 ```text
 harness                 a program that runs its own model loop, tools and
                         session, which sigma drives as a process: Claude Code
+                        or agy
 subagent                a child a harness owns and runs inside one of its
                         turns, as Claude Code's Agent; sigma shows each as a
                         conversation, but it is not a worker
@@ -164,13 +167,13 @@ Every test defends one promise that a person, a client or a later
 version relies on, and its name says what they would see if it broke. Tests
 enter where those consumers enter:
 
-| Kind     | Enters through                                                                                                                          | Lives in                                               |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Wire     | a real server in process, driven as a raw JSON-RPC client over its socket                                                               | `packages/sigma/test/wire.test.ts`                     |
-| Screen   | the real TUI in a PTY on an `@xterm/headless` screen, typed into, against a real server                                                 | `packages/sigma/test/screen.test.ts`                   |
-| Stack    | the `sigma` binary over its socket: kill, restart, reconnect                                                                            | `packages/sigma/test/stack.test.ts`                    |
-| Provider | a wire test whose provider is a fake server replaying a recorded exchange from `fixtures/`                                              | `packages/sigma/test/openai.test.ts`, `claude.test.ts` |
-| Package  | a package's public API, only for specified logic with a large input space (as tables or properties) or a promise no wire test can reach | `packages/<name>/test`                                 |
+| Kind     | Enters through                                                                                                                          | Lives in                                                              |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Wire     | a real server in process, driven as a raw JSON-RPC client over its socket                                                               | `packages/sigma/test/wire.test.ts`                                    |
+| Screen   | the real TUI in a PTY on an `@xterm/headless` screen, typed into, against a real server                                                 | `packages/sigma/test/screen.test.ts`                                  |
+| Stack    | the `sigma` binary over its socket: kill, restart, reconnect                                                                            | `packages/sigma/test/stack.test.ts`                                   |
+| Provider | a wire test whose provider is a fake server replaying a recorded exchange from `fixtures/`                                              | `packages/sigma/test/openai.test.ts`, `claude.test.ts`, `agy.test.ts` |
+| Package  | a package's public API, only for specified logic with a large input space (as tables or properties) or a promise no wire test can reach | `packages/<name>/test`                                                |
 
 - The model is the seam. Tests script it (the `script` provider,
   `SIGMA_MODEL_SCRIPT`) or replay a provider's recorded exchange; nothing else
@@ -197,6 +200,10 @@ Provider tests replay recorded exchanges from `fixtures/`:
   plays one recorded Claude Code process per spawn, and one recorded probe per
   probe (a spawn with `--no-session-persistence`). It logs what sigma sent it,
   and tests judge Claude by that log.
-- Screen and stack tests point `SIGMA_CLAUDE` at the fake `claude`, so no test
-  reaches a real Claude. A stack test that needs ChatGPT points
+- The fake `agy` (`packages/sigma/test/support/fake-agy`) plays one recorded
+  `agy acp` process per spawn, and `fixtures/agy/models.ndjson` for each
+  probe. It runs the Stop hook sigma gave the session where the recording
+  did, and logs what sigma sent it.
+- Screen and stack tests point `SIGMA_CLAUDE` and `SIGMA_AGY` at the fakes, so
+  no test reaches a real Claude or agy. A stack test that needs ChatGPT points
   `SIGMA_OPENAI_URL` at the fake OpenAI server.

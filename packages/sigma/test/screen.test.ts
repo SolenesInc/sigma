@@ -4,6 +4,7 @@ import { readFileSync, rmSync, watch, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ScriptStep } from "@sigma/models"
 import type { AuthState } from "@sigma/protocol"
+import { FakeAgy } from "./support/agy.ts"
 import { FakeClaude } from "./support/claude.ts"
 import { TestTargets } from "./support/targets.ts"
 import { FakeOpenAi, signIn } from "./support/openai.ts"
@@ -1012,3 +1013,18 @@ test("server-restart, serve-read-only: an open TUI keeps drawing while sigma ser
   await writer.exited
   // Two restarts and two runs took at most 17.3 s at load ~105 on 10 cores.
 }, 60_000)
+
+test("gemini-approval: agy's permission request shows the command it would run on the approval card, and ^Y lets it run", async () => {
+  using agy = new FakeAgy("approval_allowed")
+  const sigmaHome = home()
+  await using _server = await runningServer([], { home: sigmaHome, agy: agy.options })
+  const session = await open([], ["--provider", "agy", "--model", "gemini-4-hydrogen", "--effort", "low"], sigmaHome)
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type("Run the shell command `touch allowed.txt`, then reply with exactly: touched\r")
+  const asking = await session.waitFor((screen) => screen.includes("allow this call?"))
+  expect(asking).toContain("▸ run_command(touch allowed.txt)")
+  session.type("\x19")
+  const screen = await session.waitFor((screen) => screen.includes("✓ allowed by ada") && screen.includes("READY"))
+  expect(screen).toMatch(/^.*touched\s*$/m)
+  await quit(session)
+})

@@ -18,14 +18,18 @@ const ROWS = "30"
 const usage = `usage: drive.ts <run> <command> [args]
 
   up [--script steps.json] [--fake-openai fixture,...] [--openai-refreshes N] [--openai-signed-out]
-     [--fake-claude fixture | --real-claude] [--openai-kept | --openai-auth file]
+     [--fake-claude fixture | --real-claude] [--fake-agy fixture | --real-agy]
+     [--openai-kept | --openai-auth file]
                                    make the run's home and evidence folders. --fake-openai serves a
                                    fake ChatGPT replaying fixtures/openai/<fixture>.ndjson in order,
                                    signed in unless --openai-signed-out, granting N token refreshes.
                                    claude is a fake replaying fixtures/claude/<fixture>.ndjson, by
                                    default models (signed in, no turns); --real-claude runs the
                                    SDK's bundled Claude Code with your own login and without your
-                                   ~/.claude/settings.json. --openai-auth copies a real
+                                   ~/.claude/settings.json. agy is a fake replaying
+                                   fixtures/agy/<fixture>.ndjson, by default models (signed in, no
+                                   turns); --real-agy runs the agy on your PATH with your own sign-in,
+                                   in its default permission mode. --openai-auth copies a real
                                    ChatGPT sign-in in, and down writes it back if a refresh rotated it;
                                    one run holds a sign-in at a time. --openai-kept is
                                    --openai-auth ${KEPT_OPENAI}.
@@ -79,6 +83,8 @@ const tmuxServer = `sigma-verify-${run}`
 const openaiPort = join(dir, "fake-openai.port")
 const claudeFixture = join(dir, "fake-claude.ndjson")
 const realClaude = join(dir, "real-claude")
+const agyFixture = join(dir, "fake-agy.ndjson")
+const realAgy = join(dir, "real-agy")
 const openaiAuth = join(home, "auth", "openai.json")
 const openaiAuthSource = join(dir, "openai-auth.source")
 const FIXTURES = join(REPO, "fixtures")
@@ -93,6 +99,15 @@ const fakes = (): Record<string, string> => ({
       }
     : {}),
   ...(existsSync(realClaude) ? { SIGMA_CLAUDE: realClaude } : {}),
+  // Without --real-agy, the built-in agy provider is the fake, so no run reaches a real agy unasked.
+  ...(existsSync(agyFixture)
+    ? {
+        SIGMA_AGY: join(REPO, "packages/sigma/test/support/fake-agy"),
+        FAKE_AGY_FIXTURE: agyFixture,
+        FAKE_AGY_DIR: join(evidence, "fake-agy"),
+      }
+    : {}),
+  ...(existsSync(realAgy) ? { SIGMA_AGY: realAgy } : {}),
 })
 
 /**
@@ -407,6 +422,9 @@ const describeFakes = () => {
     console.log(`claude   fake claude; what sigma sent it in ${join(evidence, "fake-claude", "log.ndjson")}`)
   else if (existsSync(realClaude))
     console.log("claude   the SDK's bundled Claude Code, with your own login and without your settings")
+  if (existsSync(agyFixture))
+    console.log(`agy      fake agy; what sigma sent it in ${join(evidence, "fake-agy", "log.ndjson")}`)
+  else if (existsSync(realAgy)) console.log("agy      the agy on your PATH, with your own sign-in")
   if (existsSync(openaiAuthSource))
     console.log(`openai   real sign-in from ${readFileSync(openaiAuthSource, "utf8")}, written back by down`)
 }
@@ -490,6 +508,9 @@ const commands: Record<string, () => Promise<void> | void> = {
     const real = switchOn("--real-claude")
     const fakeClaude = flag("--fake-claude")
     if (real && fakeClaude) fail("--real-claude and --fake-claude exclude each other")
+    const wantsRealAgy = switchOn("--real-agy")
+    const fakeAgy = flag("--fake-agy")
+    if (wantsRealAgy && fakeAgy) fail("--real-agy and --fake-agy exclude each other")
     const claude = real ? undefined : (fakeClaude ?? "models")
     if (auth && openai) fail("--openai-auth is a real sign-in; --fake-openai needs none")
     if (!/^\d+$/.test(refreshes)) fail("--openai-refreshes takes a count")
@@ -506,6 +527,19 @@ const commands: Record<string, () => Promise<void> | void> = {
       rmSync(claudeFixture, { force: true })
       writeRealClaude()
       record("claude is the SDK's bundled Claude Code, with your login and without your settings")
+    }
+    if (wantsRealAgy) {
+      rmSync(agyFixture, { force: true })
+      // agy keeps its sign-in by the person's own USER, not the run's `ada`.
+      const agy = sh(["which", "agy"]).stdout.trim() || fail("no agy on your PATH")
+      writeFileSync(realAgy, `#!/bin/sh\nexport USER='${userInfo().username}'\nexec '${agy}' "$@"\n`)
+      chmodSync(realAgy, 0o755)
+      record("agy is the agy on your PATH, with your own sign-in")
+    } else {
+      rmSync(realAgy, { force: true })
+      writeFileSync(agyFixture, readFileSync(fixture("agy", fakeAgy ?? "models")))
+      rmSync(join(evidence, "fake-agy"), { recursive: true, force: true })
+      record(`fake agy replays ${fakeAgy ?? "models"}`)
     }
     if (auth) {
       if (resolve(auth).startsWith(resolve(homedir(), ".sigma") + "/"))
@@ -756,6 +790,8 @@ const commands: Record<string, () => Promise<void> | void> = {
     rmSync(openaiPort, { force: true })
     rmSync(claudeFixture, { force: true })
     rmSync(realClaude, { force: true })
+    rmSync(agyFixture, { force: true })
+    rmSync(realAgy, { force: true })
     console.log(`stopped; evidence kept in ${evidence}`)
   },
 }
