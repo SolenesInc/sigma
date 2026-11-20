@@ -366,13 +366,14 @@ export const ToolTask: Task<ToolTaskInput, ToolTaskCheckpoint, ToolTaskResult, T
       const ctx: Ctx = { runtime, api }
       const call = yield* readCall(runtime, api, task.input)
       // Abandoned after a restart (`abandonOnRestart`): say whether the call may have run. An unoffered call could not
-      // run in any case, and its result says so.
+      // run in any case, and its result says so. A call cut off mid-run reads as the execute phase's recovery does, the
+      // spec's wording, so one event is one message whichever path settles it.
       const [code, message] = isUnoffered(task.input)
         ? ["tool_unavailable", `Tool ${call.name} is not available`]
         : task.abortReason !== "restart"
           ? ["aborted", `Tool ${call.name} was aborted`]
           : task.state.checkpoint.phase === "execute"
-            ? ["interrupted", `Tool ${call.name} was interrupted by a restart and may have partially run`]
+            ? ["interrupted", `Tool ${call.name} was interrupted and may have partially run`]
             : ["abandoned", `Tool ${call.name} was not started: its caller ended with a restart`]
       // The scheduler runs an abort handler only while its restarts are below the limit, and faults the task when the
       // last attempt is cut off. That attempt skips the hooks, which may be what cuts it off.
