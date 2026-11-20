@@ -6,7 +6,7 @@ import type { ScriptStep } from "@sigma/models"
 import type { AuthState } from "@sigma/protocol"
 import { FakeClaude } from "./support/claude.ts"
 import { FakeOpenAi, signIn } from "./support/openai.ts"
-import { deadline, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
 import { scriptEnv, runningServer, serving, settled, start, submit, watchView, tempHome } from "./support/server.ts"
 import { png } from "./support/png.ts"
 import { screenSession, stopServer } from "./support/terminal.ts"
@@ -57,7 +57,7 @@ const scrollUntil = (wheel: string) => async (session: Session, predicate: (scre
     if (predicate(before)) return before
     session.type(wheel.repeat(5))
     // At an end, a turn changes nothing until a load or a commit does.
-    await session.waitFor((screen) => screen !== before, 10_000)
+    await session.waitFor((screen) => screen !== before)
   }
   throw new Error(`never scrolled to it:\n${session.screen()}`)
 }
@@ -69,7 +69,7 @@ const converse = async (client: RawClient, conversation: string, count: number, 
   const view = watchView(client, conversation)
   for (let n = from; n < from + count; n++) {
     await submit(client, conversation, `prompt ${n}`)
-    await view.until(settled(n - from + 1), 10_000)
+    await view.until(settled(n - from + 1))
   }
 }
 
@@ -146,7 +146,7 @@ test("tui-hangup, idle-closed: closing the terminal ends sigma instead of leavin
   const session = await open()
   await session.waitFor((screen) => screen.includes("READY"))
   session.hangUp()
-  await deadline(session.exited, 5000, "sigma exited")
+  await deadline(session.exited, DEADLINE, "sigma exited")
 })
 
 test("reopen-hint, reopen-tui: quitting prints the command that reopens the conversation, and it opens with its transcript", async () => {
@@ -330,7 +330,7 @@ test("signin-cancel: a sign-in cancelled from another connection stops Claude's 
       watcher.on("change", check)
       check()
     }),
-    5000,
+    DEADLINE,
     "the sign-in in the terminal ended",
   ).finally(() => watcher.close())
   session.type("\x03")
@@ -761,13 +761,13 @@ test("compact-rpc, compaction-live-status: /compact says when there is nothing t
   const view = watchView(client, "talk")
   for (const runs of [1, 2]) {
     await submit(client, "talk", long)
-    await view.until(settled(runs), 10_000)
+    await view.until(settled(runs))
   }
   session.type("/compact keep the numbers\r")
   await session.waitFor((screen) => screen.includes("◆ compacting"))
   await session.waitFor((screen) => screen.includes("compacted the context") && !screen.includes("◆ compacting"))
   await submit(client, "talk", long)
-  await view.until(settled(3), 10_000)
+  await view.until(settled(3))
   session.type("/compact\r")
   // The cause, named once: not "compaction failed: Summarization failed: ...".
   await session.waitFor((screen) => screen.includes("✗ compaction failed: the summary model is gone"))

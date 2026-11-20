@@ -15,7 +15,10 @@ export interface Watch<A> {
   readonly until: (predicate: (items: ReadonlyArray<A>) => boolean, ms?: number) => Promise<void>
 }
 
-const DEADLINE = 5000
+// A tripwire: a healthy wait on a busy machine stays under it, and a hang still fails before bun's 30 s test timeout,
+// naming the condition. wire-dropped's 200 runs took up to 17 s on a 10-core M5 at load average 40 to 70, and about
+// 1 s on CI; at 5 s, waits failed whenever other sessions loaded the machine.
+export const DEADLINE = 20_000
 
 export const deadline = <A>(promise: Promise<A>, ms: number, what: string) =>
   Promise.race([

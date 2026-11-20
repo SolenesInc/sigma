@@ -13,7 +13,7 @@ import {
   type ProviderSnapshot,
   USER_KIND,
 } from "@sigma/protocol"
-import { deadline, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
 import {
   person,
   runEnds,
@@ -328,7 +328,7 @@ test("server-idle-exit, claude-idle-release: a live Claude Code process keeps th
   await view.until(settled(1))
   const answered = performance.now()
   client.close()
-  await deadline(served.exited, 5000, "server exit")
+  await deadline(served.exited, DEADLINE, "server exit")
   // Without the process's hold the server would have gone 10 ms after the client did, closing the process with it.
   expect(performance.now() - answered).toBeGreaterThanOrEqual(500)
   await claude.logged((fake) => fake.exited(0))
@@ -346,7 +346,7 @@ test("server-stop, claude-live: stopping the server closes its live Claude Code 
   expect(claude.exited(0)).toBe(false)
   expect(await client.call("server/stop", null)).toMatchObject({ result: null })
   client.close()
-  await deadline(served.exited, 5000, "server exit")
+  await deadline(served.exited, DEADLINE, "server exit")
   // Long before the 30 minutes a live process waits.
   await claude.logged((fake) => fake.exited(0))
   rmSync(home.dir, { recursive: true, force: true })

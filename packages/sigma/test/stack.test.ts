@@ -7,7 +7,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, watch
 import { open, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
-import { deadline, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
 import {
   person,
   scriptEnv,
@@ -59,7 +59,7 @@ test("server-stop: sigma serve answers server/stop, then exits 0", async () => {
   const server = await serving(await scriptEnv(sigmaHome))
   const client = await RawClient.connect(sigmaHome.socket)
   expect(await client.call("server/stop", null)).toMatchObject({ result: null })
-  expect(await deadline(server.exited, 5000, "server exit")).toBe(0)
+  expect(await deadline(server.exited, DEADLINE, "server exit")).toBe(0)
   client.close()
 })
 
@@ -140,7 +140,7 @@ test("crash-limit, conversation-ended: a run that keeps crashing the server stop
     ).result.conversation as string
     if (attempt === 1) await submit(client, conversation, "go")
     // Each server's model calls again, after its call was cut off; kill the server while that call runs.
-    expect(await deadline(readFile(fifo, "utf8"), 10_000, `call ${attempt} started`)).toBe("ran\n")
+    expect(await deadline(readFile(fifo, "utf8"), DEADLINE, `call ${attempt} started`)).toBe("ran\n")
     server.kill("SIGKILL")
     await server.exited
     client.close()
@@ -148,7 +148,7 @@ test("crash-limit, conversation-ended: a run that keeps crashing the server stop
   await serving(env)
   const client = await RawClient.connect(sigmaHome.socket)
   const view = watchView(client, conversation!)
-  await view.until(settled(1), 10_000)
+  await view.until(settled(1))
   expect(runEnds(view.seen())).toEqual([
     { outcome: "restart_limit", message: "the server stopped during this run 3 times in a row" },
   ])
@@ -195,7 +195,7 @@ test("provider-config-invalid: a server refuses to start on a config.toml that d
   const sigmaHome = home()
   await Bun.write(`${sigmaHome.dir}/config.toml`, "[providers.claude\n")
   const server = sigma(["serve"], await scriptEnv(sigmaHome))
-  expect(await deadline(server.exited, 10_000, "server exit")).toBe(1)
+  expect(await deadline(server.exited, DEADLINE, "server exit")).toBe(1)
   expect(await new Response(server.stderr).text()).toContain(`${sigmaHome.dir}/config.toml`)
 })
 
@@ -236,7 +236,7 @@ test("codemode-replay: a script whose server is killed during a nested call resu
   let client = await RawClient.connect(sigmaHome.socket)
   const conversation = await codeModeConversation(client, sigmaHome.dir)
   await submit(client, conversation, "go")
-  expect(await deadline(readFile(fifo, "utf8"), 10_000, "the second call started")).toBe("ran\n")
+  expect(await deadline(readFile(fifo, "utf8"), DEADLINE, "the second call started")).toBe("ran\n")
   first.kill("SIGKILL")
   await first.exited
   client.close()
@@ -272,7 +272,7 @@ test("codemode-stop: a script stuck in a long built-in stops when its run is int
   await submit(client, conversation, "go")
   const live = (current: ViewWatch) =>
     current.view().docs["pi.live"] as { nestedTools?: Array<{ status: string }> } | undefined
-  await view.until((current) => live(current)?.nestedTools?.some((slot) => slot.status === "done") === true, 10_000)
+  await view.until((current) => live(current)?.nestedTools?.some((slot) => slot.status === "done") === true)
   // Nothing is committed once the worker enters the search, and interrupting it before then lets the worker end
   // cleanly, which proves nothing (measured: 5 of 5 runs passed without serve's exit). The server's CPU is the one
   // sign that the worker is inside: an idle server spends at most 0.02 s in a second (the idle-server test above).
@@ -286,10 +286,10 @@ test("codemode-stop: a script stuck in a long built-in stops when its run is int
   )
   // Interrupting the run stops the script without waiting for its worker, which goes on searching.
   await client.call("conversation/interrupt", { author: person("ada"), conversation })
-  await view.until(settled(1), 5000)
+  await view.until(settled(1))
   // With the run ended the server stops, and its process ends though the worker still searches.
   expect(await client.call("server/stop", null)).toMatchObject({ result: null })
-  expect(await deadline(server.exited, 5000, "server exit")).toBe(0)
+  expect(await deadline(server.exited, DEADLINE, "server exit")).toBe(0)
   client.close()
 }, 45_000)
 
@@ -305,7 +305,7 @@ test("provider-default: a conversation that names no provider and has no default
     const started = await client.call("conversation/start", { author: person("ada"), cwd: sigmaHome.dir })
     expect(started.result.model.provider).toBe(provider)
     await client.call("server/stop", null)
-    expect(await deadline(server.exited, 5000, "server exit")).toBe(0)
+    expect(await deadline(server.exited, DEADLINE, "server exit")).toBe(0)
     client.close()
   }
 })
@@ -404,7 +404,7 @@ test("answer-exec-fail: sigma exec exits 1 when an interrupt withdraws its queue
   await submit(client, "shared", "count")
   const exec = sigma(["exec", "-c", "shared", "second"], env)
   const inbox = (watch: ViewWatch) => (watch.view().docs["pi.inbox"] as { items: Array<unknown> }).items
-  await view.until((watch) => inbox(watch).length === 1, 10_000)
+  await view.until((watch) => inbox(watch).length === 1)
   await client.call("conversation/interrupt", { author: person("ada"), conversation: "shared" })
   const result = await finished(exec)
   expect(result).toMatchObject({ code: 1, stdout: "" })
@@ -426,7 +426,7 @@ test("answer-exec: sigma exec whose prompt waits behind a run that fails prints 
   await submit(client, "shared", "count")
   const exec = sigma(["exec", "-c", "shared", "second"], env)
   const inbox = (watch: ViewWatch) => (watch.view().docs["pi.inbox"] as { items: Array<unknown> }).items
-  await view.until((watch) => inbox(watch).length === 1, 10_000)
+  await view.until((watch) => inbox(watch).length === 1)
   const result = await finished(exec)
   expect(result).toMatchObject({ code: 0, stdout: "second answer\n" })
   expect(await transcriptOf(sigmaHome, "shared")).toEqual([
@@ -679,7 +679,7 @@ test("server-restart: sigma serve --restart replaces the running server once its
   await submit(client, conversation, "count")
   await view.until((watch) => (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run !== undefined)
   const second = await serving(env, undefined, ["serve", "--restart"])
-  expect(await deadline(first.exited, 5000, "old server exit")).toBe(0)
+  expect(await deadline(first.exited, DEADLINE, "old server exit")).toBe(0)
   // The old server let its run answer before it stopped: its own watch delivered the run's end.
   expect(runEnds(view.seen())).toEqual([{ outcome: "answered", answer: expect.any(Number) }])
   client.close()
@@ -700,7 +700,7 @@ test("server-restart: sigma exec waiting on a run that serve --restart lets fini
   const stdout = exec.stdout.getReader()
   let printed = ""
   while (!printed.includes("one")) {
-    const { value, done } = await deadline(stdout.read(), 10_000, "first words printed")
+    const { value, done } = await deadline(stdout.read(), DEADLINE, "first words printed")
     if (done) throw new Error(`exec ended before the restart: ${printed}`)
     printed += new TextDecoder().decode(value)
   }
@@ -721,7 +721,7 @@ test("server-restart: sigma serve --restart replaces a server that took the home
   const config = join(sigmaHome.dir, "config.toml")
   expect(Bun.spawnSync(["mkfifo", config]).exitCode).toBe(0)
   const first = sigma(["serve"], env)
-  const held = await deadline(open(config, "w"), 10_000, "first server reading its config")
+  const held = await deadline(open(config, "w"), DEADLINE, "first server reading its config")
   let released: Promise<void> | undefined
   const release = () => (released ??= held.close())
   await using _released = { [Symbol.asyncDispose]: release }
@@ -732,7 +732,7 @@ test("server-restart: sigma serve --restart replaces a server that took the home
   let printed = ""
   const read = async (what: string) => {
     while (!printed.includes(what)) {
-      const { value, done } = await deadline(log.read(), 10_000, what)
+      const { value, done } = await deadline(log.read(), DEADLINE, what)
       if (done) throw new Error(`serve --restart exited: ${printed}`)
       printed += new TextDecoder().decode(value)
     }
@@ -741,7 +741,7 @@ test("server-restart: sigma serve --restart replaces a server that took the home
   await read(`waiting for the server that holds ${sigmaHome.dir} to stop`)
   await release()
   await read(`serving ${sigmaHome.dir}`)
-  expect(await deadline(first.exited, 5000, "first server exit")).toBe(0)
+  expect(await deadline(first.exited, DEADLINE, "first server exit")).toBe(0)
   expect(restart.exitCode).toBeNull()
 }, 30_000)
 
@@ -802,7 +802,7 @@ test("server-restart: a server that starts while serve --restart replaces the ol
     (async () => {
       while (!waitsOnHome()) await Bun.sleep(10)
     })(),
-    10_000,
+    DEADLINE,
     "the starting server waiting on the home",
   )
   // A restart begins, as serve --restart does, and the old server lets go of the home while the starter waits.
@@ -912,7 +912,7 @@ test("answer-exec-fail: sigma exec exits 1 when one interrupt withdraws its prom
   await submit(client, "shared", "count")
   const exec = sigma(["exec", "-c", "shared", "first in line"], env)
   const inbox = (watch: ViewWatch) => (watch.view().docs["pi.inbox"] as { items: Array<unknown> }).items
-  await view.until((watch) => inbox(watch).length === 1, 10_000)
+  await view.until((watch) => inbox(watch).length === 1)
   // More prompts wait behind exec's than a watch's window keeps, so the commit that withdraws them all slides exec's
   // withdrawal out of the window it hands exec.
   for (let i = 0; i < 110; i++) await submit(client, "shared", `behind ${i}`)
@@ -992,7 +992,7 @@ test("answer-exec, wire-dropped: a sigma exec too slow for the run watches again
   const errors = exec.stderr.getReader()
   let stderr = ""
   while (!stderr.includes("› bash(")) {
-    const { value } = await deadline(errors.read(), 10_000, "the first call printed")
+    const { value } = await deadline(errors.read(), DEADLINE, "the first call printed")
     stderr += new TextDecoder().decode(value)
   }
   exec.kill("SIGSTOP")
@@ -1023,7 +1023,7 @@ test("crash-exec: a run cut off by a crashed server finishes after the server co
   const reader = exec.stdout.getReader()
   let printed = ""
   while (!printed.includes("one")) {
-    const { value } = await deadline(reader.read(), 10_000, "first words printed")
+    const { value } = await deadline(reader.read(), DEADLINE, "first words printed")
     printed += new TextDecoder().decode(value)
   }
   server.kill("SIGKILL")
@@ -1061,7 +1061,7 @@ test("server-cannot-start: each sigma exec whose server cannot come back says wh
   }))
   for (const each of execs) {
     while (!each.printed.includes("one")) {
-      const { value, done } = await deadline(each.stdout.read(), 10_000, "first words printed")
+      const { value, done } = await deadline(each.stdout.read(), DEADLINE, "first words printed")
       if (done) throw new Error(`exec ended before the server was killed: ${each.printed}`)
       each.printed += new TextDecoder().decode(value)
     }
@@ -1136,7 +1136,7 @@ test("crash-call: a call cut off by a crashed server is recorded as interrupted 
     await client.call("conversation/start", { author: person("ada"), cwd: sigmaHome.dir, approvals: "auto" })
   ).result.conversation as string
   await submit(client, conversation, "go")
-  expect(await deadline(readFile(fifo, "utf8"), 10_000, "the call started")).toBe("ran\n")
+  expect(await deadline(readFile(fifo, "utf8"), DEADLINE, "the call started")).toBe("ran\n")
   first.kill("SIGKILL")
   await first.exited
   client.close()
@@ -1169,12 +1169,12 @@ test("crash-claude: a Claude subagent cut off by a crashed server ends interrupt
   const parent = watchView(client, conversation)
   await parent.until(() => true)
   await submit(client, conversation, "go")
-  await parent.until((watch) => watch.seen().some((entry) => entry.kind === "sigma.subagent"), 10_000)
+  await parent.until((watch) => watch.seen().some((entry) => entry.kind === "sigma.subagent"))
   const child = String(
     (parent.seen().find((entry) => entry.kind === "sigma.subagent")!.data as { conversation: number }).conversation,
   )
   const working = watchView(client, child)
-  await working.until((watch) => toolResults(watch.seen()).length > 0, 10_000)
+  await working.until((watch) => toolResults(watch.seen()).length > 0)
   first.kill("SIGKILL")
   await first.exited
   client.close()
@@ -1184,7 +1184,7 @@ test("crash-claude: a Claude subagent cut off by a crashed server ends interrupt
   const resumed = watchView(client, conversation)
   await resumed.until(settled(1), 20_000)
   const after = watchView(client, child)
-  await after.until((watch) => runEnds(watch.seen()).length > 0, 10_000)
+  await after.until((watch) => runEnds(watch.seen()).length > 0)
   expect(runEnds(after.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   // Claude Code is resumed and told its Agent call was cut off; it is not started again for the subagent.
   expect(claude.userTexts(1)).toEqual([

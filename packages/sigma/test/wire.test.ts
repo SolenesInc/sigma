@@ -1,7 +1,7 @@
 // The wire: a real server in process, driven as a raw JSON-RPC client over its socket.
 import { expect, test } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { deadline, errorTag, hangUpMidAnswer, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, errorTag, hangUpMidAnswer, RawClient } from "./support/raw.ts"
 import {
   person,
   runEnds,
@@ -194,7 +194,7 @@ test("wire-dropped: a client that stops reading is dropped while the others keep
   // Every run ends while the stalled client holds the server's queue full: its commits never waited for it.
   await live.until(settled(prompts))
   stalled.resumeAcks(behind.id)
-  const dropped = await deadline(behind.ended, 5000, "stalled client told it fell behind")
+  const dropped = await deadline(behind.ended, DEADLINE, "stalled client told it fell behind")
   expect(errorTag(dropped)).toBe("FellBehind")
   expect(behind.items).toHaveLength(1)
   reader.close()
@@ -230,19 +230,19 @@ test("wire-unknown: watching a conversation that does not exist says so", async 
 
 test("server-idle-exit: the server exits once no client is connected and nothing is running", async () => {
   const home = tempHome()
-  const served = await deadline(servingUntilIdle(home, "200 millis"), 5000, "server listening")
+  const served = await deadline(servingUntilIdle(home, "200 millis"), DEADLINE, "server listening")
   const client = await RawClient.connect(home.socket)
   const conversation = await start(client)
   await opened(watchView(client, conversation))
   client.close()
-  await deadline(served.exited, 5000, "server exit")
+  await deadline(served.exited, DEADLINE, "server exit")
 })
 
 test("server-idle-exit: a submission's run keeps the server up after its client leaves, past the idle grace", async () => {
   const home = tempHome()
   const served = await deadline(
     servingUntilIdle(home, "50 millis", [{ text: "one two three four", delayMs: 100 }]),
-    5000,
+    DEADLINE,
     "server listening",
   )
   let client = await RawClient.connect(home.socket)
@@ -250,7 +250,7 @@ test("server-idle-exit: a submission's run keeps the server up after its client 
   // No watch: only the submission's run keeps the server up once the client goes.
   await submit(client, conversation, "count")
   client.close()
-  await deadline(served.exited, 5000, "server exit")
+  await deadline(served.exited, DEADLINE, "server exit")
 
   // A server that went idle mid-run would have left no answer and no run_end.
   await using again = await runningServer([], { home })
@@ -275,14 +275,14 @@ test("server-idle-exit, child-tools: a subagent's work keeps the server up after
       { text: "one two three four", delayMs: 100, agent: "/root/writer" },
       { text: "heard it" },
     ]),
-    5000,
+    DEADLINE,
     "server listening",
   )
   let client = await RawClient.connect(home.socket)
   const conversation = await start(client)
   await submit(client, conversation, "delegate")
   client.close()
-  await deadline(served.exited, 5000, "server exit")
+  await deadline(served.exited, DEADLINE, "server exit")
 
   // A server that went idle while the subagent worked would have mailed nothing back to the parent.
   await using again = await runningServer([], { home })
@@ -304,7 +304,7 @@ test("server-stop, child-tools: stopping the server lets a working subagent fini
       { text: "one two three four", delayMs: 100, agent: "/root/writer" },
       { text: "heard it" },
     ]),
-    5000,
+    DEADLINE,
     "server listening",
   )
   let client = await RawClient.connect(home.socket)
@@ -314,7 +314,7 @@ test("server-stop, child-tools: stopping the server lets a working subagent fini
   await view.until(settled(1))
   expect(await client.call("server/stop", null)).toMatchObject({ result: null })
   client.close()
-  await deadline(served.exited, 5000, "server exit")
+  await deadline(served.exited, DEADLINE, "server exit")
 
   // A stop that cut the subagent off would have mailed nothing back to the parent.
   await using again = await runningServer([], { home })
@@ -328,10 +328,10 @@ test("server-stop, child-tools: stopping the server lets a working subagent fini
 
 test("server-stop: stopping the server answers the caller, then the server exits", async () => {
   const home = tempHome()
-  const served = await deadline(servingUntilIdle(home, "1 hour"), 5000, "server listening")
+  const served = await deadline(servingUntilIdle(home, "1 hour"), DEADLINE, "server listening")
   const client = await RawClient.connect(home.socket)
   expect(await client.call("server/stop", null)).toMatchObject({ result: null })
-  await deadline(served.exited, 5000, "server exit")
+  await deadline(served.exited, DEADLINE, "server exit")
   client.close()
 })
 
@@ -385,7 +385,7 @@ test("server-stop: stopping the server while sigma answers lets the answer finis
   const home = tempHome()
   const served = await deadline(
     servingUntilIdle(home, "1 hour", [{ text: "one two three four", delayMs: 100 }]),
-    5000,
+    DEADLINE,
     "server listening",
   )
   let client = await RawClient.connect(home.socket)
@@ -394,7 +394,7 @@ test("server-stop: stopping the server while sigma answers lets the answer finis
   await submit(client, conversation, "count")
   await view.until(speaking)
   expect(await client.call("server/stop", null)).toMatchObject({ result: null })
-  await deadline(served.exited, 5000, "server exit")
+  await deadline(served.exited, DEADLINE, "server exit")
   client.close()
 
   // What the stopped server committed, as a fresh server shows it: the whole answer, and its run's end.
@@ -778,7 +778,7 @@ test("child-tools: a subagent's answer that waits in its parent's queue still re
   await waitingApproval(view)
   await view.until((current) => ((current.view().docs["pi.inbox"] as { items?: unknown[] })?.items ?? []).length > 0)
   await client.call("conversation/interrupt", { author: person("ada"), conversation })
-  await view.until((current) => mails(current).length > 0, 10_000)
+  await view.until((current) => mails(current).length > 0)
   expect(mails(view)).toEqual([{ kind: "final_answer", task: "/root", sender: "/root/writer" }])
   expect(runEnds(view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   client.close()
@@ -1133,8 +1133,8 @@ test("subagent-interrupt: interrupting a conversation stops the runs of its suba
   await waitingApproval(slow)
 
   await client.call("conversation/interrupt", { author: person("ada"), conversation })
-  await view.until(settled(1), 10_000)
-  await slow.until(settled(1), 10_000)
+  await view.until(settled(1))
+  await slow.until(settled(1))
 
   expect(runEnds(view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   expect(runEnds(slow.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
@@ -1678,7 +1678,7 @@ test("subagent-answer: a subagent's answer reaches its idle parent as input that
   const child = spawned(view, "/root/kid")
   const approval = await waitingApproval(watchView(client, child))
   await client.call("approval/resolve", { conversation: child, approval, author: person("ada"), allow: true })
-  await view.until(settled(2), 10_000)
+  await view.until(settled(2))
   expect(mails(view)).toEqual([{ kind: "final_answer", task: "/root", sender: "/root/kid" }])
   const kinds = view.seen().map((entry) => entry.kind)
   expect(kinds.slice(kinds.lastIndexOf("sigma.mail"))).toEqual(["sigma.mail", "pi.assistant", RUN_END_KIND])
@@ -2204,7 +2204,7 @@ test("serve-read-only: a read-only server shows a home's conversations without r
       await using resumed = await runningServer([slow], { home })
       const client = await RawClient.connect(resumed.home.socket)
       const view = watchView(client, conversation)
-      await view.until(settled(1), 10_000)
+      await view.until(settled(1))
       // What the first server had said when it closed stays, cut off, before the answer.
       const resumedSaid = transcript(view.seen())
       expect(resumedSaid[0]).toBe("user: count")

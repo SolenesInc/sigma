@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Home } from "../src/home.ts"
 import { accessToken, ACCOUNT, FakeOpenAi, matches, signIn } from "./support/openai.ts"
-import { deadline, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
 import {
   person,
   runEnds,
@@ -263,7 +263,7 @@ test("openai-failed, run-error-classes: a response that failed on ChatGPT's side
   await using session = await conversationWith(fake)
   await session.submit("hello")
   // The harness waits its first backoff, 2 s, before trying again.
-  await session.view.until(settled(1), 10_000)
+  await session.view.until(settled(1))
   expect(fake.responses()).toHaveLength(2)
   expect(session.said()).toEqual(["user: hello", "assistant:  [error]", "assistant: Hello there", "run_end: answered"])
   const failed = session.view.seen().find((entry) => entry.kind === "pi.assistant")!.model![0] as {
@@ -295,7 +295,7 @@ test("interrupt-wire: a ChatGPT answer streams live, and interrupting it closes 
   await session.view.until((watch) => JSON.stringify(watch.view().docs["pi.live"] ?? {}).includes("Thinking about"))
   await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
   await session.view.until(settled(1))
-  await deadline(fake.heldStreamAbandoned, 5000, "the request closed")
+  await deadline(fake.heldStreamAbandoned, DEADLINE, "the request closed")
   expect(session.said()).toEqual([
     "user: hello",
     "assistant: Thinking about [aborted]",
