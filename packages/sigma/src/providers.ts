@@ -21,7 +21,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { chooseModel, expandHome, type HomeConfig, type Instance, type ModelAsk } from "./config.ts"
 import type { Home } from "./home.ts"
 import instructions from "./instructions.md" with { type: "text" }
-import { type AgentType, agentTypes } from "./workspace.ts"
+import { type AgentType, agentTypes, type Workspace } from "./workspace.ts"
 import { taskOfRequest } from "./agents.ts"
 
 /**
@@ -156,13 +156,16 @@ export class Providers extends Context.Service<
     /** How the Claude Code of each instance Claude Code serves is started; their runs are `claude.run` tasks. */
     readonly claude: ReadonlyMap<string, ClaudeProcessSettings>
     /**
-     * The agent types a conversation on `provider` in `cwd` can spawn: a ChatGPT instance's, from `.claude/agents` and
-     * its Claude Code config directory; none for the rest, which find their own or have none.
+     * The agent types a conversation on `provider` in `workspace` can spawn: a ChatGPT instance's, from `.claude/agents`
+     * and its Claude Code config directory; none for the rest, which find their own or have none.
      */
-    readonly agentTypes: (provider: string | undefined, cwd: string) => ReadonlyArray<AgentType>
-    /** The model a conversation in `cwd` starts with when it asks for `ask`, given the model chosen last. */
+    readonly agentTypes: (provider: string | undefined, workspace: Workspace) => Effect.Effect<ReadonlyArray<AgentType>>
+    /**
+     * The model a conversation starts with when it asks for `ask`, given its project's `default_model` and the model
+     * chosen last.
+     */
     readonly choose: (
-      cwd: string,
+      project: ModelSelection | undefined,
       ask: ModelAsk,
       last: ModelSelection | undefined,
     ) => Effect.Effect<{ readonly selection: ModelSelection; readonly instance: ProviderInstance }, UnknownProvider>
@@ -180,13 +183,14 @@ export class Providers extends Context.Service<
           instances,
           agents: { maxThreads: agents?.max_threads ?? DEFAULT_AGENT_LIMITS.maxThreads },
           claude: claudeInstances(options),
-          agentTypes: (provider, cwd) =>
+          agentTypes: (provider, workspace) =>
             provider !== undefined && instances.get(provider)?.kind === "openai"
-              ? agentTypes(cwd, options.openai(provider).claudeConfig)
-              : [],
-          choose: (cwd, ask, last) =>
+              ? agentTypes(workspace, options.openai(provider).claudeConfig)
+              : Effect.succeed([]),
+          choose: (project, ask, last) =>
             Effect.suspend(() => {
-              const selection = chooseModel(cwd, ask, {
+              const selection = chooseModel(ask, {
+                ...(project ? { project } : {}),
                 ...(home ? { home } : {}),
                 ...(last ? { last } : {}),
                 preferred: options.preferred,

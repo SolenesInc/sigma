@@ -4,7 +4,9 @@ import { expect, test } from "bun:test"
 import { type EntryRecord, RUN_END_KIND } from "@sigma/protocol"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import type { HomeConfig } from "../src/config.ts"
 import type { Home } from "../src/home.ts"
+import { TestTargets } from "./support/targets.ts"
 import { accessToken, ACCOUNT, FakeOpenAi, matches, signIn } from "./support/openai.ts"
 import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
 import {
@@ -36,11 +38,14 @@ const conversationWith = async (
     instructions?: string
     home?: Home
     cwd?: (home: string) => string
+    target?: string
+    config?: HomeConfig
   } = {},
 ) => {
   const server = await runningServer([], {
     openai: fake.options(),
     ...(options.home === undefined ? {} : { home: options.home }),
+    ...(options.config === undefined ? {} : { config: options.config }),
   })
   if (options.signedIn ?? true) await signIn(server.home)
   const client = await RawClient.connect(server.home.socket)
@@ -48,6 +53,7 @@ const conversationWith = async (
     author: person("ada"),
     cwd: options.cwd?.(server.home.dir) ?? server.home.dir,
     ...(options.instructions === undefined ? {} : { instructions: options.instructions }),
+    ...(options.target === undefined ? {} : { target: options.target }),
     provider: "openai",
     approvals: options.approvals ?? "auto",
     model: options.model ?? RECORDED_MODEL,
@@ -592,6 +598,70 @@ test("openai-instructions, agents-md, skills-found, skills-nearest, skills-front
   expect(again).toEndWith(
     skills(`- review: Review a diff (file: ${join(home, "repo", ".agents", "skills", "review", "SKILL.md")})`),
   )
+})
+
+test("agents-md: a folder with only a CLAUDE.md gives its rules, and one with an AGENTS.md gives only that", async () => {
+  await using fake = new FakeOpenAi()
+  fake.play("text_answer")
+  await using session = await conversationWith(fake, {
+    cwd: (home) => {
+      const repo = join(home, "repo")
+      mkdirSync(join(repo, ".git"), { recursive: true })
+      write(join(repo, "CLAUDE.md"), "Claude rules.")
+      write(join(repo, "app", "AGENTS.md"), "App rules.")
+      write(join(repo, "app", "CLAUDE.md"), "Shadowed rules.")
+      return join(repo, "app")
+    },
+  })
+  await session.submit("hello")
+  await session.view.until(settled(1))
+  const repo = join(session.server.home.dir, "repo")
+  const instructions = instructionsOf(fake, 0)
+  expect(instructions).toContain(`# AGENTS.md instructions from ${join(repo, "CLAUDE.md")}\n\nClaude rules.`)
+  expect(instructions).toContain(`# AGENTS.md instructions from ${join(repo, "app", "AGENTS.md")}\n\nApp rules.`)
+  expect(instructions).not.toContain("Shadowed rules.")
+})
+
+test("target-start, agents-md, skills-found: a remote conversation is told the AGENTS.md files and skills its target has at its path, never the home's there", async () => {
+  using targets = new TestTargets()
+  targets.add("box")
+  await using fake = new FakeOpenAi()
+  fake.play("text_answer")
+  await using session = await conversationWith(fake, {
+    target: "box",
+    config: { target_connector: targets.connector },
+    cwd: (home) => {
+      // The home has one repository at this path, and the target another.
+      project(home)
+      const there = join(targets.work("box"), "repo")
+      mkdirSync(join(there, ".git"), { recursive: true })
+      write(join(there, "AGENTS.md"), "Target rules.")
+      write(join(there, ".agents", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy it\n---\n")
+      targets.map("box", join(home, "repo"), there)
+      return join(home, "repo")
+    },
+  })
+  await session.submit("hello")
+  await session.view.until(settled(1))
+  const home = session.server.home.dir
+  const repo = join(home, "repo")
+  expect(instructionsOf(fake, 0)).toEndWith(
+    [
+      "",
+      `The working directory is ${repo}.`,
+      `# AGENTS.md instructions from ${join(home, "AGENTS.md")}\n\nHome rules.`,
+      `# AGENTS.md instructions from ${join(repo, "AGENTS.md")}\n\nTarget rules.`,
+      [
+        "# Skills",
+        "",
+        "A skill is a folder of instructions for one kind of task, in a `SKILL.md` file. When a task matches a skill's description, `read` its `SKILL.md` before you start, and follow it. When a message names a skill with `/name` or `$name`, the skill's `SKILL.md` comes with the message; follow it. Relative paths in a skill are relative to its folder.",
+        "",
+        `- deploy: Deploy it (file: ${join(repo, ".agents", "skills", "deploy", "SKILL.md")})`,
+      ].join("\n"),
+    ].join("\n\n"),
+  )
+  const skills = (await session.client.call("skills/list", { conversation: session.conversation })).result
+  expect(skills.map((skill: { name: string }) => skill.name)).toEqual(["deploy"])
 })
 
 test("openai-instructions: every tool ChatGPT's instructions name is one its request offers, by the same name", async () => {

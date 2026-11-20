@@ -7,6 +7,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, watch
 import { open, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
+import { TestTargets } from "./support/targets.ts"
 import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
 import {
   person,
@@ -1197,6 +1198,51 @@ test("crash-command-once: a command cut off by a crashed server is killed before
   await view.until((watch) => rerun(watch) !== before, 10_000)
   const after = rerun(view)
   expect(running(before)).toBe(false)
+  closeSync(openSync(release, "w"))
+  await view.until(settled(1), 20_000)
+  expect(toolResults(view.seen())).toEqual([
+    { text: expect.stringContaining("Tool bash was interrupted and may have partially run"), isError: true },
+    { text: `${after}\n`, isError: false },
+  ])
+  expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: ran it once", "run_end: answered"])
+  client.close()
+}, 30_000)
+
+test("target-server-restart: a remote command cut off by a crashed server is gone before the restarted run calls again, and the call is committed as interrupted", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box")
+  const sigmaHome = home()
+  writeFileSync(join(sigmaHome.dir, "config.toml"), targets.configToml)
+  const release = join(work, "release.fifo")
+  expect(Bun.spawnSync(["mkfifo", release]).exitCode).toBe(0)
+  await using _released = { [Symbol.asyncDispose]: async () => closeSync(openSync(release, "r+")) }
+  // As in crash-command-once, each copy prints its pid on the target and waits.
+  const call = { tool: { name: "bash", input: { command: `echo $$; cat ${release}` } } }
+  const first = await serving(await scriptEnv(sigmaHome, [call]))
+  let client = await RawClient.connect(sigmaHome.socket)
+  const started = await client.call("conversation/start", {
+    author: person("ada"),
+    cwd: work,
+    target: "box",
+    approvals: "auto",
+  })
+  const conversation = started.result.conversation as string
+  const cutOff = watchView(client, conversation)
+  await submit(client, conversation, "go")
+  await cutOff.until((watch) => runningOutput(watch.view()) !== undefined, 10_000)
+  const before = Number(runningOutput(cutOff.view()))
+  first.kill("SIGKILL")
+  await first.exited
+  client.close()
+
+  await serving(await scriptEnv(sigmaHome, [call, { text: "ran it once" }]))
+  client = await RawClient.connect(sigmaHome.socket)
+  const view = watchView(client, conversation)
+  const rerun = (watch: ViewWatch) => Number(runningOutput(watch.view()) ?? before)
+  await view.until((watch) => rerun(watch) !== before, 10_000)
+  const after = rerun(view)
+  expect(running(before)).toBe(false)
+  expect(running(after)).toBe(true)
   closeSync(openSync(release, "w"))
   await view.until(settled(1), 20_000)
   expect(toolResults(view.seen())).toEqual([

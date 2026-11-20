@@ -1,10 +1,11 @@
 // The TUI: the real TUI in a PTY on an @xterm/headless screen, typed into, against a real server.
 import { afterEach, expect, test } from "bun:test"
-import { readFileSync, rmSync, watch } from "node:fs"
+import { readFileSync, rmSync, watch, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ScriptStep } from "@sigma/models"
 import type { AuthState } from "@sigma/protocol"
 import { FakeClaude } from "./support/claude.ts"
+import { TestTargets } from "./support/targets.ts"
 import { FakeOpenAi, signIn } from "./support/openai.ts"
 import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
 import { scriptEnv, runningServer, serving, settled, start, submit, watchView, tempHome } from "./support/server.ts"
@@ -85,6 +86,42 @@ test("answer-tui, answer-author: a person types a prompt, presses enter and read
   const screen = await session.waitFor((screen) => screen.includes("hello ada") && screen.includes("READY"))
   expect(screen).toContain("ADA")
   expect(screen).toContain("SIGMA")
+  await quit(session)
+})
+
+test("target-cli: sigma --target --cwd starts a conversation on the target, the TUI shows the target, and reopening shows it again", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box", "box-1")
+  const sigmaHome = home()
+  writeFileSync(join(sigmaHome.dir, "config.toml"), targets.configToml)
+  const script = [
+    { tool: { name: "bash", input: { command: 'echo "on $SIGMA_TARGET_INSTANCE"' } } },
+    { text: "looked around" },
+  ]
+  const args = ["--conversation", "remote", "--target", "box", "--cwd", work, "--auto"]
+  const session = await open(script, args, sigmaHome)
+  await session.waitFor((screen) => screen.includes(`on box  ${work}`) && screen.includes("READY"))
+  session.type("look\r")
+  await session.waitFor((screen) => screen.includes("on box-1") && screen.includes("looked around"))
+  await quit(session)
+  const reopened = await open(script, ["--conversation", "remote"], sigmaHome)
+  await reopened.waitFor((screen) => screen.includes(`on box  ${work}`) && screen.includes("looked around"))
+  await quit(reopened)
+})
+
+test("target-restarted, target-replaced: the TUI shows when the computer behind its target restarted", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box", "box-1", "vol-1")
+  const sigmaHome = home()
+  writeFileSync(join(sigmaHome.dir, "config.toml"), targets.configToml)
+  const restart = `echo box-2 > ../instance; ${targets.killCommand("box")}`
+  const script = [{ tool: { name: "bash", input: { command: restart } } }, { text: "noted" }]
+  const session = await open(script, ["--target", "box", "--cwd", work, "--auto"], sigmaHome)
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type("go\r")
+  await session.waitFor(
+    (screen) => screen.includes("box restarted as box-2: files kept, processes gone") && screen.includes("noted"),
+  )
   await quit(session)
 })
 

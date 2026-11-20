@@ -60,7 +60,11 @@
         "properties": {
           "cwd": {
             "type": "string",
-            "description": "The directory the conversation works in."
+            "description": "The directory the conversation works in, a path on its target."
+          },
+          "target": {
+            "type": "string",
+            "description": "The computer its tools act on, as the home's target_connector names it. Absent: local, the server's own machine. Fixed for the conversation, its forks and its subagents; an id that names a conversation keeps that one's."
           },
           "id": {
             "type": "string",
@@ -163,6 +167,9 @@
           },
           {
             "$ref": "#/$defs/UnknownEffortEncoded"
+          },
+          {
+            "$ref": "#/$defs/TargetUnavailableEncoded"
           }
         ]
       },
@@ -213,7 +220,12 @@
               "description": "The conversation it was forked from."
             },
             "cwd": {
-              "type": "string"
+              "type": "string",
+              "description": "A path on its target."
+            },
+            "target": {
+              "type": "string",
+              "description": "The computer its tools act on; local for the server's own."
             },
             "model": {
               "type": "object",
@@ -314,6 +326,7 @@
             "id",
             "number",
             "cwd",
+            "target",
             "model",
             "approvals"
           ],
@@ -2829,6 +2842,33 @@
         "_tag",
         "effort",
         "efforts",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "TargetUnavailableEncoded": {
+      "type": "object",
+      "properties": {
+        "_tag": {
+          "type": "string",
+          "enum": [
+            "TargetUnavailable"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "_tag",
+        "target",
+        "reason",
         "message"
       ],
       "additionalProperties": true

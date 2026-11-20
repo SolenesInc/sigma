@@ -24,6 +24,8 @@ import {
   type ConversationInfo,
   type ModelSelection,
   type Outcome,
+  LOCAL_TARGET,
+  TARGET_CHANGED_KIND,
   PROTOCOL_VERSION,
   RESET_KIND,
   RUN_END_KIND,
@@ -325,6 +327,7 @@ const DRAWN = new Set([
   INTERRUPTED_KIND,
   CONTINUED_KIND,
   WITHDRAWN_KIND,
+  TARGET_CHANGED_KIND,
 ])
 
 /** What the entry of each act that has no other row says its author did. */
@@ -650,6 +653,16 @@ const EntryView = (props: {
     case RUN_END_KIND: {
       const end = dataOf<RunEnd>(entry)
       return <RunEndView outcome={end.outcome} message={end.message} />
+    }
+    case TARGET_CHANGED_KIND: {
+      const data = dataOf<{ target: string; to: { instance: string }; filesKept: boolean }>(entry)
+      return (
+        <text fg={color.yellow} marginTop={1} marginLeft={2}>
+          {data.filesKept
+            ? `◆ ${data.target} restarted as ${data.to.instance}: files kept, processes gone`
+            : `◆ ${data.target} was replaced by ${data.to.instance}: files, processes and changes from before are gone`}
+        </text>
+      )
     }
     case MODEL_KIND: {
       const data = dataOf<{ author: Author; selection: ModelSelection }>(entry)
@@ -1017,8 +1030,11 @@ const conversationScreen = Effect.fnUntraced(function* (
     )
   }).pipe(Effect.ignore, Effect.andThen(Effect.sleep(REWATCH_DELAY)), Effect.andThen(Effect.suspend(() => relist)))
 
+  // Images are the person's, read on this machine: from the conversation's folder when it is here too.
+  const remote = info !== undefined && info.target !== LOCAL_TARGET
+  const imageDir = () => (remote ? process.cwd() : (screen.cwd ?? process.cwd()))
   if (prompt !== undefined) {
-    const images = imagesIn(prompt, info?.cwd ?? process.cwd())
+    const images = imagesIn(prompt, remote ? process.cwd() : (info?.cwd ?? process.cwd()))
     yield* client["conversation/submit"]({
       conversation,
       requestId: crypto.randomUUID(),
@@ -1083,6 +1099,7 @@ const conversationScreen = Effect.fnUntraced(function* (
     get cwd() {
       return root.docs()["pi.agent"]?.cwd ?? info?.cwd
     },
+    target: remote ? info.target : undefined,
     get model() {
       return selectionOf(root.docs()["pi.agent"]) ?? info?.model
     },
@@ -1140,7 +1157,7 @@ const conversationScreen = Effect.fnUntraced(function* (
     submit: (text, steer) => {
       if (readOnly()) return setNotice(READ_ONLY_NOTICE)
       setNotice(undefined)
-      const images = imagesIn(text, screen.cwd ?? process.cwd())
+      const images = imagesIn(text, imageDir())
       const payload = {
         conversation,
         requestId: crypto.randomUUID(),
@@ -1165,7 +1182,7 @@ const conversationScreen = Effect.fnUntraced(function* (
         ),
       )
     },
-    attachments: (text) => attachmentsIn(text, screen.cwd ?? process.cwd()).map((attachment) => attachment.name),
+    attachments: (text) => attachmentsIn(text, imageDir()).map((attachment) => attachment.name),
     answer: (allow) => {
       const asking = [root, ...Object.values(tree.children)].find((each) => pendingCalls(each.docs()).length > 0)
       const pending = asking && pendingCalls(asking.docs())[0]

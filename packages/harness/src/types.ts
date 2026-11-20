@@ -178,7 +178,10 @@ export type AgentState = {
   modelTools?: string[] | { remove?: string[]; add?: string[] }
   /** Rendered after every extension section, as the section `instructions`. */
   instructions?: string
+  /** A path on `target`. */
   cwd?: string
+  /** The computer its tools act on: set when the conversation is created, never changed; absent for `local`. */
+  target?: string
   /** Tool rounds one run takes at most. */
   maxTurns?: number
   compaction?: CompactionSettings
@@ -222,6 +225,8 @@ export type Agent<T extends ToolRegistration = ToolRegistration> = {
   readonly sections: readonly PromptSection<T>[]
   readonly instructions?: string
   readonly cwd?: string
+  /** Absent for `local`. */
+  readonly target?: string
   readonly maxTurns?: number
   readonly compaction?: CompactionSettings
 }

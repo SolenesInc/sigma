@@ -68,6 +68,16 @@ export const INTERRUPTED_KIND = "sigma.interrupted"
 /** An entry `{ author }`: someone continued the conversation after a run that did not answer; a run starts after it. */
 export const CONTINUED_KIND = "sigma.continued"
 
+/** The target that names the server's own machine, the default. */
+export const LOCAL_TARGET = "local"
+
+/**
+ * An entry `{ target, from, to, filesKept }`: the computer behind the conversation's target changed since sigma last
+ * reached it, as the instance and files ids `from` and `to` say. `filesKept` when the files are the same: it restarted;
+ * otherwise it was replaced. The model is told before its next request.
+ */
+export const TARGET_CHANGED_KIND = "sigma.target_changed"
+
 export const RunEnd = Schema.Struct({
   outcome: Outcome,
   message: Schema.optionalKey(Schema.String.annotate({ description: "Why the run ended without an answer." })),
@@ -254,6 +264,17 @@ export class UnknownEffort extends Schema.TaggedError<UnknownEffort>()("UnknownE
   }
 }
 
+/** The target could not be reached at start: nothing was created. `reason` is what its connector said. */
+export class TargetUnavailable extends Schema.TaggedError<TargetUnavailable>()("TargetUnavailable", {
+  target: Schema.String,
+  reason: Schema.String,
+  message: Schema.String,
+}) {
+  constructor(props: { readonly target: string; readonly reason: string; readonly message?: string }) {
+    super({ ...props, message: props.message ?? `target ${props.target} unavailable: ${props.reason}` })
+  }
+}
+
 export const ModelSelection = Schema.Struct({
   provider: Schema.String,
   model: Schema.optionalKey(
@@ -265,7 +286,12 @@ export type ModelSelection = typeof ModelSelection.Type
 
 export const StartConversation = Rpc.make("conversation/start", {
   payload: {
-    cwd: Schema.String.annotate({ description: "The directory the conversation works in." }),
+    cwd: Schema.String.annotate({ description: "The directory the conversation works in, a path on its target." }),
+    target: Schema.optionalKey(
+      Schema.String.annotate({
+        description: `The computer its tools act on, as the home's target_connector names it. Absent: ${LOCAL_TARGET}, the server's own machine. Fixed for the conversation, its forks and its subagents; an id that names a conversation keeps that one's.`,
+      }),
+    ),
     id: Schema.optionalKey(
       Schema.String.annotate({
         description:
@@ -300,7 +326,7 @@ export const StartConversation = Rpc.make("conversation/start", {
         "The model it runs, defaults applied, with the provider's default model when none was named; for an id that names one, that conversation's.",
     }),
   }),
-  error: Schema.Union([ReadOnlyServer, InvalidConversationId, UnknownProvider, UnknownEffort]),
+  error: Schema.Union([ReadOnlyServer, InvalidConversationId, UnknownProvider, UnknownEffort, TargetUnavailable]),
 })
 
 /** An image a person attaches to their input. */
@@ -403,7 +429,10 @@ export const ConversationInfo = Schema.Struct({
       at: Schema.Int.annotate({ description: "The last entry it inherits." }),
     }).annotate({ description: "The conversation it was forked from." }),
   ),
-  cwd: Schema.String,
+  cwd: Schema.String.annotate({ description: "A path on its target." }),
+  target: Schema.String.annotate({
+    description: `The computer its tools act on; ${LOCAL_TARGET} for the server's own.`,
+  }),
   model: ModelSelection,
   approvals: Approvals,
   lineage: Schema.optionalKey(Lineage),
