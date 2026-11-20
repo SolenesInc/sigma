@@ -474,10 +474,20 @@ test("mode-print, answer-exec-fail: sigma exec exits 1 and says why when the run
 
 test("answer-exec-fail: sigma exec exits 1 when an interrupt withdraws its queued prompt, instead of waiting for good", async () => {
   const sigmaHome = home()
-  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight nine ten", delayMs: 300 }])
+  const gate = join(sigmaHome.dir, "gate")
+  expect(Bun.spawnSync(["mkfifo", gate]).exitCode).toBe(0)
+  // Opened at the end, so a call the interrupt left waiting exits with the test.
+  await using _released = { [Symbol.asyncDispose]: async () => closeSync(openSync(gate, "r+")) }
+  // The first run waits on the gate, so every prompt below still waits when the interrupt comes.
+  const env = await scriptEnv(sigmaHome, [{ tool: { name: "bash", input: { command: `cat ${gate}` } } }])
   await serving(env)
   const client = await RawClient.connect(sigmaHome.socket)
-  await client.call("conversation/start", { author: person("ada"), id: "shared", cwd: sigmaHome.dir })
+  await client.call("conversation/start", {
+    author: person("ada"),
+    id: "shared",
+    cwd: sigmaHome.dir,
+    approvals: "auto",
+  })
   const view = watchView(client, "shared")
   await view.until(() => true)
   await submit(client, "shared", "count")
@@ -956,15 +966,15 @@ test("answer-exec, wire-dropped: a sigma exec whose prompt waits, runs and ends 
 
 test("answer-exec-fail, wire-dropped: a sigma exec dropped while an interrupt withdraws its queued prompt exits 1 and says so", async () => {
   const sigmaHome = home()
+  const gate = join(sigmaHome.dir, "gate")
+  expect(Bun.spawnSync(["mkfifo", gate]).exitCode).toBe(0)
+  // Opened at the end, so a call the interrupt left waiting exits with the test.
+  await using _released = { [Symbol.asyncDispose]: async () => closeSync(openSync(gate, "r+")) }
   writeFileSync(join(sigmaHome.dir, "note.txt"), "a note\n")
-  // The first run talks slowly while exec's prompt queues; once it is withdrawn, another run commits more than exec's
-  // watch holds, so exec, stopped, is dropped and learns the prompt's fate from what it missed.
+  // The first run waits on the gate while exec's prompt queues; once it is withdrawn, another run commits more than
+  // exec's watch holds, so exec, stopped, is dropped and learns the prompt's fate from what it missed.
   const reads = Array.from({ length: 60 }, () => ({ tool: { name: "read", input: { path: "note.txt" } } }))
-  const script = [
-    { text: "one two three four five six seven eight nine ten", delayMs: 300 },
-    ...reads,
-    { text: "read them all" },
-  ]
+  const script = [{ tool: { name: "bash", input: { command: `cat ${gate}` } } }, ...reads, { text: "read them all" }]
   await using server = await runningServer(script, { home: sigmaHome, connectionQueue: 16 })
   const client = await RawClient.connect(server.home.socket)
   const conversation = (
@@ -1000,10 +1010,20 @@ test("answer-exec-fail, wire-dropped: a sigma exec dropped while an interrupt wi
 
 test("answer-exec-fail: sigma exec exits 1 when one interrupt withdraws its prompt among more than its window holds", async () => {
   const sigmaHome = home()
-  const env = await scriptEnv(sigmaHome, [{ text: "one two three four five six seven eight nine ten", delayMs: 300 }])
+  const gate = join(sigmaHome.dir, "gate")
+  expect(Bun.spawnSync(["mkfifo", gate]).exitCode).toBe(0)
+  // Opened at the end, so a call the interrupt left waiting exits with the test.
+  await using _released = { [Symbol.asyncDispose]: async () => closeSync(openSync(gate, "r+")) }
+  // The first run waits on the gate, so every prompt below still waits when the interrupt comes.
+  const env = await scriptEnv(sigmaHome, [{ tool: { name: "bash", input: { command: `cat ${gate}` } } }])
   await serving(env)
   const client = await RawClient.connect(sigmaHome.socket)
-  await client.call("conversation/start", { author: person("ada"), id: "shared", cwd: sigmaHome.dir })
+  await client.call("conversation/start", {
+    author: person("ada"),
+    id: "shared",
+    cwd: sigmaHome.dir,
+    approvals: "auto",
+  })
   const view = watchView(client, "shared")
   await view.until(() => true)
   await submit(client, "shared", "count")
@@ -1011,8 +1031,11 @@ test("answer-exec-fail: sigma exec exits 1 when one interrupt withdraws its prom
   const inbox = (watch: ViewWatch) => (watch.view().docs["pi.inbox"] as { items: Array<unknown> }).items
   await view.until((watch) => inbox(watch).length === 1)
   // More prompts wait behind exec's than a watch's window keeps, so the commit that withdraws them all slides exec's
-  // withdrawal out of the window it hands exec.
+  // withdrawal out of the window it hands exec. Exec, stopped meanwhile, finds their changes waiting ahead of the answer
+  // to the call it makes on its first view, so it reads past them while that call is unanswered.
+  exec.kill("SIGSTOP")
   for (let i = 0; i < 110; i++) await submit(client, "shared", `behind ${i}`)
+  exec.kill("SIGCONT")
   await client.call("conversation/interrupt", { author: person("ada"), conversation: "shared" })
   const result = await finished(exec)
   expect(result).toMatchObject({ code: 1, stdout: "" })
