@@ -39,8 +39,9 @@ The server takes
 the steps in order across all its runs: a step says its `text`, then fails the
 run with `fail`, or calls its `tool` and goes on to the next step in the same
 run, or ends the run. `delayMs` paces its words for a person watching; a step
-with `"hold": "<path>"` stops after its first word until a file exists at that
-path (`touch` it to go on), which is how tests keep a run live. Once the steps run out Sigma echoes, and a restarted
+with `"hold": "<path>"`, an absolute path in a folder that exists, stops after
+its first word until a file exists there (`touch` it to go on), which is how
+tests keep a run live. Once the steps run out Sigma echoes, and a restarted
 server starts them over. `--script` copies the file into the run, so later
 edits to it do nothing. A step can also make several calls in
 one response with `tools`, a list of `{name, input}`, and `agent` (such as

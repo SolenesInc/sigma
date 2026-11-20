@@ -1,4 +1,10 @@
 {
+  "amended/codemode.test.ts :: durable code mode > delivers a result only after its journal commit": [
+    "codemode-replay"
+  ],
+  "amended/codemode.test.ts :: durable code mode > times a script out across a restart, without admitting new calls": [
+    "codemode-replay"
+  ],
   "amended/conversation-transcript.test.ts :: ConversationTranscript > shares one load between concurrent calls of loadEarlier, and of fillGap for one gap": [
     "view-fill-gap"
   ],

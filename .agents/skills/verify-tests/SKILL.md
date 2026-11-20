@@ -24,8 +24,9 @@ this skill does not repeat it. `packages/conformance` is outside this skill:
 
 ## Run
 
-Run each changed test file with `bun test <file>`, then ten times in a row. A
-failure in any run is a flake.
+Run each changed test file with `bun test <file>`, then ten times in a row
+under load: `bun scripts/under-load.ts --runs=10 -- bun test <file>` runs it
+beside twice as many CPU spinners as cores. A failure in any run is a flake.
 
 When you doubt that a test can fail, break the behavior it guards and run it.
 Do that in a scratch worktree (`git worktree add --detach`), never in this

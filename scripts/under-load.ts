@@ -14,7 +14,7 @@ const flag = (name: string, fallback: number) => {
   const value = flags.find((f) => f.startsWith(`--${name}=`))?.split("=")[1]
   return value === undefined ? fallback : Number(value)
 }
-if (command.length === 0) {
+if (command.length === 0 || !(flag("burners", 1) > 0) || !(flag("runs", 1) > 0)) {
   console.error("usage: bun scripts/under-load.ts [--burners=N] [--runs=N] -- <command...>")
   process.exit(2)
 }
@@ -27,10 +27,9 @@ const spinners = Array.from({ length: burners }, () =>
 const stop = () => {
   for (const spinner of spinners) spinner.kill("SIGKILL")
 }
-process.on("SIGINT", () => {
-  stop()
-  process.exit(130)
-})
+// The spinners die with this script however it ends: a signal, a command that cannot start, or its last run.
+process.on("exit", stop)
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, () => process.exit(130))
 
 let passed = 0
 for (let run = 1; run <= runs; run++) {
@@ -43,6 +42,5 @@ for (let run = 1; run <= runs; run++) {
     `under-load: run ${run}/${runs} ${code === 0 ? "ok" : `failed (${code})`} in ${Math.round((performance.now() - started) / 1000)}s, ${burners} spinners, load ${load}`,
   )
 }
-stop()
 console.log(`under-load: ${passed}/${runs} passed`)
 process.exit(passed === runs ? 0 : 1)

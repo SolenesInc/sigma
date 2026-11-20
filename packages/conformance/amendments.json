@@ -1,5 +1,19 @@
 [
  {
+  "test": "upstream/test/codemode.test.ts :: durable code mode > delivers a result only after its journal commit",
+  "owner": "codemode-package",
+  "spec": "7.6",
+  "rewrite": "Await the run's SessionFailed after the lost journal commit, and close the Harness, instead of polling with eventually and sleeping 100 ms.",
+  "private": "timing: the first call within eventually's polls, and a 100 ms window"
+ },
+ {
+  "test": "upstream/test/codemode.test.ts :: durable code mode > times a script out across a restart, without admitting new calls",
+  "owner": "codemode-package",
+  "spec": "7.6",
+  "rewrite": "Give the script an hour and step the Harness clock two hours while the Harness is closed, instead of a 300 ms timeout against a 400 ms restart sleep.",
+  "private": "timing: a Harness close within 300 ms"
+ },
+ {
   "test": "upstream/test/env-node.test.ts :: NodeExecutionEnv filesystem > creates temporary directories and files",
   "owner": "env-package",
   "spec": "section 10.1",

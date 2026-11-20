@@ -109,7 +109,6 @@ export const runningServer = async (
   const home = options.home ?? tempHome()
   const scope = Effect.runSync(Scope.make())
   const { logged, recorder } = logRecorder()
-  const stderr = stderrRecorder()
   await Effect.runPromise(
     Layer.buildWithScope(
       serverLayer(home, {
@@ -121,7 +120,7 @@ export const runningServer = async (
         ...(options.claudeStop === undefined ? {} : { claudeStop: options.claudeStop }),
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.bashTimeout === undefined ? {} : { bashTimeout: options.bashTimeout }),
-      }).pipe(Layer.provide(recorder), Layer.provide(stderr.layer)),
+      }).pipe(Layer.provide(recorder)),
       scope,
     ),
   )
@@ -129,7 +128,6 @@ export const runningServer = async (
   return {
     home,
     logged,
-    printed: stderr.printed,
     stop,
     [Symbol.asyncDispose]: async () => {
       await stop()
@@ -202,8 +200,9 @@ export const hold = () => {
 }
 
 /**
- * Answers once from a server still serving `home`: a server that took a passed idle grace for idle has begun to stop
- * before this round trip ends.
+ * Answers once from a server still serving `home`. A server that wrongly takes a passed idle grace for idle wakes on
+ * a promise and begins to stop well before a connect and a call come back, so this round trip almost always catches
+ * it; that is event-loop order, not a signal, and a healthy server passes it on any machine.
  */
 export const stillServing = async (home: Home) => {
   const client = await RawClient.connect(home.socket)

@@ -77,9 +77,12 @@ test("crash-committed: a run cut off by a crashed server is answered once after 
   const conversation = await start(client)
   const before = watchView(client, conversation)
   await submit(client, conversation, "count")
+  // Killed once the first word is committed, so it is there, cut off, after the restart.
   await before.until((watch) => {
-    const live = watch.view().docs["pi.live"] as { generation?: { message?: unknown } } | undefined
-    return live?.generation?.message !== undefined
+    const live = watch.view().docs["pi.live"] as
+      | { generation?: { message?: { content?: Array<{ text?: string }> } } }
+      | undefined
+    return (live?.generation?.message?.content?.[0]?.text ?? "").length > 0
   })
   first.kill("SIGKILL")
   await first.exited

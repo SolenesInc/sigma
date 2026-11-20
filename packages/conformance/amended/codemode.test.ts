@@ -1,5 +1,5 @@
-// Amends two tests of upstream/test/codemode.test.ts that raced the wall clock; each keeps upstream's script, tools and
-// checks.
+// Amends two tests of upstream/test/codemode.test.ts (spec 7.6, amendments.json) that raced the wall clock; each keeps
+// upstream's script, tools and checks.
 // - "times a script out across a restart, without admitting new calls" gave the script 300 ms and restarted after a
 //   400 ms sleep, so the deadline passed while the Harness was closed only when the close took under 300 ms. Under
 //   load the live sandbox timed the script out first ("Script timed out" without "deadline passed", 3 of 10 runs at
@@ -10,7 +10,8 @@
 //   signal: the lost commit fails the Session, and with it the run's wait, after which nothing of the script can start.
 //   Neither version catches a result delivered before its commit: the lost commit fails the Session before such a
 //   result reaches the second call (measured: with delivery moved ahead of the commit, the second call did not run
-//   within 3 s). What both check is that nothing runs past a lost commit.
+//   within 3 s). What both check is that nothing runs past a lost commit: here through the Harness's close, and with
+//   the lost commit as the one failure reported, which upstream does not check.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -167,8 +168,8 @@ describe("durable code mode", () => {
 		// The lost commit fails the Session, and with it the run waiting on it: once the run has ended, nothing more of
 		// the script can start.
 		await expect(submitted.wait(context)).rejects.toMatchObject({ name: "SessionFailed", cause: lost });
+		await harness.close(context).catch(() => {});
 		expect(chat.setup.reports).toEqual([lost]);
 		expect(seen).toEqual(["first"]);
-		await harness.close(context).catch(() => {});
 	});
 });

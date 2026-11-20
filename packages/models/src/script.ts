@@ -21,8 +21,9 @@ export const ScriptStep = Schema.Struct({
   /** A pace for a person watching live text; a test orders by `hold` instead. */
   delayMs: Schema.optionalKey(Schema.Int),
   /**
-   * A file path: after its first word the answer waits until a file exists there, however long that takes. A test
-   * makes the file when it is done with the live run, or never, when an interrupt or a restart ends the run.
+   * An absolute path in a directory that exists: after its first word the answer waits until a file exists there,
+   * however long that takes. A test makes the file when it is done with the live run, or never, when an interrupt or a
+   * restart ends the run.
    */
   hold: Schema.optionalKey(Schema.String),
   agent: Schema.optionalKey(Schema.String),
