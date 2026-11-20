@@ -59,10 +59,10 @@ const OWN_TOOL = "mcp_sigma_"
 const SUMMARY = "toolSummary"
 
 /** Why an `agy` subagent's call of sigma's tools is refused: it has no conversation of its own in sigma. */
-export const SUBAGENT_REFUSAL = "sigma's tools serve the agent the person talks to, not a subagent it started"
+const SUBAGENT_REFUSAL = "sigma's tools serve the agent the person talks to, not a subagent it started"
 
 /** The longest `agy` lets an MCP call take is 180 s (F28); an own tool returns within this, as `wait_worker` does (D15). */
-export const OWN_TOOL_LIMIT = "150 seconds"
+const OWN_TOOL_LIMIT = "150 seconds"
 
 /** What a job's call says until its end: `agy` runs it on after its turn ended (F40). */
 export const IN_BACKGROUND = "still running in the background; its end comes as a report"
@@ -128,12 +128,7 @@ const promptOf = (said: ReadonlyArray<Said>) =>
  * Starts `agy acp` at `start`, as a connection; it is closed with the scope, after `session/close`, which ends the
  * daemon commands `agy` would otherwise leave running (s-7bmc8w F7).
  */
-export const openConnection = (
-  config: ProcessConfig<AgySettings>,
-  start: Start,
-  host: Host,
-  bridge: BridgeOptions | undefined,
-) =>
+export const openConnection = (config: ProcessConfig<AgySettings>, start: Start, host: Host, bridge: BridgeOptions) =>
   Effect.gen(function* () {
     const { agent, settings } = config
     const output = new Inbox<Frame>()
@@ -149,7 +144,7 @@ export const openConnection = (
     const named = (tool: string) =>
       tool.startsWith(OWN_TOOL) && own.has(tool.slice(OWN_TOOL.length)) ? tool.slice(OWN_TOOL.length) : undefined
     const mcpServers =
-      bridge === undefined || config.own.length === 0
+      config.own.length === 0
         ? []
         : [
             {
@@ -288,15 +283,20 @@ export const openConnection = (
           .then(done, (error) => done({ content: [{ type: "text", text: String(error) }], isError: true }))
       }
 
-      /** The announced own call a `tools/call` is: the first waiting one with its name and arguments (F43). */
+      /**
+       * The announced own call a `tools/call` is: the first waiting one with its name and arguments (F43), else the
+       * first with its name, so arguments agy passes in another form do not leave the call unanswered.
+       */
       const pair = (request: BridgeCall) => {
         const wanted = JSON.stringify(request.arguments)
+        let named: string | undefined
         for (const [id, known] of calls) {
           if (known.own !== "waiting" || known.call.name !== request.name) continue
           const { [SUMMARY]: _, ...args } = known.call.arguments as Json
           if (JSON.stringify(args) === wanted) return id
+          named ??= id
         }
-        return undefined
+        return named
       }
 
       /** A `tools/call` the bridge took: run it as the call it pairs with, or hold it until agy announces that call. */
@@ -330,7 +330,7 @@ export const openConnection = (
         const said = [...flush(), { type: "said", response: responseId(), at: at(), content: [call as Part] } as Frame]
         responses++
         if (ownName !== undefined) {
-          const held = unpaired.findIndex((event) => pair(event.request) === id)
+          const held = unpaired.findIndex((event) => !event.request.signal.aborted && pair(event.request) === id)
           if (held !== -1) runOwn(id, unpaired.splice(held, 1)[0]!)
           return said
         }
@@ -367,6 +367,9 @@ export const openConnection = (
 
       /** The calls a cancel or a failure ended: they get no result, so the run records them as interrupted. */
       const cutOff = (): Frame[] => {
+        // A held `tools/call` belongs to the turn that ended: agy no longer waits for it.
+        for (const held of unpaired.splice(0))
+          held.done({ content: [{ type: "text", text: "the turn ended before this call ran" }], isError: true })
         const out: Frame[] = []
         for (const [id, known] of calls) {
           if (known.job) continue
@@ -655,11 +658,11 @@ export const AGY_RUN_KIND = "agy.run"
 
 /**
  * `agy` as a harness of the hosted run; `settings` says how the `agy` of a provider instance starts, and `bridge` where
- * sigma's own tools are served to it from (D14). Without one it is offered none.
+ * sigma's own tools are served to it from (D14).
  */
 export const agyAdapter = (
   settings: (provider: string) => AgySettings | undefined,
-  bridge?: BridgeOptions,
+  bridge: BridgeOptions,
 ): Adapter<AgySettings> => ({
   kind: AGY_RUN_KIND,
   name: NAME,

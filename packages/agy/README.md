@@ -1,7 +1,7 @@
 # @sigma/agy
 
 Antigravity's `agy` as a harness of the hosted run (`@sigma/hosted`), over the Agent Client Protocol (`agy acp`):
-JSON-RPC on the process's stdio. `agyAdapter(settings)` is the adapter, whose runs are `agy.run` tasks; `agyAccount` is
+JSON-RPC on the process's stdio. `agyAdapter(settings, bridge)` is the adapter, whose runs are `agy.run` tasks; `agyAccount` is
 an `agy` instance's account. Measured against `agy` 1.5.13.
 
 - `src/acp.ts`: one `agy acp` process: requests, answers, notifications and agy's own requests, in order, and the

@@ -22,7 +22,8 @@ const NATIVE = new Set(["Agent", "Task", "invoke_subagent"])
 
 /**
  * A script call's arguments, from the JSON its result records. That JSON is cut short when it is long, so then only
- * the keys the scorer reads, `provider` and `model`, read from the script's source, which the call committed whole.
+ * the keys the scorer reads, `provider` and `model`, read from the script's source, which the call committed whole:
+ * the first of each in the script, so a script that starts several workers and names a provider for one counts for all.
  */
 export const argumentsOf = (args: string, code: string): Record<string, unknown> => {
   try {
@@ -37,8 +38,9 @@ export const argumentsOf = (args: string, code: string): Record<string, unknown>
   }
 }
 
-/** The parent's tool calls, each once, from a saved watch. */
-const callsOf = (path: string): Call[] => {
+/** The parent's tool calls, each once, from a saved watch, and whether its run ended with an answer. */
+const runOf = (path: string): { calls: Call[]; answered: boolean } => {
+  let answered = false
   const seen = new Set<string>()
   const calls: Call[] = []
   /** The source of each code mode script, by its call. */
@@ -46,6 +48,7 @@ const callsOf = (path: string): Call[] => {
   const walk = (value: any): void => {
     if (Array.isArray(value)) return value.forEach(walk)
     if (value === null || typeof value !== "object") return
+    if (value.kind === "sigma.run_end" && value.data?.outcome === "answered") answered = true
     if (value.kind === "pi.assistant" && Array.isArray(value.model))
       for (const message of value.model)
         for (const part of Array.isArray(message.content) ? message.content : [])
@@ -71,7 +74,7 @@ const callsOf = (path: string): Call[] => {
     Object.values(value).forEach(walk)
   }
   for (const line of readFileSync(path, "utf8").split("\n")) if (line.trim() !== "") walk(JSON.parse(line))
-  return calls
+  return { calls, answered }
 }
 
 /** Whether a run did what its case asks, and if not, why. */
@@ -120,7 +123,10 @@ export const score = (dir: string) => {
       let ok = 0
       for (const planned of mine) {
         const path = join(dir, planned.file)
-        const why = existsSync(path) ? judge(planned, callsOf(path)) : "no watch saved"
+        const run = existsSync(path) ? runOf(path) : undefined
+        // A run that failed or never ended starts no worker, and must not pass a case that wants none.
+        const why =
+          run === undefined ? "no watch saved" : run.answered ? judge(planned, run.calls) : "the run did not answer"
         if (why === undefined) ok++
         else misses.push(`${id} ${harness} run ${planned.run}: ${why} (${planned.file})`)
       }

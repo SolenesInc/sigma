@@ -53,25 +53,43 @@ export const openBridge = (
       const path = join(options.dir, `${crypto.randomUUID().slice(0, 8)}.sock`)
       if (Buffer.byteLength(path) > SOCKET_PATH_LIMIT)
         throw new Error(`the bridge socket ${path} is longer than a unix socket allows; use a shorter SIGMA_HOME`)
-      const calls = new Map<string, AbortController>()
-      const listener = Bun.listen<{ buffer: string }>({
+      /** The calls in flight on every connection, so closing aborts them all. */
+      const everyCall = new Set<Map<string, AbortController>>()
+      type Connection = { buffer: string; decoder: TextDecoder; calls: Map<string, AbortController> }
+      const listener = Bun.listen<Connection>({
         unix: path,
         socket: {
-          open: (socket) => void (socket.data = { buffer: "" }),
+          open: (socket) => {
+            socket.data = { buffer: "", decoder: new TextDecoder(), calls: new Map() }
+            everyCall.add(socket.data.calls)
+          },
+          close: (socket) => {
+            for (const aborted of socket.data.calls.values()) aborted.abort()
+            everyCall.delete(socket.data.calls)
+          },
           data: (socket, chunk) => {
-            socket.data.buffer += chunk.toString()
+            // A character can be split between two reads.
+            socket.data.buffer += socket.data.decoder.decode(chunk, { stream: true })
             for (let at = socket.data.buffer.indexOf("\n"); at !== -1; at = socket.data.buffer.indexOf("\n")) {
               const line = socket.data.buffer.slice(0, at)
               socket.data.buffer = socket.data.buffer.slice(at + 1)
               if (line.trim() === "") continue
               const send = (frame: Json) => socket.write(`${JSON.stringify({ jsonrpc: "2.0", ...frame })}\n`)
-              handle(JSON.parse(line), send)
+              let message: Json
+              try {
+                message = JSON.parse(line)
+              } catch {
+                send({ id: null, error: { code: -32700, message: "parse error" } })
+                continue
+              }
+              handle(message, send, socket.data.calls)
             }
           },
         },
       })
 
-      const handle = (message: Json, send: (frame: Json) => void) => {
+      /** Answers one message of a connection, whose calls in flight, by request id, are `calls`. */
+      const handle = (message: Json, send: (frame: Json) => void, calls: Map<string, AbortController>) => {
         const { id, method, params } = message
         const answer = (result: Json) => send({ id, result })
         switch (method) {
@@ -112,11 +130,11 @@ export const openBridge = (
             if (id !== undefined) answer({})
         }
       }
-      return { path, listener, calls }
+      return { path, listener, everyCall }
     }),
-    ({ path, listener, calls }) =>
+    ({ path, listener, everyCall }) =>
       Effect.sync(() => {
-        for (const aborted of calls.values()) aborted.abort()
+        for (const calls of everyCall) for (const aborted of calls.values()) aborted.abort()
         listener.stop(true)
         rmSync(path, { force: true })
       }),

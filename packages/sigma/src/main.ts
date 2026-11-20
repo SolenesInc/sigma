@@ -304,6 +304,8 @@ const mcpBridgeCommand = Command.make(
         end()
       })()
       await ended
+      // Reading stdin would keep the process alive after the server closed the socket.
+      process.exit(0)
     })
   }),
 ).pipe(Command.withDescription("Serve sigma's tools to agy over stdio (started by agy, not by people)"))

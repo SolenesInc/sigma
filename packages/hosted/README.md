@@ -4,8 +4,9 @@ The hosted run: a run of a conversation whose model a harness serves, on `@sigma
 that owns its own model loop, tools and session, which sigma drives as a process; an adapter speaks one harness's
 protocol and turns what it says into this package's frames. The hosted run starts or reuses the harness's process,
 tells it what it missed, commits what it does and answers what it asks. The harness keeps its own session and runs its
-own tools; sigma's transcript stays the truth, and every frame becomes a commit. Claude Code (`@sigma/claude`) is the
-first adapter.
+own tools; sigma's transcript stays the truth, and every frame becomes a commit. Claude Code (`@sigma/claude`) and
+`agy` (`@sigma/agy`) are its adapters. An adapter whose harness cuts a call of sigma's tools sooner than the tool
+returns says so in `ownToolLimit` (agy: 150 s), which the server passes to `wait_worker`.
 
 `hostedRunTasks(options)` returns the task definitions (each adapter's run task, as `claude.run`, then `hosted.job`,
 `hosted.job-anchor` and `hosted.command`), to install in the registry, and the `RunTasks` to open the harness with, which choose an

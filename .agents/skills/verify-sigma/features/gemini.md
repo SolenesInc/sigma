@@ -114,8 +114,9 @@ Steps:
 
 - **Server restart.** A new process loads `agy`'s session (`gemini-resume`).
 - **Provider.** `agy` runs its own tools and session, like Claude Code; sigma
-  answers its permission requests and reads its Stop hook from a directory
-  of its own.
+  answers its permission requests, reads its Stop hook from a directory
+  of its own, and serves it the worker tools over the MCP bridge
+  (`worker-gemini-parent`), which a loaded session gets again.
 - **Idle.** A job's end while idle wakes the conversation (`gemini-job`).
 
 ## Tests

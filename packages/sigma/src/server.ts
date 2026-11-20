@@ -969,7 +969,6 @@ const afterReply = (effect: Effect.Effect<void>) =>
     }),
   )
 
-/** How the server's live Claude Code processes wait for their conversation's next run. */
 /** The command `agy` runs to reach a bridge socket: this sigma's `mcp-bridge` (D14). */
 const bridgeCommand = (socket: string) => {
   const main = join(import.meta.dir, "main.ts")
@@ -978,6 +977,7 @@ const bridgeCommand = (socket: string) => {
     : { command: process.execPath, args: [main, "mcp-bridge", socket] }
 }
 
+/** How the server's live Claude Code processes wait for their conversation's next run. */
 export interface ClaudeLiveOptions {
   /** How long a Claude Code process stays live for its conversation's next run; default `IDLE_RELEASE`. */
   readonly idle?: Duration.Input

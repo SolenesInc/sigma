@@ -743,13 +743,16 @@ const waitWorker = ({ waitLimit, clock }: WorkerOptions) =>
           const clamped =
             requested !== undefined && requested < wanted
               ? { message: `Requested timeout of ${requested}ms was clamped to the minimum of ${wanted}ms.` }
-              : timeout < wanted
-                ? {
-                    message: `Waited ${timeout}ms, the longest one call can wait here; call wait_worker again to keep waiting.`,
-                  }
-                : {}
+              : {}
+          /** What a wait that ends empty says: cut short by the harness's limit, it says to wait again. */
+          const empty =
+            timeout < wanted
+              ? {
+                  message: `Waited ${timeout}ms, the longest one call can wait here; call wait_worker again to keep waiting.`,
+                }
+              : clamped
           const watch = yield* api.watchDoc(InboxDoc, api.conversationId)
-          if (watch === undefined) return json({ timed_out: true, received: [], ...clamped })
+          if (watch === undefined) return json({ timed_out: true, received: [], ...empty })
           // A steered item reaches the model after this turn, so it is news. Workers' mail is taken and returned; other
           // input steered while the turn runs, such as a person's, ends the wait with nothing received. A follow-up
           // waits for the run to end, so it does not. Mail another call or a step took first is waited past.
@@ -779,7 +782,7 @@ const waitWorker = ({ waitLimit, clock }: WorkerOptions) =>
             Effect.timeoutOption(Duration.millis(timeout)),
             clock === undefined ? (effect) => effect : Effect.provideService(Clock.Clock, clock),
           )
-          return Option.getOrUndefined(Option.flatten(outcome)) ?? json({ timed_out: true, received: [], ...clamped })
+          return Option.getOrUndefined(Option.flatten(outcome)) ?? json({ timed_out: true, received: [], ...empty })
         }),
       ),
   })
