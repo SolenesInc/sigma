@@ -86,10 +86,18 @@ approval                a tool call waiting for a person to allow or deny it;
 | How the kernel is measured against pi-durable's suite        | `packages/conformance/README.md`                          |
 | Which use cases have tests, and which wait on a rebuild step | `bun run coverage`                                        |
 
+## Landing
+
+Changes land directly on `main` with `land`. Before you land a change, run
+`land guide` and follow it. `land` runs `bun run check` as its gate, and CI
+runs the same check on `main`.
+
+Contributors from a fork open a pull request instead.
+
 ## Checks
 
 ```sh
-bun run check   # what CI runs
+bun run check   # the gate, and what CI runs
 ```
 
 - A change that adds, changes or deletes tests goes through the `verify-tests`
@@ -98,7 +106,7 @@ bun run check   # what CI runs
   `verify-conformance`.
 - Before reporting a change done, drive it with the `verify-sigma` skill and
   show its evidence. A change to a user-facing behavior updates that skill's
-  feature map in the same PR.
+  feature map in the same landing.
 - After a protocol change run `bun run schema` and commit the result.
 
 The skills are in `.agents/skills`.
