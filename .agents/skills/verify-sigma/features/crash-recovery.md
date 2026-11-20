@@ -3,8 +3,9 @@
 A run cut off by a crashed server carries on when the server comes back. The
 client that was watching reconnects, starts a new server if none runs, and
 shows the answer the restarted run gives. A call that was running when the server died is
-recorded as interrupted and the model carries on; a local command the crash
-left running is killed before the run resumes. A run that crashes the
+recorded as interrupted and the model carries on; a local command one of
+sigma's own tools started, and the crash left running, is killed before the
+run resumes. Claude Code and the commands it runs are not yet covered. A run that crashes the
 server three times in a row ends instead of looping.
 
 ## Sub-features
