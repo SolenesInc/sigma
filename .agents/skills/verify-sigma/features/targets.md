@@ -187,8 +187,9 @@ Preconditions:
   target, so a test can give the home and the target different files at the
   same path on one machine.
 - A remote conversation gets the home's `AGENTS.md`, but not the home's
-  skills or the Claude Code agent types: its tools cannot read a file on the
-  home, and it takes nothing of the person's `~/.claude`.
+  skills, the person's `~/.agents/skills` or the Claude Code agent types: its
+  tools cannot read a file on the home, and it takes nothing of the person's
+  `~/.claude`. agy never runs on a target.
 - Images a person attaches are read on their own machine, from the TUI's or `sigma exec`'s
   folder when the conversation is on a target.
 - The instance is announced through a `target` prompt section, rendered
