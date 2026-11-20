@@ -103,7 +103,9 @@ test("idle-server: a server with no run in flight uses no CPU", async () => {
   await view.until(settled(1))
   // A watching client stays connected: an open view costs nothing while nothing commits. The second after an answer
   // still settles (measured: 0.01 s in it, then 0.00 or 0.01 s in each of the next nine), so the measure starts after.
-  await Bun.sleep(1000)
+  // A busy machine stretches that settling: on CI's 3-core macOS runner, with the check's other parts beside it, a 1 s
+  // wait let it reach the window and measured 3 ticks. The measure starts 3 s after the answer.
+  await Bun.sleep(3000)
   const before = cpuSeconds(server.pid)
   await Bun.sleep(3000)
   // The measuring tick is a hundredth of a second; two ticks in three seconds is flat.
