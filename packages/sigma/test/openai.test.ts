@@ -7,6 +7,8 @@ import { join } from "node:path"
 import type { HomeConfig } from "../src/config.ts"
 import type { Home } from "../src/home.ts"
 import { TestTargets } from "./support/targets.ts"
+import { FakeClaude } from "./support/claude.ts"
+import type { ClaudeProcessSettings } from "@sigma/claude"
 import { accessToken, ACCOUNT, FakeOpenAi, matches, signIn } from "./support/openai.ts"
 import { DEADLINE, deadline, errorTag, RawClient } from "./support/raw.ts"
 import {
@@ -40,10 +42,12 @@ const conversationWith = async (
     cwd?: (home: string) => string
     target?: string
     config?: HomeConfig
+    claude?: ClaudeProcessSettings
   } = {},
 ) => {
   const server = await runningServer([], {
     openai: fake.options(),
+    ...(options.claude === undefined ? {} : { claude: options.claude }),
     ...(options.home === undefined ? {} : { home: options.home }),
     ...(options.config === undefined ? {} : { config: options.config }),
   })
@@ -146,7 +150,7 @@ test("openai-tools: sigma offers its tools, runs the call the model asks for and
   ])
   const tools = JSON.parse(fake.responses()[0]!.body).tools
   expect(tools.map((tool: { name: string }) => tool.name)).toEqual(
-    expect.arrayContaining(["read", "write", "edit", "bash", "grep", "glob", "spawn_agent", "wait_agent"]),
+    expect.arrayContaining(["read", "write", "edit", "bash", "grep", "glob", "start_worker", "wait_worker"]),
   )
   expect(tools.find((tool: { name: string }) => tool.name === "bash")).toMatchObject({
     type: "function",
@@ -396,7 +400,7 @@ test("cache-instructions-change, section-deltas: an AGENTS.md changed between tw
   expect(update).not.toContain("Answer in English.")
 })
 
-test("cache-fresh-subagent: a subagent started without its parent's history keeps its own requests' front, under a cache key of its own", async () => {
+test("cache-fresh-worker: a worker started without its parent's history keeps its own requests' front, under a cache key of its own", async () => {
   await using fake = new FakeOpenAi()
   fake.play("fresh_subagent_tool_call")
   await using session = await conversationWith(fake)
@@ -411,7 +415,7 @@ test("cache-fresh-subagent: a subagent started without its parent's history keep
   expect(session.said().at(-2)).toBe("assistant: The scout says echo prints hi.")
 })
 
-test("cache-conversation-fork: a spawn_agent fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own", async () => {
+test("cache-conversation-fork: a start_worker fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own", async () => {
   await using fake = new FakeOpenAi()
   fake.play("subagent")
   fake.play("fresh_subagent_tool_call")
@@ -430,7 +434,7 @@ test("cache-conversation-fork: a spawn_agent fork and a conversation/fork send t
   const before = runEnds(forkView.seen()).length
   await submit(session.client, fork, "Ask a scout what echo prints.")
   await forkView.until(settled(before + 1), 20_000)
-  // The parent's first request, its spawn_agent fork's, the fork's three, then conversation/fork's four: its own, its
+  // The parent's first request, its start_worker fork's, the fork's three, then conversation/fork's four: its own, its
   // fresh subagent's two, and its own again.
   const sent = fake.responses()
   expect(sent).toHaveLength(7)
@@ -445,7 +449,7 @@ test("cache-conversation-fork: a spawn_agent fork and a conversation/fork send t
   expect(fresh).not.toBe(parent)
 })
 
-test("cache-fork-subagent: a forked subagent of a type sends its parent's cache key, instructions and tools, and gets its notice and type after the inherited history", async () => {
+test("cache-fork-worker: a forked worker of a type sends its parent's cache key, instructions and tools, and gets its notice and type after the inherited history", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("forked_subagent_of_a_type")
   await using session = await conversationWith(fake, {
@@ -469,14 +473,14 @@ test("cache-fork-subagent: a forked subagent of a type sends its parent's cache 
     content: [
       {
         type: "input_text",
-        text: 'Updated system prompt section "instructions":\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/review. You are a subagent; your final answer goes to /root.\n\n# You are a reviewer agent\n\nBe strict about tests.\n</instructions>',
+        text: 'Updated system prompt section "instructions":\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/review. You are a worker; your final answer goes to /root.\n\n# You are a reviewer agent\n\nBe strict about tests.\n</instructions>',
       },
     ],
   })
   expect(session.said().slice(-2)).toEqual(["assistant: The reviewer approves.", "run_end: answered"])
 })
 
-test("subagent-fork: a spawned agent's last answer reaches the parent", async () => {
+test("worker-fork: a started agent's last answer reaches the parent", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("subagent")
   await using session = await conversationWith(fake)
@@ -762,11 +766,11 @@ test("start-instructions: ChatGPT is told the instructions its conversation star
   const update = (JSON.parse(fake.responses()[1]!.body).input as Array<any>).at(-1)
   expect(update.role).toBe("developer")
   expect(update.content[0].text).toBe(
-    'Updated system prompt section "instructions":\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/scout. You are a subagent; your final answer goes to /root.\n</instructions>',
+    'Updated system prompt section "instructions":\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/scout. You are a worker; your final answer goes to /root.\n</instructions>',
   )
 })
 
-test("subagent-types, cache-fork-subagent: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out", async () => {
+test("worker-types, cache-fork-worker: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("subagent_of_a_type")
   await using session = await conversationWith(fake, {
@@ -787,14 +791,14 @@ test("subagent-types, cache-fork-subagent: an agent of a type gets its parent's 
 
   const [parent, child] = [instructionsOf(fake, 0), instructionsOf(fake, 1)]
   expect(parent).toContain(
-    "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
+    "# Agent types\n\nThe agent types `start_worker` takes as `agent_type`:\n- reviewer: Reviews diffs",
   )
   // The reviewer can spawn too, so it is told the types as well; its instructions follow its parent's.
   expect(child).toContain(
-    "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
+    "# Agent types\n\nThe agent types `start_worker` takes as `agent_type`:\n- reviewer: Reviews diffs",
   )
   expect(child).toEndWith(
-    "\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/review. You are a subagent; your final answer goes to /root.\n\n# You are a reviewer agent\n\nBe strict about tests.\n</instructions>",
+    "\n\n<instructions>\nReport with attn when done.\n\nYour task name is /root/review. You are a worker; your final answer goes to /root.\n\n# You are a reviewer agent\n\nBe strict about tests.\n</instructions>",
   )
   expect(JSON.parse(fake.responses()[1]!.body).input).toHaveLength(1)
   const listed = (await session.client.call("conversation/list")).result as Array<{ lineage?: unknown }>
@@ -803,7 +807,7 @@ test("subagent-types, cache-fork-subagent: an agent of a type gets its parent's 
   ])
 })
 
-test("subagent-types, code-mode-models: a code-mode model that can spawn is told the agent types, and so is its subagent", async () => {
+test("worker-types, code-mode-models: a code-mode model that can start workers is told the agent types, and so is its worker", async () => {
   await using fake = new FakeOpenAi()
   const expected = fake.play("code_mode_subagent_of_a_type")
   await using session = await conversationWith(fake, {
@@ -821,13 +825,36 @@ test("subagent-types, code-mode-models: a code-mode model that can spawn is told
   expectRequests(fake, expected)
   const [parent, child] = [instructionsOf(fake, 0), instructionsOf(fake, 1)]
   expect(parent).toContain(
-    "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
+    "# Agent types\n\nThe agent types `start_worker` takes as `agent_type`:\n- reviewer: Reviews diffs",
   )
   expect(child).toContain("# You are a reviewer agent\n\nBe strict.")
   expect(child).toContain(
-    "# Agent types\n\nThe agent types `spawn_agent` takes as `agent_type`:\n- reviewer: Reviews diffs",
+    "# Agent types\n\nThe agent types `start_worker` takes as `agent_type`:\n- reviewer: Reviews diffs",
   )
   expect(session.said().slice(-2)).toEqual(["assistant: Reviewed.", "run_end: answered"])
+})
+
+test("worker-provider, worker-section, codemode-tool: ChatGPT, told of workers, starts one on Claude Code from a script and reads its answer from the wait", async () => {
+  await using fake = new FakeOpenAi()
+  const expected = fake.play("code_mode_worker_on_claude")
+  using claude = new FakeClaude("models", "text")
+  await using session = await conversationWith(fake, { model: "gpt-6.1-sol", claude: claude.options })
+  await session.submit("Ask Claude to reply with: fixture text ok")
+  await session.view.until(settled(1), 20_000)
+  expectRequests(fake, expected)
+  expect(instructionsOf(fake, 0)).toContain(
+    "Workers. This session can start workers with the start_worker tool. A worker is an agent in a conversation of its own",
+  )
+  // The script's result, which ChatGPT reads next, is the worker's answer.
+  const input = JSON.parse(fake.responses()[1]!.body).input as Array<{ type: string; output?: unknown }>
+  expect(input.find((item) => item.type === "custom_tool_call_output")?.output).toMatch(/Output:\n\nfixture text ok$/)
+  const listed = (await session.client.call("conversation/list")).result as Array<{
+    model: { provider: string }
+    lineage?: { task?: string }
+  }>
+  expect(listed.find((each) => each.lineage?.task === "/root/poet")?.model.provider).toBe("claude")
+  expect(claude.userTexts()).toEqual([[expect.stringMatching(/Payload:\nReply with exactly: fixture text ok$/)]])
+  expect(session.said().slice(-2)).toEqual(["assistant: Claude says: fixture text ok", "run_end: answered"])
 })
 
 test("code-mode-models, openai-code-mode, codemode-grammar, codemode-tool: a model ChatGPT marks code-mode-only is offered codemode alone, writes raw JavaScript for it, and gets the script's result", async () => {

@@ -97,7 +97,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 Screen, `packages/sigma/test/screen.test.ts`:
 
 - approval-ask, codemode-nested-policy: a script's call that waits for a person shows its command under the script before ctrl+y allows it
-- subagent-card, codemode-nested-policy: a subagent a script started shows as a card under the script, and ctrl+y answers the call it asks about
+- worker-card, codemode-nested-policy: a worker a script started shows as a card under the script, and ctrl+y answers the call it asks about
 
 Stack, `packages/sigma/test/stack.test.ts`:
 

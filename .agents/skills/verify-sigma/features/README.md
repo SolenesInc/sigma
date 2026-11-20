@@ -152,11 +152,12 @@ lists when a change touches them.
 - [Code mode](./code-mode.md) (people, agents): ChatGPT's code-mode-only models get one
   `codemode` tool whose scripts call sigma's tools in a sandbox, asking like
   direct calls, and survive a server restart.
-- [Subagents](./subagents.md) (people, agents): OpenAI and scripted models start subagents,
-  each a conversation under its parent, shown as cards whose calls `^Y` and
-  `^N` answer; follow-ups, history forks, model overrides, `[agents]` limits
-  and `exec` denials; agent types from `.claude/agents`; Claude Code's own
-  subagents; `Esc` stops them all, or one from its own pane.
+- [Workers](./workers.md) (people, agents): OpenAI and scripted models start workers
+  on any ready provider, Claude Code included, each a conversation under its
+  parent, shown as cards whose calls `^Y` and `^N` answer; a wait returns what
+  they sent; follow-ups, history forks, named providers and models, `[agents]`
+  limits and `exec` denials; agent types from `.claude/agents`; Claude Code's
+  own subagents; `Esc` stops them all, or one from its own pane.
 - [Sign-in](./sign-in.md) (people, agents): the splash, `^L`, `sigma login` and `logout`, and
   `auth/*` show, start, answer and cancel a sign-in by browser, device code or
   Claude Code's terminal.

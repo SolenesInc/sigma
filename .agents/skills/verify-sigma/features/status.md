@@ -39,7 +39,7 @@ None.
 Preconditions:
 
 - A fresh run, here `r`, with `--script` steps that spawn a subagent which writes a file (put your run id where the path says `<run>`):
-  `[{"tool": {"name": "spawn_agent", "input": {"task_name": "writer", "message": "go"}}}, {"tool": {"name": "wait_agent", "input": {"timeout_ms": 600000}}}, {"agent": "/root/writer", "tool": {"name": "write", "input": {"path": "/tmp/sigma-verify/<run>/note.txt", "content": "hi"}}}]`.
+  `[{"tool": {"name": "start_worker", "input": {"task_name": "writer", "message": "go"}}}, {"tool": {"name": "wait_worker", "input": {"timeout_ms": 600000}}}, {"agent": "/root/writer", "tool": {"name": "write", "input": {"path": "/tmp/sigma-verify/<run>/note.txt", "content": "hi"}}}]`.
 
 - **Chosen id.** Run
   `drive.ts r rpc conversation/start '{"author": {"id": "ada", "name": "ada"}, "id": "11111111-1111-4111-8111-111111111111", "cwd": "/tmp"}'`,

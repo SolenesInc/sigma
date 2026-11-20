@@ -1488,7 +1488,7 @@
     "area": "Q",
     "feature": "Child conversation under a parent (R725-770)",
     "verdict": "bring",
-    "useCases": ["child-conversation", "subagent-spawn"]
+    "useCases": ["child-conversation", "worker-start"]
   },
   {
     "id": "Q2",
@@ -1509,7 +1509,7 @@
     "area": "Q",
     "feature": "Abort cascades to children (R725-770, \u00a75.5)",
     "verdict": "bring",
-    "useCases": ["child-abort-cascade", "subagent-interrupt"]
+    "useCases": ["child-abort-cascade", "worker-interrupt"]
   },
   {
     "id": "Q5",

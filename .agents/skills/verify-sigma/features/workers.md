@@ -1,77 +1,103 @@
-# Subagents
+# Workers
 
-An OpenAI or scripted model can start subagents with Codex's agent tools:
-`spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `list_agents`
-and `interrupt_agent`. Each subagent works in a conversation of its own, on
-its parent's provider and in its directory, addressed by a task name such as
-`/root/scribe`. The parent's transcript shows a card per subagent with what it
-last did and whether it works, waits on a person or ended; a call the subagent
-asks about shows on its card and `^Y` or `^N` answers it from the parent. A
-subagent's last message of each run reaches its parent. `Esc` stops the run
-and every subagent's under it. On Claude, Claude Code runs its own subagents,
-and sigma commits each into a conversation of its own the same way; on a
-target, Claude Code's Agent tool is off and it calls sigma's `spawn_agent`
-(`target-member-mode`). What a
-subagent's requests keep of the prompt cache is in
-[Prompt cache](./prompt-cache.md).
+A model on sigma's own loop (ChatGPT, or the script) can start workers with
+the worker tools: `start_worker`, `wait_worker`, `message_worker`,
+`assign_worker`, `list_workers` and `stop_worker`. A worker is a conversation
+of its own, under its parent in a tree, on any ready provider of the home:
+its parent's, by default, or the `provider` and `model` its `start_worker`
+names, which pass unchanged. It shares its parent's directory and target, is
+addressed by a task name such as `/root/scribe`, takes input from people,
+asks for its own approvals, and outlives its parent's turn. The parent's
+transcript shows a card per worker with what it last did and whether it
+works, waits on a person or ended; a call the worker asks about shows on its
+card and `^Y` or `^N` answers it from the parent. A worker's last message of
+each run reaches its parent: through `wait_worker` when the parent waits,
+otherwise as mail. `Esc` stops the run and every worker's under it. Claude
+Code's own subagents are not workers: Claude Code runs them, and sigma
+commits each into a conversation of its own the same way (`subagent-claude`).
+On a target, Claude Code's Agent tool is off and it calls sigma's
+`start_worker` (`target-member-mode`). What a worker's requests keep of the
+prompt cache is in [Prompt cache](./prompt-cache.md).
 
 ## Sub-features
 
-- `subagent-spawn` starts a subagent from a `spawn_agent` call: the TUI draws a
-  `⧉ <name>` card in place of the call, and `conversation/list`
-  gains a conversation whose `lineage` names its `parent`, `root`, `call`,
-  `task` and `title`.
-- `subagent-fork` gives a subagent its parent's history up to the spawn
+- `worker-start` starts a worker from a `start_worker` call, which answers
+  `{"task_name": "/root/<name>"}` at once: the TUI draws a `⧉ <name>` card in
+  place of the call, and `conversation/list` gains a conversation whose
+  `lineage` names its `parent`, `root`, `call`, `task` and `title`.
+- `worker-provider` starts a worker on another ready provider named in
+  `provider`, Claude Code included. It starts from its brief alone: no fork
+  (`fork_turns` `"all"` is refused), none of the parent's instructions, and
+  the `model` named or that provider's default. An unknown provider, or one
+  that is not ready, is refused, naming the ready ones:
+  `no provider <p>; the ready providers are ...` or
+  `provider <p> is not ready; the ready providers are ...`. The tool's
+  description lists the home's providers.
+- `worker-section` tells a model on sigma's own loop that can call
+  `start_worker`, directly or from a code mode script, what a worker is and to
+  pass a named provider and model unchanged, in a `Workers.` paragraph of its
+  instructions. It names no reason to prefer one provider over another.
+- `worker-fork` gives a worker on its parent's provider its parent's history up to the start
   (its view's `conversation.parent`), or none with `"fork_turns": "none"`.
-- `subagent-model` runs a subagent on its parent's model, or on the `model`
-  its `spawn_agent` names when the parent's provider lists it; an unlisted
-  model fails the call.
-- `subagent-card` shows the card's state: `working`, `waiting on you` with the
+- `worker-model` runs a worker on its parent's model, or on the `model` and
+  `effort` its `start_worker` names, unchanged. A provider whose loop sigma
+  runs must list the model, or the call fails; Claude Code takes any name.
+- `worker-card` shows the card's state: `working`, `waiting on you` with the
   asked call and `allow <Tool(subject)>?  ^Y  allow  ^N  deny`, `done` with its
   last message, `interrupted` or `failed`.
-- `subagent-approve` answers a subagent's asked call with `^Y` or `^N` in the
-  parent's TUI, or `approval/resolve` on the subagent's conversation. A call
-  asked deeper in the tree shows on the card of the subagent above it.
-- `subagent-message` delivers a parent's `send_message` to a running subagent
+- `worker-approve` answers a worker's asked call with `^Y` or `^N` in the
+  parent's TUI, or `approval/resolve` on the worker's conversation. A call
+  asked deeper in the tree shows on the card of the worker above it.
+- `worker-message` delivers a parent's `message_worker` to a running worker
   at its next step, as a `sigma.mail` entry of kind `message`
   inside the same run; it starts no run.
-- `subagent-agents` shows the tree with `list_agents` (each agent's name and
-  `running`, `interrupted`, `completed` or `errored`), and stops one
-  subagent from its parent with `interrupt_agent`, answering its previous
-  status.
-- `subagent-root-env` runs a subagent's commands with
+- `worker-list` shows the tree with `list_workers`
+  (`{"workers": [{"name", "status"}]}`, each `running`, `interrupted`,
+  `completed` or `errored`), and stops one worker from its parent with
+  `stop_worker`, answering its `previous_status`.
+- `worker-root-env` runs a worker's commands with
   `SIGMA_ROOT_CONVERSATION` set to the conversation people started.
-- `subagent-answer` hands a subagent's last message to its parent: a waiting
-  `wait_agent` returns `Wait completed.`, and the message shows under a
-  `/root/<name>` author in the parent's transcript; an idle parent gets it as
-  input that starts a run.
-- `subagent-followup` wakes an idle subagent with `followup_task`, and each of
+- `worker-answer` hands a worker's last message to its parent: a waiting
+  `wait_worker` returns it as
+  `{"timed_out": false, "received": [{"from": "/root/<name>", "kind": "final_answer", "text": ...}]}`
+  and takes it out of the parent's inbox, so it is not also delivered as
+  mail; the TUI draws it under a `/root/<name>` author. A parent that is not
+  waiting gets it as mail at its next step, and an idle parent as input that
+  starts a run.
+- `worker-wait` returns `{"timed_out": true, "received": []}` when nothing
+  arrives within `timeout_ms` (default 30 s, clamped to 10 s at least, with a
+  `message` saying so), and returns early, with nothing received and
+  `Wait interrupted by new input.`, when a person steers input in.
+- `worker-person` answers a person's input to a worker in the worker's own
+  conversation; its parent is told nothing.
+- `worker-assign` wakes an idle worker with `assign_worker`, and each of
   its answers reaches the parent.
-- `subagent-interrupt` stops the parent's run with `Esc` or
-  `conversation/interrupt`, and leaves its subagents working; a second `Esc`,
+- `worker-interrupt` stops the parent's run with `Esc` or
+  `conversation/interrupt`, and leaves its workers working; a second `Esc`,
   on the idle parent, stops every run under it, and the card shows
-  `interrupted` (`interrupt-idle` in [Interrupt](./interrupt.md)). Stopping
-  just a subagent, from its own conversation, stops its run, not its parent.
-  The subagents Claude Code starts in the background differ: Claude Code
+  `interrupted` (`interrupt-idle` in [Interrupt](./interrupt.md)), a worker on
+  another provider included, whose waiting approval clears. Stopping
+  just a worker, from its own conversation, stops its run, not its parent.
+  The workers Claude Code starts in the background differ: Claude Code
   stops them with its parent's run.
-- `subagent-exec` makes `sigma exec` without `--auto` deny the calls its
-  subagents would ask about, as it does its own; `exec` follows every
+- `worker-exec` makes `sigma exec` without `--auto` deny the calls its
+  workers would ask about, as it does its own; `exec` follows every
   conversation of its tree.
-- `subagent-limits` takes `[agents] max_threads` (default 6) from
-  `SIGMA_HOME/config.toml`: a tree runs at most `max_threads` subagents at
-  once, and a spawn past it fails naming `max_threads`. A subagent keeps
-  `spawn_agent` and starts subagents of its own, as deep as the limit allows.
-  `max_threads = 0` turns subagents off: no conversation, the root included,
-  is offered `spawn_agent`.
-- `subagent-types` reads agent types from `.claude/agents/*.md` from the
+- `worker-limits` takes `[agents] max_threads` (default 6) from
+  `SIGMA_HOME/config.toml`: a tree runs at most `max_threads` workers at
+  once, and a start past it fails naming `max_threads`. A worker keeps
+  `start_worker` and starts workers of its own, as deep as the limit allows.
+  `max_threads = 0` turns workers off: no conversation, the root included,
+  is offered `start_worker`.
+- `worker-types` reads agent types from `.claude/agents/*.md` from the
   directory up to the repository root, then Claude Code's config directory's
   `agents/` (`$CLAUDE_CONFIG_DIR`, else `~/.claude`; a conversation on a target
   reads only the project's). A ChatGPT conversation, or a Claude one on a
-  target (told `mcp__sigma__spawn_agent`), that can call `spawn_agent`, directly or from a code mode script, is told
-  them under `# Agent types` and names one as `spawn_agent`'s `agent_type`;
-  an unknown one fails the call, naming the types there are. A subagent's
+  target (told `mcp__sigma__start_worker`), that can call `start_worker`, directly or from a code mode script, is told
+  them under `# Agent types` and names one as `start_worker`'s `agent_type`;
+  an unknown one fails the call, naming the types there are. A worker's
   instructions are those its parent inherited (the root's own, for a
-  subagent of the root), then the line naming its task, then
+  worker of the root), then the line naming its task, then
   `# You are a <name> agent` and the type's body; a parent's own task line
   and type do not pass down, its `lineage` has `agentType`, its card reads
   `⧉ <name> (<agent type>)`, and it runs on the type's `model` when ChatGPT
@@ -116,8 +142,8 @@ Preconditions:
 
   ```json
   [
-    { "tool": { "name": "spawn_agent", "input": { "task_name": "scribe", "message": "write it down" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    { "tool": { "name": "start_worker", "input": { "task_name": "scribe", "message": "write it down" } } },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "text": "the scribe is done" },
     { "agent": "/root/scribe", "tool": { "name": "bash", "input": { "command": "echo scribbled" } } },
     { "agent": "/root/scribe", "text": "wrote it" }
@@ -128,9 +154,8 @@ Preconditions:
   for `allow bash(echo scribbled)?`: the screen shows
   `⧉ scribe waiting on you` (the card stands in place of the call), `bash(echo scribbled)` and `◆ WAITING`. Press
   `C-y` and wait for `the scribe is done`: the card reads `⧉ scribe done` over
-  `wrote it`, `▸ wait_agent` shows
-  `{"message":"Wait completed.","timed_out":false}`, then `/root/scribe` says
-  `wrote it` and `SIGMA` says `the scribe is done`, `■ READY`.
+  `wrote it`, `▸ wait_worker` with `/root/scribe` saying `wrote it` under it,
+  then `SIGMA` says `the scribe is done`, `■ READY`.
   `drive.ts r rpc conversation/list` lists the subagent with
   `"lineage": {"parent": <the TUI's conversation>, "task": "/root/scribe", "title": "scribe", ...}`.
 
@@ -140,13 +165,13 @@ Preconditions:
   [
     {
       "tool": {
-        "name": "spawn_agent",
+        "name": "start_worker",
         "input": { "task_name": "reader", "message": "read the hostname", "fork_turns": "none" }
       }
     },
-    { "tool": { "name": "list_agents", "input": {} } },
-    { "tool": { "name": "send_message", "input": { "target": "reader", "message": "also say it twice" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    { "tool": { "name": "list_workers", "input": {} } },
+    { "tool": { "name": "message_worker", "input": { "target": "reader", "message": "also say it twice" } } },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "text": "reader reported" },
     {
       "agent": "/root/reader",
@@ -162,10 +187,11 @@ Preconditions:
   `drive.ts r rpc conversation/start '{"author": {"id": "ada", "name": "ada"}, "cwd": "/tmp", "provider": "script"}'`
   and
   `drive.ts r watch <id> --submit delegate --until run_end --timeout 30000 --save message`:
-  `list_agents` returns
-  `{"agents":[{"agent_name":"/root","agent_status":"running"},{"agent_name":"/root/reader","agent_status":"running"}]}`,
-  `send_message` returns an empty result, `wait_agent` returns
-  `Wait completed.`, and `reader reported` ends the run.
+  `list_workers` returns
+  `{"workers":[{"name":"/root","status":"running"},{"name":"/root/reader","status":"running"}]}`,
+  `message_worker` returns an empty result, `wait_worker` returns
+  `{"timed_out":false,"received":[{"from":"/root/reader","kind":"final_answer","text":"read it"}]}`,
+  and `reader reported` ends the run.
   `drive.ts r watch <reader id> --save reader` shows a `sigma.mail`
   `new_task`, the `read` call and its result, then a `sigma.mail` `message`
   `also say it twice`, then `read it` and a `sigma.run_end` `answered`: the
@@ -178,12 +204,12 @@ Preconditions:
   [
     {
       "tool": {
-        "name": "spawn_agent",
+        "name": "start_worker",
         "input": { "task_name": "slowpoke", "message": "count slowly", "fork_turns": "none" }
       }
     },
-    { "tool": { "name": "interrupt_agent", "input": { "target": "slowpoke" } } },
-    { "tool": { "name": "list_agents", "input": {} } },
+    { "tool": { "name": "stop_worker", "input": { "target": "slowpoke" } } },
+    { "tool": { "name": "list_workers", "input": {} } },
     { "text": "stopped it" },
     { "agent": "/root/slowpoke", "text": "one two three four five six seven eight nine ten", "delayMs": 1500 }
   ]
@@ -191,7 +217,7 @@ Preconditions:
 
   start a `script` conversation as above and run
   `drive.ts r watch <id> --submit 'stop the slowpoke' --until run_end --save interrupt-agent`:
-  `interrupt_agent` returns `{"previous_status":"running"}`, `list_agents`
+  `stop_worker` returns `{"previous_status":"running"}`, `list_workers`
   then lists `/root/slowpoke` as `interrupted`, and the run ends
   `stopped it`. `drive.ts r watch <slowpoke id>` shows the `sigma.mail`
   `new_task` and a `sigma.run_end` `interrupted`.
@@ -213,14 +239,14 @@ Preconditions:
 
   ```json
   [
-    { "tool": { "name": "spawn_agent", "input": { "task_name": "lead", "message": "get it done" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    { "tool": { "name": "start_worker", "input": { "task_name": "lead", "message": "get it done" } } },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "text": "the lead is done" },
     {
       "agent": "/root/lead",
-      "tool": { "name": "spawn_agent", "input": { "task_name": "helper", "message": "do the thing" } }
+      "tool": { "name": "start_worker", "input": { "task_name": "helper", "message": "do the thing" } }
     },
-    { "agent": "/root/lead", "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    { "agent": "/root/lead", "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "agent": "/root/lead", "text": "the helper is done" },
     { "agent": "/root/lead/helper", "tool": { "name": "bash", "input": { "command": "echo deep" } } },
     { "agent": "/root/lead/helper", "text": "did it" }
@@ -240,8 +266,8 @@ Preconditions:
 
   ```json
   [
-    { "tool": { "name": "spawn_agent", "input": { "task_name": "envy", "message": "show your root" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    { "tool": { "name": "start_worker", "input": { "task_name": "envy", "message": "show your root" } } },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "text": "envy answered" },
     { "agent": "/root/envy", "tool": { "name": "bash", "input": { "command": "echo root=$SIGMA_ROOT_CONVERSATION" } } },
     { "agent": "/root/envy", "text": "shown", "delayMs": 1 }
@@ -255,7 +281,7 @@ Preconditions:
 
 - **Exec denies a subagent's call.** With the `Spawn, approve, answer` script, in a fresh run,
   `drive.ts r sigma exec delegate`: exit 0, stdout `the scribe is done`,
-  stderr `› spawn_agent(scribe)`, `› wait_agent` and
+  stderr `› start_worker(scribe)`, `› wait_worker` and
   `denied bash(echo scribbled): exec cannot ask, pass --auto to allow calls`:
   `exec` follows every conversation of its tree. `drive.ts r watch <subagent id>`
   shows the denied call's `pi.tool-result`, then `wrote it`. In another fresh run, `drive.ts r sigma exec --auto delegate`
@@ -265,8 +291,8 @@ Preconditions:
 
   ```json
   [
-    { "tool": { "name": "spawn_agent", "input": { "task_name": "slowpoke", "message": "count slowly" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    { "tool": { "name": "start_worker", "input": { "task_name": "slowpoke", "message": "count slowly" } } },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "agent": "/root/slowpoke", "text": "one two three four five six seven eight nine ten", "delayMs": 1500 }
   ]
   ```
@@ -279,15 +305,17 @@ Preconditions:
 
   ```json
   [
-    { "tool": { "name": "spawn_agent", "input": { "task_name": "slow", "message": "make it", "fork_turns": "none" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    {
+      "tool": { "name": "start_worker", "input": { "task_name": "slow", "message": "make it", "fork_turns": "none" } }
+    },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "tool": { "name": "bash", "input": { "command": "touch made" } }, "agent": "/root/slow" }
   ]
   ```
 
   run `drive.ts r serve`, start a conversation with `conversation/start`, and
   `drive.ts r watch <id> --submit 'start a slow one' --save root-start`; take
-  the subagent's id from the `details` of the `spawn_agent` result.
+  the subagent's id from the `details` of the `start_worker` result.
   `drive.ts r watch <subagent id>` shows its `bash` call in
   `sigma.approvals`. Run
   `drive.ts r rpc conversation/interrupt '{"author": {"id": "ada", "name": "ada"}, "conversation": "<id>"}'` (result
@@ -300,10 +328,10 @@ Preconditions:
 
   ```json
   [
-    { "tool": { "name": "spawn_agent", "input": { "task_name": "scribe", "message": "note one thing" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
-    { "tool": { "name": "followup_task", "input": { "target": "scribe", "message": "note another" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    { "tool": { "name": "start_worker", "input": { "task_name": "scribe", "message": "note one thing" } } },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
+    { "tool": { "name": "assign_worker", "input": { "target": "scribe", "message": "note another" } } },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "text": "both notes in" },
     { "agent": "/root/scribe", "text": "first note", "delayMs": 1000 },
     { "agent": "/root/scribe", "text": "second note", "delayMs": 1000 }
@@ -314,9 +342,9 @@ Preconditions:
   `drive.ts r rpc conversation/start '{"author": {"id": "ada", "name": "ada"}, "cwd": "/tmp", "provider": "script"}'`
   and
   `drive.ts r watch <id> --submit 'take notes' --until run_end --save followup`:
-  each `wait_agent` returns `Wait completed.`, each followed by a
-  `sigma.mail` `final_answer` from `/root/scribe`,
-  `first note` then `second note`, then `both notes in`.
+  each `wait_worker` returns a `final_answer` from `/root/scribe` in
+  `received`, `first note` then `second note`, then `both notes in`; the
+  parent's transcript holds no `sigma.mail`, since each wait took its answer.
   `drive.ts r watch <subagent id> --save scribe` shows two runs, started by
   `note one thing` and `note another`, each a `sigma.mail` `new_task` from
   `/root`.
@@ -327,13 +355,13 @@ Preconditions:
   [
     {
       "tool": {
-        "name": "spawn_agent",
+        "name": "start_worker",
         "input": { "task_name": "loner", "message": "go alone", "fork_turns": "none" }
       }
     },
     {
       "tool": {
-        "name": "spawn_agent",
+        "name": "start_worker",
         "input": { "task_name": "other", "message": "go elsewhere", "model": "gpt-5.5" }
       }
     },
@@ -344,7 +372,7 @@ Preconditions:
 
   start a `script` conversation as above and run
   `drive.ts r watch <id> --submit 'send them' --until run_end --save sent`:
-  the second `spawn_agent` fails with
+  the second `start_worker` fails with
   `no model gpt-5.5 on script; leave model out to use yours`, and the run ends
   `sent off`. `conversation/list` holds one subagent, `/root/loner`, whose
   view has no `conversation.parent`. Run
@@ -359,9 +387,9 @@ Preconditions:
 
   ```json
   [
-    { "tool": { "name": "spawn_agent", "input": { "task_name": "first", "message": "go" } } },
-    { "tool": { "name": "spawn_agent", "input": { "task_name": "second", "message": "go too" } } },
-    { "tool": { "name": "wait_agent", "input": { "timeout_ms": 600000 } } },
+    { "tool": { "name": "start_worker", "input": { "task_name": "first", "message": "go" } } },
+    { "tool": { "name": "start_worker", "input": { "task_name": "second", "message": "go too" } } },
+    { "tool": { "name": "wait_worker", "input": { "timeout_ms": 600000 } } },
     { "text": "one at a time" },
     { "agent": "/root/first", "text": "first done", "delayMs": 1000 }
   ]
@@ -369,31 +397,30 @@ Preconditions:
 
   `drive.ts r sigma exec spread`: stdout `one at a time`, and
   `drive.ts r watch <parent id> --save threads` shows the second
-  `spawn_agent`'s result starting
+  `start_worker`'s result starting
   `at most 1 subagents work at once (max_threads)`.
   Subagents off: in a fresh run, `drive.ts r up --fake-openai subagent`, write
   `[agents]` and `max_threads = 0` to the same file, and run
   `drive.ts r sigma exec --provider openai 'Send a scout to find the gnome.'`:
   in `evidence/fake-openai.ndjson` the first request's `tools` has no
-  `spawn_agent`. The recording calls it anyway, and the call's result is
-  `Tool spawn_agent is not available`. `conversation/list` holds no
+  `start_worker`. The recording calls it anyway, and the call's result is
+  `Tool start_worker is not available`. `conversation/list` holds no
   subagent.
 
 - **OpenAI subagent** (`--fake-openai subagent`). `drive.ts r tui start --provider openai`,
   wait for `READY`, type `Send a scout to find the gnome.` and `Enter`, then
-  wait for `The scout says` and `READY`: `⧉ scout done` over `Under the floor.`, `▸ wait_agent` with
-  `{"message":"Wait completed.","timed_out":false}`, `/root/scout` saying
-  `Under the floor.`, then `The scout says: under the floor.`
+  wait for `The scout says` and `READY`: `⧉ scout done` over `Under the floor.`, `▸ wait_worker` with
+  `/root/scout` saying `Under the floor.` under it, then `The scout says: under the floor.`
   `conversation/list` has the subagent with `"task": "/root/scout"`. In
   `evidence/fake-openai.ndjson` all three requests are `as recorded`; the
-  second is the subagent's: no `spawn_agent` tool, and six input items: the
-  parent's prompt, the `spawn_agent` and `wait_agent` calls from the spawning
+  second is the subagent's: no `start_worker` tool, and six input items: the
+  parent's prompt, the `start_worker` and `wait_worker` calls from the spawning
   response, two placeholder results reading
   `Tool result unavailable: history ends before this call completed.`, then
   `Message Type: NEW_TASK` for `/root/scout`.
 
 - **Agent types, no history** (`--fake-openai subagent_of_a_type`, whose
-  `spawn_agent` names `"agent_type": "reviewer"` and `"fork_turns": "none"`).
+  `start_worker` names `"agent_type": "reviewer"` and `"fork_turns": "none"`).
   Make a project with an agent type:
 
   ```sh
@@ -413,7 +440,7 @@ Preconditions:
   parent's instructions list `- reviewer: Reviews diffs` under
   `# Agent types`, and the second request,
   the subagent's, has one input item, instructions holding
-  `# You are a reviewer agent`, and no `spawn_agent` tool.
+  `# You are a reviewer agent`, and no `start_worker` tool.
 
 - **Claude subagent asks** (`--fake-claude subagent_asks`).
   `drive.ts r tui start --provider claude`, wait for `READY`, type
@@ -473,8 +500,8 @@ Preconditions:
 ## Contexts
 
 - **Ids.** `conversation/list` lists each subagent after its parent, with
-  `lineage` naming `parent`, `root`, `call` (the `spawn_agent` call's id),
-  `title` and `task`, and with the model its `spawn_agent` named. Ids are
+  `lineage` naming `parent`, `root`, `call` (the `start_worker` call's id),
+  `title` and `task`, and with the model its `start_worker` named. Ids are
   numbers, or the id a client chose at `conversation/start`.
 - **Provider.** Claude keeps Claude Code's own subagents, which take input only through their parent. OpenAI uses Codex's agent tools.
 
@@ -482,47 +509,53 @@ Preconditions:
 
 Wire, `packages/sigma/test/wire.test.ts`:
 
-- child-tools, subagent-answer: the model spawns a subagent, waits for it, and its final answer is mailed back
-- subagent-types: spawning an agent of a type sigma doesn't know is refused, naming it
-- subagent-limits, child-tools: spawns in one response start at most maxThreads subagents
-- subagent-limits, child-tools: a follow-up task does not wake an idle subagent while maxThreads subagents work
-- child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks
-- child-tools, subagent-agents: interrupting a subagent stops its turn and reports what it was doing
-- subagent-root-env, tool-root-env: a subagent's command knows the conversation people started
-- subagent-limits: a tree runs at most as many subagents at once as config.toml allows
-- subagent-limits: with max_threads 0 in config.toml the root conversation is not offered spawn_agent
-- subagent-limits, child-tools: under the default config a subagent starts a subagent of its own, told only its own task
-- subagent-interrupt, interrupt-idle: interrupting a conversation's run leaves its subagents working, and interrupting it again, idle, stops them, so the tree goes idle
-- subagent-spawn, subagent-model: conversation/list shows each subagent with its lineage, on its parent's model or the one its spawn_agent names, and an unlisted model fails the call
-- subagent-answer: a subagent's answer reaches its idle parent as input that starts a run, so the parent acts on it
+- child-tools, worker-answer: the model starts a worker, and the wait returns its final answer, which is not also delivered as a message
+- worker-types: starting an agent of a type sigma doesn't know is refused, naming it
+- worker-limits, child-tools: start_worker calls in one response start at most maxThreads workers
+- worker-limits, child-tools: a follow-up task does not wake an idle worker while maxThreads workers work
+- child-tools, worker-message, worker-assign: a worker takes messages and follow-up tasks
+- child-tools, worker-list: interrupting a worker stops its turn and reports what it was doing
+- worker-root-env, tool-root-env: a worker's command knows the conversation people started
+- worker-limits: a tree runs at most as many workers at once as config.toml allows
+- worker-limits: with max_threads 0 in config.toml the root conversation is not offered start_worker
+- worker-limits, child-tools: under the default config a worker starts a worker of its own, told only its own task
+- worker-interrupt, interrupt-idle: interrupting a conversation's run leaves its workers working, and interrupting it again, idle, stops them, so the tree goes idle
+- worker-start, worker-model: conversation/list shows each worker with its lineage, on its parent's model or the one its start_worker names, and an unlisted model fails the call
+- worker-answer: a worker's answer reaches its idle parent as input that starts a run, so the parent acts on it
+- worker-provider: start_worker refuses a provider the home does not have and one that is not ready, naming the ready ones, and a fork onto another provider
+- worker-wait: a wait that nothing reaches in time returns timed out, with the minimum it was clamped to, and the worker keeps working
+- worker-person: a person's message to a worker is answered in the worker's conversation, and its parent is told nothing
 
 Screen, `packages/sigma/test/screen.test.ts`:
 
-- subagent-card: a subagent shows as a card under its parent, and ctrl+y answers the call it asks about
-- subagent-card, codemode-nested-policy: a subagent a script started shows as a card under the script, and ctrl+y answers the call it asks about
-- subagent-approve: a call a subagent's subagent asks about shows on the card above it, and ctrl+y answers it
-- subagent-card: a Claude subagent shows as a card in place of its call's result, and its own screen sends input to its parent
+- worker-card: a worker shows as a card under its parent, and ctrl+y answers the call it asks about
+- worker-card, codemode-nested-policy: a worker a script started shows as a card under the script, and ctrl+y answers the call it asks about
+- worker-approve: a call a worker's worker asks about shows on the card above it, and ctrl+y answers it
+- subagent-claude: a Claude subagent shows as a card in place of its call's result, and its own screen sends input to its parent
 
 Stack, `packages/sigma/test/stack.test.ts`:
 
-- subagent-exec: sigma exec without --auto denies the calls its subagents would ask about too
-- subagent-exec: sigma exec continuing a subagent denies the calls of the subagents it starts
+- worker-exec: sigma exec without --auto denies the calls its workers would ask about too
+- worker-exec: sigma exec continuing a worker denies the calls of the workers it starts
 
 Provider, `packages/sigma/test/openai.test.ts`:
 
-- subagent-fork: a spawned agent's last answer reaches the parent
-- subagent-types, cache-fork-subagent: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out
-- subagent-types, code-mode-models: a code-mode model that can spawn is told the agent types, and so is its subagent
+- worker-fork: a started agent's last answer reaches the parent
+- worker-types, cache-fork-worker: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out
+- worker-types, code-mode-models: a code-mode model that can start workers is told the agent types, and so is its worker
+- worker-provider, worker-section, codemode-tool: ChatGPT, told of workers, starts one on Claude Code from a script and reads its answer from the wait
 
 Provider, `packages/sigma/test/claude.test.ts`:
 
+- worker-provider, worker-model: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone, and the agent's wait returns the worker's answer
+- worker-interrupt, worker-approve: a Claude Code worker asks its own approval, and stopping its idle parent ends the worker's run and clears the approval
 - subagent-claude: a Claude subagent works in a conversation of its own under the one that started it
 - subagent-claude: a call a Claude subagent wants to make waits for a person in the subagent's conversation
-- subagent-interrupt: stopping a Claude subagent stops only it, and its parent's run carries on
-- subagent-interrupt: stopping a run ends the Claude subagents working under it
-- subagent-interrupt, claude-job-report: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, and its report joins the transcript when the idle process closes
+- subagent-claude: stopping a Claude subagent stops only it, and its parent's run carries on
+- subagent-claude: stopping a run ends the Claude subagents working under it
+- subagent-claude, claude-job-report: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, and its report joins the transcript when the idle process closes
 - claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run
-- subagent-spawn: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own
+- subagent-claude: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own
 - subagent-claude: a Claude subagent that hands back its report answers with the report, not Claude Code's placeholder
 - subagent-claude: a Claude subagent's approval waits and is answered in its own job, which writes its conversation instead of its parent's run
 
@@ -531,7 +564,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - Steps play in order per author: the parent's steps and each
   `/root/<name>`'s steps are separate queues in the one script.
 - A scripted subagent answers as soon as it starts. Give its step a `delayMs`
-  when the parent should be waiting in `wait_agent` by then: a message that
+  when the parent should be waiting in `wait_worker` by then: a message that
   arrives before the wait is steered into the parent's run, and the wait then
   sits until its timeout.
 - A subagent's run is its own: wait for its end with `watch` on its
@@ -540,11 +573,11 @@ Provider, `packages/sigma/test/claude.test.ts`:
   first `exec`, `serve` or TUI start, or `rpc server/stop` after it.
 - A recording proves sigma's side only; the fake Claude does not run the
   subagent's calls, so no `made.txt` appears.
-- No recording has an OpenAI `spawn_agent` that names a `model`; the scripted
+- No recording has an OpenAI `start_worker` that names a `model`; the scripted
   step shows the refusal only, and the real account shows a subagent on
   another model.
 - Stopping a subagent from its own conversation sends its parent no report:
-  a parent waiting in `wait_agent` waits on until its timeout.
+  a parent waiting in `wait_worker` waits on until its timeout.
 
 ## With a real account
 
@@ -569,11 +602,11 @@ ChatGPT, in a run made with `drive.ts r up --openai-kept`:
   `"model": {"provider": "openai", "model": "<that id>", ...}`.
 - **Follow-up.** Then send
   `Give scout a follow-up task: reply with exactly: found again. Wait for it, then tell me what it said.`:
-  `▸ followup_task`, the card's last message `found again`, and the same
+  `▸ assign_worker`, the card's last message `found again`, and the same
   subagent conversation, no new one.
 - **Message and list.** Then send
   `Send scout the message "stay put", then list your agents and tell me each one's status.`:
-  `▸ send_message`, `▸ list_agents` with `/root/scout` in its result, and a
+  `▸ message_worker`, `▸ list_workers` with `/root/scout` in its result, and a
   `sigma.mail` `message` `stay put` in the subagent's conversation.
 
 Claude, in a run made with `drive.ts r up --real-claude`:

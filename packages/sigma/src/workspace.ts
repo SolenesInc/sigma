@@ -305,7 +305,7 @@ const toolNamer =
   (name: string) =>
     agent.model !== undefined && instances.get(agent.model.provider)?.kind === "claude" ? `mcp__sigma__${name}` : name
 
-/** What the model is told of the agent types `spawn_agent` takes, or `""` when there are none. */
+/** What the model is told of the agent types `start_worker` takes, or `""` when there are none. */
 const agentTypesInstructions = (types: ReadonlyArray<AgentType>, spawn: string) =>
   types.length === 0
     ? ""
@@ -337,20 +337,20 @@ export const workspaceInstructions = (
             if (!toldOfWorkspace(instances, agent)) return undefined
             const workspace = workspaceOf(agent, env, conversationId)
             if (workspace === undefined) return undefined
-            // With max_threads = 0 no conversation has spawn_agent, so none has use for the types. A code-mode model is
-            // offered only codemode, whose scripts call spawn_agent, so the callable tools decide, not the offered ones.
-            const offersSpawn = agent.callable.some((tool) => tool.name === "spawn_agent")
+            // With max_threads = 0 no conversation has start_worker, so none has use for the types. A code-mode model is
+            // offered only codemode, whose scripts call start_worker, so the callable tools decide, not the offered ones.
+            const offersStart = agent.callable.some((tool) => tool.name === "start_worker")
             yield* workspace.reachable
             const [files, skills, types] = yield* Effect.all(
               [
                 agentsMd(workspace),
                 skillsFor(workspace),
-                offersSpawn ? agentTypes(agent, env) : Effect.succeed([] as ReadonlyArray<AgentType>),
+                offersStart ? agentTypes(agent, env) : Effect.succeed([] as ReadonlyArray<AgentType>),
               ],
               { concurrency: "unbounded" },
             )
             const named = toolNamer(instances, agent)
-            const text = `The working directory is ${workspace.cwd}.\n${agentsMdInstructions(files)}${skillsInstructions(skills, named("read"))}${agentTypesInstructions(types, named("spawn_agent"))}`
+            const text = `The working directory is ${workspace.cwd}.\n${agentsMdInstructions(files)}${skillsInstructions(skills, named("read"))}${agentTypesInstructions(types, named("start_worker"))}`
             return text.trimEnd()
           }).pipe(
             // A target it cannot reach now keeps what the model was told; its tools say what is gone.

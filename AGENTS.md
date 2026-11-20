@@ -43,7 +43,19 @@ conversation            one transcript and the work done in it; like one chat
 │  ├─ turn (1..n)       one model response and its tool calls
 │  └─ run_end (1)       the entry that says how the run ended
 ├─ model (1)            a provider, a model and a reasoning effort
-└─ subagent (0..n)      a conversation started by this one, under it in a tree
+└─ worker (0..n)        a conversation sigma starts for this one, on any
+                        provider, under it in a tree; it takes input from
+                        people and outlives its parent's turn
+```
+
+```text
+harness                 a program that runs its own model loop, tools and
+                        session, which sigma drives as a process: Claude Code
+subagent                a child a harness owns and runs inside one of its
+                        turns, as Claude Code's Agent; sigma shows each as a
+                        conversation, but it is not a worker
+fork                    a worker that starts with its parent's history; only
+                        one on its parent's provider can fork
 ```
 
 ```text
@@ -66,14 +78,14 @@ member mode             how a remote conversation runs Claude Code: its own
                         tools off, acting only through sigma's tools
 ```
 
-A conversation's subagents and forks share its target. Sigma does not name who
+A conversation's workers and forks share its target. Sigma does not name who
 provides a target, or what kind of host it is.
 
 ```text
 commit                  one atomic write to the store; the only way state
                         changes, and what clients are shown
 task                    durable work the kernel runs in phases, each safe to
-                        rerun from its top; a run, a tool call and a subagent
+                        rerun from its top; a run, a tool call and a worker
                         are tasks, so a restart resumes them
 document                state the kernel keeps beside the transcript, such as
                         a conversation's queue or its waiting approvals

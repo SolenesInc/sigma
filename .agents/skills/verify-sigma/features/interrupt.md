@@ -76,7 +76,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 - interrupt-wire: interrupting keeps what sigma already said and marks the run interrupted
 - interrupt-withdraw: interrupting withdraws the prompts that wait, and the transcript names each by its requestId
-- subagent-interrupt, interrupt-idle: interrupting a conversation's run leaves its subagents working, and interrupting it again, idle, stops them, so the tree goes idle
+- worker-interrupt, interrupt-idle: interrupting a conversation's run leaves its workers working, and interrupting it again, idle, stops them, so the tree goes idle
 
 Screen, `packages/sigma/test/screen.test.ts`:
 

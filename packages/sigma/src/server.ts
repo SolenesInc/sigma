@@ -252,7 +252,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         }
         const typesOf: AgentTypes = (agent, env) =>
           env === undefined ? Effect.succeed([]) : agentTypes(agent.model?.provider, workspaceOf(agent, env))
-        const base = [sigmaTools(images, bashTimeout), agentTools(agents, typesOf), codeModeTools(sandbox)]
+        const base = [sigmaTools(images, bashTimeout), agentTools(agents, typesOf, instances), codeModeTools(sandbox)]
         for (const extension of base) registry.install(extension)
         registry.install(
           workspaceInstructions(

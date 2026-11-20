@@ -62,7 +62,7 @@ on. attn will use targets to run a member's work in a sandbox.
   its session missed. Claude Code waits for
   a sigma call as long as sigma's bash may run, so bash's own timeout is the
   limit the model sees.
-- `target-subagent-fork` runs a subagent's calls and a fork's calls on their
+- `target-worker-fork` runs a subagent's calls and a fork's calls on their
   parent's target.
 - `target-server-restart` kills a remote command cut off by a crashed server
   before the restarted run calls again, and commits the call as interrupted.
@@ -150,12 +150,12 @@ Preconditions:
 ## Tests
 
 - Wire: `target-start: ...`, `target-unavailable: ...`, `target-restarted: ...`,
-  `target-replaced: ...`, `target-lost: ...`, `target-subagent-fork: ...`,
+  `target-replaced: ...`, `target-lost: ...`, `target-worker-fork: ...`,
   `target-member-mode: ...` in `packages/sigma/test/wire.test.ts`.
 - Provider: `target-start, agents-md, skills-found: ...` in
   `packages/sigma/test/openai.test.ts`; `target-member-mode: ...`,
   `target-member-mode, claude-resume: ...`,
-  `target-member-mode, target-subagent-fork: ...`,
+  `target-member-mode, target-worker-fork: ...`,
   `target-member-mode, claude-sign-in-error: ...`,
   `target-member-mode, target-server-restart: ...`,
   `target-member-mode, skills-list, skills-attach: ...`,

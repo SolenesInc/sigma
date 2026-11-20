@@ -31,3 +31,20 @@ export const describeTargetChange = (data: {
   data.filesKept
     ? `◆ ${data.target} restarted as ${data.to.instance}: files kept, processes gone`
     : `◆ ${data.target} was replaced by ${data.to.instance}: files, processes and changes from before are gone`
+
+/** What a worker sent, as a `wait_worker` result returns it. */
+export type Received = { readonly from: string; readonly text: string }
+
+/**
+ * What a `wait_worker` call received, from its result's text, or `undefined` when the call is another tool's or its
+ * result is not a wait's. Claude Code names the tool `mcp__sigma__wait_worker`.
+ */
+export const receivedOf = (tool: string, result: string): ReadonlyArray<Received> | undefined => {
+  if (tool !== "wait_worker" && tool !== "mcp__sigma__wait_worker") return undefined
+  try {
+    const received = (JSON.parse(result) as { received?: unknown }).received
+    return Array.isArray(received) ? (received as ReadonlyArray<Received>) : undefined
+  } catch {
+    return undefined
+  }
+}

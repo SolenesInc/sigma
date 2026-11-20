@@ -42,7 +42,7 @@ conversation on a target runs in member mode and is told them as ChatGPT is
   conversation's life: no command or call changes them. A subagent's instructions are
   those its parent inherited, the root's own at the top, followed by its own. A forked ChatGPT subagent's requests keep its
   parent's `instructions`, and its own arrive after the inherited history as
-  an update of the `instructions` section (`cache-fork-subagent` in
+  an update of the `instructions` section (`cache-fork-worker` in
   [Prompt cache](./prompt-cache.md)).
   Claude Code appends them to its own system prompt, and ChatGPT is told them
   after the `AGENTS.md` files. Only a signed-in run shows the model taking

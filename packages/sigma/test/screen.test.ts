@@ -425,10 +425,10 @@ test("signin-shared: an open TUI shows a sign-in another connection finished", a
   await quit(session)
 }, 40_000)
 
-test("subagent-card: a subagent shows as a card under its parent, and ctrl+y answers the call it asks about", async () => {
+test("worker-card: a worker shows as a card under its parent, and ctrl+y answers the call it asks about", async () => {
   const session = await open([
-    call("spawn_agent", { task_name: "scribe", message: "write it down", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "scribe", message: "write it down", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { text: "the scribe is done" },
     call("bash", { command: "echo scribbled" }, "/root/scribe"),
     { agent: "/root/scribe", text: "wrote it" },
@@ -445,18 +445,18 @@ test("subagent-card: a subagent shows as a card under its parent, and ctrl+y ans
   const screen = await session.waitFor(
     (screen) => screen.includes("the scribe is done") && screen.includes("READY") && /⧉ scribe +done/.test(screen),
   )
-  // The subagent's answer, mailed to its parent, reads as what it said under its name.
+  // The worker's answer, which the parent's wait returned, reads as what it said under its name.
   const lines = screen.split("\n")
   expect(lines[lines.findIndex((line) => line.includes("/root/scribe")) + 1]).toContain("wrote it")
   expect(screen).not.toContain("Payload:")
   await quit(session)
 }, 30_000)
 
-test("subagent-card, codemode-nested-policy: a subagent a script started shows as a card under the script, and ctrl+y answers the call it asks about", async () => {
-  const spawn = 'await tools.spawn_agent({ task_name: "scribe", message: "write it down", fork_turns: "none" })'
+test("worker-card, codemode-nested-policy: a worker a script started shows as a card under the script, and ctrl+y answers the call it asks about", async () => {
+  const spawn = 'await tools.start_worker({ task_name: "scribe", message: "write it down", fork_turns: "none" })'
   const session = await open(
     [
-      call("codemode", { code: `${spawn}\nawait tools.wait_agent({ timeout_ms: 600000 })` }),
+      call("codemode", { code: `${spawn}\nawait tools.wait_worker({ timeout_ms: 600000 })` }),
       { text: "the scribe is done" },
       call("codemode", { code: 'await tools.bash({ command: "echo scribbled" })' }, "/root/scribe"),
       { agent: "/root/scribe", text: "wrote it" },
@@ -476,15 +476,15 @@ test("subagent-card, codemode-nested-policy: a subagent a script started shows a
   await quit(session)
 })
 
-test("subagent-approve: a call a subagent's subagent asks about shows on the card above it, and ctrl+y answers it", async () => {
+test("worker-approve: a call a worker's worker asks about shows on the card above it, and ctrl+y answers it", async () => {
   const sigmaHome = home()
   const session = await open(
     [
-      call("spawn_agent", { task_name: "lead", message: "delegate further", fork_turns: "none" }),
-      call("wait_agent", { timeout_ms: 600_000 }),
+      call("start_worker", { task_name: "lead", message: "delegate further", fork_turns: "none" }),
+      call("wait_worker", { timeout_ms: 600_000 }),
       { text: "the lead is done" },
-      call("spawn_agent", { task_name: "deep", message: "dig", fork_turns: "none" }, "/root/lead"),
-      call("wait_agent", { timeout_ms: 600_000 }, "/root/lead"),
+      call("start_worker", { task_name: "deep", message: "dig", fork_turns: "none" }, "/root/lead"),
+      call("wait_worker", { timeout_ms: 600_000 }, "/root/lead"),
       { agent: "/root/lead", text: "deep reported" },
       call("bash", { command: "echo dug" }, "/root/lead/deep"),
       { agent: "/root/lead/deep", text: "dug it" },
@@ -500,7 +500,7 @@ test("subagent-approve: a call a subagent's subagent asks about shows on the car
   await quit(session)
 }, 30_000)
 
-test("subagent-card: a Claude subagent shows as a card in place of its call's result, and its own screen sends input to its parent", async () => {
+test("subagent-claude: a Claude subagent shows as a card in place of its call's result, and its own screen sends input to its parent", async () => {
   const sigmaHome = home()
   const extra = { FAKE_CLAUDE_FIXTURE: join(import.meta.dir, "../../../fixtures/claude/subagent.ndjson") }
   const parent = await open([], ["--provider", "claude"], sigmaHome, extra)

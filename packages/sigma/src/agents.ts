@@ -1,7 +1,7 @@
-// Subagent tools for the model: spawn, send, follow up, wait, list and interrupt. A subagent is a child
-// conversation owned by a background anchor task in its parent, so it outlives the parent's turns; each task given to
-// it goes through a background reporter task in the parent, which delivers it, waits for the answer and mails the
-// answer back. Both are durable tasks, so a restart resumes them (spec 7.3, example 22).
+// The worker tools for the model: start, message, assign, wait, list and stop. A worker is a child conversation, on
+// any provider of the home, owned by a background anchor task in its parent, so it outlives the parent's turns; each
+// task given to it goes through a background reporter task in the parent, which delivers it, waits for the answer and
+// mails the answer back. Both are durable tasks, so a restart resumes them (spec 7.3, example 22).
 import {
   type AgentLimits,
   type Harness,
@@ -33,7 +33,7 @@ import {
   type TaskId,
 } from "@sigma/kernel"
 import { JobsDoc } from "@sigma/hosted"
-import type { AssistantMessage } from "@sigma/models"
+import { type AssistantMessage, defaultModelOf, type ProviderInstance } from "@sigma/models"
 import { int, obj, oneOf, opt, str } from "@sigma/schema"
 import { rootConversation } from "@sigma/tools"
 import { Clock, Duration, Effect, Option, Stream } from "effect"
@@ -46,7 +46,7 @@ export type AgentTypes = (
   env: ExecutionEnv | undefined,
 ) => Effect.Effect<ReadonlyArray<AgentType>>
 
-/** How a subagent's last task ended, as `list_agents` reports it. */
+/** How a worker's last task ended, as `list_workers` reports it. */
 export type AgentStatus = "pending_init" | "interrupted" | { completed: string } | { errored: string }
 
 type Child = {
@@ -209,8 +209,9 @@ const Reporter = defineTask<ReporterInput, ReporterState, null, TaskServices>({
           })
           const settled = yield* submission.wait
           // Withdrawn before it was placed, as when the person stops the parent: the answer still joins its transcript,
-          // once the stopped run has ended, so it lands then instead of waiting in the queue for the next prompt.
-          if (settled.status === "unanswered" && settled.entry === undefined) {
+          // once the stopped run has ended, so it lands then instead of waiting in the queue for the next prompt. One
+          // that wait_worker took was delivered in that call's result.
+          if (settled.status === "unanswered" && settled.entry === undefined && settled.reason !== TAKEN) {
             yield* parent.waitForIdle
             const timestamp = yield* Clock.currentTimeMillis
             yield* parent.submit({
@@ -314,105 +315,162 @@ const DEFAULT_WAIT_MS = 30_000
 const MIN_WAIT_MS = 10_000
 const MAX_WAIT_MS = 3_600_000
 
-const spawnDescription = `Spawns an agent to work on the specified task. If your current task is \`/root/task1\` and you spawn_agent with task_name "task_3" the agent will have canonical task name \`/root/task1/task_3\`.
-You are then able to refer to this agent as \`task_3\` or \`/root/task1/task_3\` interchangeably. However an agent \`/root/task2/task_3\` would only be able to communicate with this agent via its canonical name \`/root/task1/task_3\`.
-The spawned agent will have the same tools as you and the ability to spawn its own subagents.
-Spawned agents inherit your current model by default. Do not set the \`model\` field unless the user explicitly asks for a different model.
-It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
-The new agent's canonical task name will be provided to it along with the message.
+/** The home's providers, by id: the ones a worker can be started on. */
+export type WorkerProviders = ReadonlyMap<string, ProviderInstance>
 
-Do not spawn sub-agents unless the user or applicable AGENTS.md/skill instructions explicitly ask for sub-agents, delegation, or parallel agent work.
+/** What a model reads a provider kind as. */
+const KIND_NAMES: Readonly<Record<string, string>> = {
+  claude: "Claude Code",
+  openai: "ChatGPT",
+  script: "a scripted model",
+}
 
-Note that passing \`fork_turns="none"\` will not pass any surrounding context to the spawned subagent, which may cause the agent to lack the context it needs to complete its task, whereas \`fork_turns="all"\` will provide the subagent with all surrounding context.`
+const providerList = (providers: WorkerProviders) =>
+  [...providers.values()].map((each) => `${each.id} (${KIND_NAMES[each.kind] ?? each.kind})`).join(", ")
 
-const spawnSchema = obj({
-  task_name: str({ description: "Task name for the new agent. Use lowercase letters, digits, and underscores." }),
-  message: str({ description: "Initial plain-text task for the new agent." }),
-  agent_type: opt(
-    str({
-      description:
-        "Agent type for the new agent, one your instructions list under Agent types. Omit unless explicitly asked. The selected role applies regardless of how much parent history is inherited.",
-    }),
-  ),
-  fork_turns: opt(
-    oneOf(["all", "none"], {
-      description: "Parent history to inherit. Defaults to `all`; use `none` to start without parent history.",
-    }),
-  ),
-  model: opt(str({ description: "Model override for the new agent. Omit unless an explicit override is needed." })),
-  reasoning_effort: opt(
-    oneOf(["minimal", "low", "medium", "high", "xhigh"], {
-      description: "Reasoning effort override for the new agent. Omit to inherit the parent effort.",
-    }),
-  ),
-})
+/** The providers a worker can start on now, by id, in the home's order. */
+const readyProviders = (providers: WorkerProviders) =>
+  Effect.map(
+    Effect.forEach([...providers.values()], (each) =>
+      Effect.map(each.health(false), (health) => (health.status === "ready" ? [each.id] : [])),
+    ),
+    (ids) => ids.flat(),
+  )
 
-type SpawnInput = {
+const startDescription = (providers: WorkerProviders) => {
+  const list = providerList(providers)
+  return `Starts a worker: an agent in a conversation of its own, which the user can open, watch and talk to, and which keeps working after your turn ends. Returns the worker's task name at once. Its final answer comes back through wait_worker, or as a message when you are not waiting.
+If your task is \`/root/task1\` and you name a worker "scout", its task name is \`/root/task1/scout\`. You can call it \`scout\` or \`/root/task1/scout\`; other agents reach it by its full name.
+A worker runs on your provider and model unless you name others. Set \`provider\` and \`model\` only to what the user named, unchanged.${list === "" ? "" : ` The providers are ${list}.`} On your provider the worker has your tools and starts with your history, unless \`fork_turns\` is "none". On another provider it starts from your message alone, with none of your history or instructions, so write a complete brief; it runs that provider's default model when you name none.
+Start workers only when the user, or instructions such as AGENTS.md or a skill, ask for workers, delegation or parallel work.`
+}
+
+const startSchema = (providers: WorkerProviders) =>
+  obj({
+    task_name: str({ description: "Name for the worker. Use lowercase letters, digits, and underscores." }),
+    message: str({ description: "The worker's task, in plain text." }),
+    provider: opt(
+      str({
+        description: `The provider to run the worker on, exactly as the user named it${providers.size === 0 ? "" : `: ${[...providers.keys()].join(", ")}`}. Omit to use yours.`,
+      }),
+    ),
+    model: opt(
+      str({
+        description:
+          "The model to run the worker on, exactly as the user named it. Omit to use yours, or the provider's default on another provider.",
+      }),
+    ),
+    effort: opt(
+      oneOf(["minimal", "low", "medium", "high", "xhigh"], {
+        description: "Reasoning effort for the worker. Omit to use yours.",
+      }),
+    ),
+    agent_type: opt(
+      str({
+        description:
+          "Agent type for the worker, one your instructions list under Agent types. Omit unless explicitly asked.",
+      }),
+    ),
+    fork_turns: opt(
+      oneOf(["all", "none"], {
+        description:
+          'Your history to give the worker: "all", the default on your provider, or "none". A worker on another provider always starts with none.',
+      }),
+    ),
+  })
+
+type StartInput = {
   task_name: string
   message: string
+  provider?: string
+  model?: string
+  effort?: "minimal" | "low" | "medium" | "high" | "xhigh"
   agent_type?: string
   fork_turns?: "all" | "none"
-  model?: string
-  reasoning_effort?: "minimal" | "low" | "medium" | "high" | "xhigh"
 }
 
 const background = { ownership: { kind: "conversation" }, background: true } as const
 
-const spawnAgent = (limits: AgentLimits, agentTypes: AgentTypes) =>
+const startWorker = (limits: AgentLimits, agentTypes: AgentTypes, providers: WorkerProviders) =>
   defineTool({
-    name: "spawn_agent",
-    description: spawnDescription,
-    parameters: spawnSchema,
-    execute: (input: SpawnInput, api: ToolExecutionApi) =>
+    name: "start_worker",
+    description: startDescription(providers),
+    parameters: startSchema(providers),
+    execute: (input: StartInput, api: ToolExecutionApi) =>
       Effect.gen(function* () {
-        if (input.message.trim() === "") return failed("Empty message can't be sent to an agent")
+        if (input.message.trim() === "") return failed("Empty message can't be sent to a worker")
         const name = input.task_name.trim()
         if (!/^[a-z0-9_]+$/.test(name)) return failed("task_name takes lowercase letters, digits and underscores")
-        const own = yield* taskOf(api, api.conversationId)
-        const members = yield* membersOf(api)
-        const working = yield* workingCounter(api, members, api.conversationId)
         const agent = yield* api.agent
         const parentModel = agent.model
-        if (input.model !== undefined && parentModel === undefined) return failed("this agent has no model to vary")
+        const named = input.provider?.trim() || undefined
+        // On another provider the worker starts from its brief alone: a provider cannot take another's history (D5).
+        const other = named !== undefined && named !== parentModel?.provider
+        if (other) {
+          const ready = yield* readyProviders(providers)
+          if (!ready.includes(named))
+            return failed(
+              `${providers.has(named) ? `provider ${named} is not ready` : `no provider ${named}`}; the ready providers are ${ready.length === 0 ? "none" : ready.join(", ")}`,
+            )
+          if (input.fork_turns === "all")
+            return failed('a worker on another provider starts from your message alone; set fork_turns to "none"')
+        }
+        const provider = named ?? parentModel?.provider
+        if (input.model !== undefined && provider === undefined) return failed("this agent has no model to vary")
+        const instance = provider === undefined ? undefined : providers.get(provider)
+        // A provider whose loop sigma runs lists its models; one that runs its own, as Claude Code, takes any name it
+        // knows, so the name passes to it unchanged.
         const listed = (model: string | undefined) =>
-          model !== undefined && api.models().getModel(parentModel!.provider, model) !== undefined
+          model !== undefined &&
+          ((instance !== undefined && instance.provider === undefined) ||
+            api.models().getModel(provider!, model) !== undefined)
         if (input.model !== undefined && !listed(input.model))
-          return failed(`no model ${input.model} on ${parentModel!.provider}; leave model out to use yours`)
+          return failed(
+            `no model ${input.model} on ${provider}; leave model out to use ${other ? "its default" : "yours"}`,
+          )
         const wanted = input.agent_type?.trim()
-        const types = wanted ? yield* agentTypes(agent, api.env) : []
+        const types = wanted ? yield* agentTypes(other ? { ...agent, model: { provider: named } } : agent, api.env) : []
         const agentType = wanted ? types.find((type) => type.name === wanted) : undefined
         if (wanted && agentType === undefined) {
           const known = types.map((type) => type.name)
           return failed(`no agent type ${wanted}; there are ${known.length === 0 ? "none" : known.join(", ")}`)
         }
-        // A type's model applies when the provider lists it; one the call names wins.
+        // A type's model applies when the provider lists it; one the call names wins. On another provider, with
+        // neither, the worker takes the model a new conversation there gets (F48).
         const model =
-          input.model ?? (parentModel !== undefined && listed(agentType?.model) ? agentType!.model : undefined)
+          input.model ??
+          (provider !== undefined && listed(agentType?.model) ? agentType!.model : undefined) ??
+          (other ? ((yield* defaultModelOf(instance!)) ?? "") : undefined)
+        const own = yield* taskOf(api, api.conversationId)
+        const members = yield* membersOf(api)
+        const working = yield* workingCounter(api, members, api.conversationId)
         const task = `${own}/${name}`
-        // A subagent keeps the instructions its parent inherited, so a fork's prompt matches its parent's up to its
-        // notice. A subagent parent's own notice and type start at the line naming its task, which sigma wrote.
-        const notice = `${taskNameLine(task)} You are a subagent; your final answer goes to ${own}.`
+        // A worker on its parent's provider keeps the instructions its parent inherited, so a fork's prompt matches its
+        // parent's up to its notice. A worker parent's own notice and type start at the line naming its task, which
+        // sigma wrote. A worker on another provider is not given them: they name this provider's tools.
+        const notice = `${taskNameLine(task)} You are a worker; your final answer goes to ${own}.`
         const ownStart = own === ROOT_TASK ? -1 : (agent.instructions?.indexOf(taskNameLine(own)) ?? -1)
         const inherited = ownStart === -1 ? agent.instructions : agent.instructions!.slice(0, ownStart).trimEnd()
         const instructions = [
-          inherited,
+          other ? undefined : inherited,
           notice,
           agentType === undefined ? undefined : `# You are a ${agentType.name} agent\n\n${agentType.instructions}`,
         ]
           .filter((part) => part !== undefined && part !== "")
           .join("\n\n")
-        // A subagent of a conversation that runs every call without asking does too: nobody watches it to answer.
+        // A worker of a conversation that runs every call without asking does too: nobody watches it to answer.
         const auto = (yield* api.snapshot(ApprovalsDoc, api.conversationId))?.auto === true
         const started = yield* api.commit((tx) =>
           Effect.gen(function* () {
             const registry = yield* tx.doc(AgentsDoc, api.conversationId)
-            // A rerun of this call finds the subagent it started.
+            // A rerun of this call finds the worker it started.
             const already = registry.reporters[String(api.taskId)]
             if (already !== undefined) return registry.agents[name]?.conversationId
             if (Object.hasOwn(registry.agents, name)) return undefined
             const refused = refusedWork(limits, working(registry))
             if (refused !== undefined) return refused
-            const forkAt = input.fork_turns === "none" ? undefined : yield* tx.latestEntryId(api.conversationId)
+            const forkAt =
+              other || input.fork_turns === "none" ? undefined : yield* tx.latestEntryId(api.conversationId)
             const anchor = yield* tx.createTask(Anchor, null, background)
             const ownership = { kind: "task", taskId: anchor } as const
             const child =
@@ -421,8 +479,8 @@ const spawnAgent = (limits: AgentLimits, agentTypes: AgentTypes) =>
                 : yield* tx.forkConversation(api.conversationId, forkAt, { ownership })
             yield* configure(tx, child.id, {
               instructions,
-              ...(model === undefined ? {} : { model: { provider: parentModel!.provider, modelId: model } }),
-              ...(input.reasoning_effort === undefined ? {} : { thinkingLevel: input.reasoning_effort }),
+              ...(model === undefined ? {} : { model: { provider: provider!, modelId: model } }),
+              ...(input.effort === undefined ? {} : { thinkingLevel: input.effort }),
             })
             ;(yield* tx.doc(TaskPathDoc, child.id)).task = task
             yield* recordOrigin(tx, child.id, {
@@ -444,10 +502,10 @@ const spawnAgent = (limits: AgentLimits, agentTypes: AgentTypes) =>
             return Number(child.id)
           }),
         )
-        if (started === undefined) return failed(`${task} already exists; use followup_task or send_message`)
+        if (started === undefined) return failed(`${task} already exists; use assign_worker or message_worker`)
         if (typeof started === "string") return failed(started)
-        // A client that sees the call attaches to the subagent's view through its details.
-        return { ...json({ task_name: task, nickname: null }), details: { task, conversation: started } }
+        // A client that sees the call attaches to the worker's view through its details.
+        return { ...json({ task_name: task }), details: { task, conversation: started } }
       }),
   })
 
@@ -455,19 +513,19 @@ const messageSchema = (target: string, message: string) =>
   obj({ target: str({ description: target }), message: str({ description: message }) })
 
 /** A message that starts no turn: steers a busy agent, and is added to an idle one's transcript for its next turn. */
-const sendMessage = defineTool({
-  name: "send_message",
+const messageWorker = defineTool({
+  name: "message_worker",
   description:
-    "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn.",
+    "Sends a message to a worker, or to any agent of your tree by its task name. A working one reads it at its next step; an idle one reads it with its next task. Starts no new turn.",
   parameters: messageSchema(
-    "Relative or canonical task name to message (from spawn_agent).",
-    "Message text to queue on the target agent.",
+    "The worker's task name, as start_worker returned it, or relative to yours.",
+    "The message to send.",
   ),
   execute: (input: { target: string; message: string }, api: ToolExecutionApi) =>
     Effect.gen(function* () {
-      if (input.message.trim() === "") return failed("Empty message can't be sent to an agent")
+      if (input.message.trim() === "") return failed("Empty message can't be sent to a worker")
       const { own, member } = yield* resolveTarget(api, input.target)
-      if (member === undefined) return failed(`no agent ${input.target.trim()}`)
+      if (member === undefined) return failed(`no worker ${input.target.trim()}`)
       const to = (yield* api.conversation(member.conversationId))!
       const content = mailText("message", member.task, own, input.message)
       const entry = mailEntry("message", member.task, own)
@@ -487,27 +545,27 @@ const sendMessage = defineTool({
     }),
 })
 
-const followupTask = (limits: AgentLimits) =>
+const assignWorker = (limits: AgentLimits) =>
   defineTool({
-    name: "followup_task",
+    name: "assign_worker",
     description:
-      "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes.",
+      "Gives a worker a follow-up task, and starts it working if it is idle. A working worker takes the task at its next step. Its answer comes back through wait_worker.",
     parameters: messageSchema(
-      "Agent id or canonical task name to send a follow-up task to (from spawn_agent).",
-      "Message text to send to the target agent.",
+      "The worker's task name, as start_worker returned it, or relative to yours.",
+      "The follow-up task.",
     ),
     execute: (input: { target: string; message: string }, api: ToolExecutionApi) =>
       Effect.gen(function* () {
-        if (input.message.trim() === "") return failed("Empty message can't be sent to an agent")
+        if (input.message.trim() === "") return failed("Empty message can't be sent to a worker")
         const { own, member } = yield* resolveTarget(api, input.target)
-        if (member === undefined) return failed(`no agent ${input.target.trim()}`)
-        if (member.child === undefined) return failed("followup_task takes a subagent; send_message reaches the root")
-        // The reporter lives in the subagent's parent, whose registry records how the task ended.
+        if (member === undefined) return failed(`no worker ${input.target.trim()}`)
+        if (member.child === undefined) return failed("assign_worker takes a worker; message_worker reaches the root")
+        // The reporter lives in the worker's parent, whose registry records how the task ended.
         const name = member.task.split("/").at(-1)!
         const parentTask = member.task.slice(0, member.task.lastIndexOf("/"))
         const members = yield* membersOf(api)
         const parentConversation = members.find((each) => each.task === parentTask)!.conversationId
-        // A task for an idle subagent starts a run, so it counts against maxThreads; a working one only queues it.
+        // A task for an idle worker starts a run, so it counts against maxThreads; a working one only queues it.
         const idle = !(yield* busy(api, member.conversationId)) && member.child.assigned !== true
         const working = yield* workingCounter(api, members, parentConversation)
         const reporter: ReporterInput = {
@@ -536,10 +594,37 @@ const followupTask = (limits: AgentLimits) =>
       }),
   })
 
-const waitAgent = defineTool({
-  name: "wait_agent",
+/** What `wait_worker` returns of one mail: who sent it, whether it is a final answer, and its text. */
+type Received = { from: string; kind: "final_answer" | "message"; text: string }
+
+/** What a wait took from the inbox, kept so a rerun after a restart returns the same. */
+type Taken = { ids: number[]; received: Received[] }
+
+type Queued = { readonly id: unknown; readonly mode: string; readonly content?: unknown; readonly entry?: unknown }
+
+/** A worker's answer or message waiting in the inbox: what `wait_worker` takes. A task given to this agent is not. */
+const takeable = (item: Queued) => {
+  if (item.mode !== "steer" || !isMail(item)) return false
+  const kind = (item.entry as { readonly data?: { readonly kind?: string } }).data?.kind
+  return kind === "final_answer" || kind === "message"
+}
+
+const receivedOf = (item: Queued): Received => {
+  const data = (item.entry as { readonly data: { readonly kind: Received["kind"]; readonly sender: string } }).data
+  const content = item.content
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((part: { readonly text?: string }) => part.text ?? "").join("")
+        : ""
+  return { from: data.sender, kind: data.kind, text: mailPayload(text) }
+}
+
+const waitWorker = defineTool({
+  name: "wait_worker",
   description:
-    "Wait for a mailbox update from any live agent, including queued messages and final-status notifications. The wait also ends early when new user input is steered into the active turn. Does not return the content; returns either a summary of which agents have updates (if any), an interruption summary for steered input, or a timeout summary if no activity arrives before the deadline.",
+    "Waits for your workers and returns what they sent: a finished worker's final answer, or a message from one. What it returns is not delivered to you again. Returns timed_out true when nothing arrives in time; call it again to keep waiting. Returns early, with nothing received, when the user sends new input.",
   parameters: obj({
     timeout_ms: opt(
       int({
@@ -555,81 +640,116 @@ const waitAgent = defineTool({
         if (requested !== undefined && requested > MAX_WAIT_MS)
           return failed(`timeout_ms must be at most ${MAX_WAIT_MS} (asked for ${requested})`)
         const timeout = requested === undefined ? DEFAULT_WAIT_MS : Math.max(requested, MIN_WAIT_MS)
+        const clamped =
+          requested !== undefined && requested < timeout
+            ? { message: `Requested timeout of ${requested}ms was clamped to the minimum of ${timeout}ms.` }
+            : {}
+        // A rerun after a restart returns what this call took before it.
+        const before = yield* api.memo<Taken>(TAKEN)
+        if (before !== undefined) {
+          yield* take(api, before.ids)
+          return json({ timed_out: false, received: before.received, ...clamped })
+        }
         const watch = yield* api.watchDoc(InboxDoc, api.conversationId)
         // A steered item reaches the model after this turn, so it is news: mail or input steered while the turn ran
         // ends the wait at once. A follow-up waits for the run to end, so it does not.
-        const arrival = (items: ReadonlyArray<{ readonly mode: string; readonly entry?: unknown }>) => {
-          const steered = items.filter((item) => item.mode === "steer")
-          return steered.find((item) => isMail(item)) ?? steered[0]
-        }
-        const first = watch === undefined ? undefined : arrival(watch.value.items)
-        const woken =
+        const woke = (items: ReadonlyArray<Queued>) => (items.some((item) => item.mode === "steer") ? items : undefined)
+        const first = watch === undefined ? undefined : woke(watch.value.items)
+        const items =
           first ??
           (watch === undefined
             ? undefined
             : Option.getOrUndefined(
                 Option.flatten(
                   yield* watch.changes.pipe(
-                    Stream.map((change) => arrival(change.value.items)),
-                    Stream.filter((item) => item !== undefined),
+                    Stream.map((change) => woke(change.value.items)),
+                    Stream.filter((found) => found !== undefined),
                     Stream.runHead,
                     Effect.timeoutOption(Duration.millis(timeout)),
                   ),
                 ),
               ))
-        const mail = woken !== undefined && isMail(woken)
-        const said =
-          woken === undefined ? "Wait timed out." : mail ? "Wait completed." : "Wait interrupted by new input."
-        const message =
-          requested !== undefined && requested < timeout
-            ? `${said}\n\nRequested timeout of ${requested}ms was clamped to the minimum of ${timeout}ms.`
-            : said
-        return json({ message, timed_out: woken === undefined })
+        if (items === undefined) return json({ timed_out: true, received: [], ...clamped })
+        const mail = items.filter(takeable)
+        if (mail.length === 0)
+          return json({ timed_out: false, received: [], message: "Wait interrupted by new input." })
+        // Taken out of the inbox, so the answer is not also steered in after this call (F49). Kept first, so a restart
+        // between the two returns it again instead of losing it.
+        const taken = yield* api.memo<Taken>(TAKEN, {
+          ids: mail.map((item) => Number(item.id)),
+          received: mail.map(receivedOf),
+        })
+        yield* take(api, taken.ids)
+        return json({ timed_out: false, received: taken.received, ...clamped })
       }),
     ),
 })
 
+/** The settlement reason of mail `wait_worker` took: its reporter has nothing more to deliver. */
+const TAKEN = "taken"
+
+/** Takes the queued mail `ids` out of the caller's inbox, settled as taken; one already gone is left alone. */
+const take = (api: ToolExecutionApi, ids: ReadonlyArray<number>) =>
+  api.commit((tx) =>
+    Effect.gen(function* () {
+      const inbox = yield* tx.doc(InboxDoc, api.conversationId)
+      for (const id of ids) {
+        const at = inbox.items.findIndex((item) => Number(item.id) === id)
+        if (at === -1) continue
+        yield* tx.settleSubmission(inbox.items[at]!.id, { status: "unanswered", reason: TAKEN })
+        inbox.items.splice(at, 1)
+      }
+    }),
+  )
+
 const isMail = (item: { readonly entry?: unknown }) =>
   (item.entry as { readonly kind?: string } | undefined)?.kind === MAIL_ENTRY_KIND
 
-const listAgents = defineTool({
-  name: "list_agents",
-  description: "List live agents in the current root thread tree. Optionally filter by task-path prefix.",
+const listWorkers = defineTool({
+  name: "list_workers",
+  description:
+    "Lists the agents of your tree, you and the workers under you, each by task name with whether it is running, done, interrupted or failed. Optionally filtered by task-name prefix.",
   parameters: obj({
-    path_prefix: opt(
-      str({ description: "Task-path prefix filter without a trailing slash. Omit to list all live agents." }),
-    ),
+    path_prefix: opt(str({ description: "Task-name prefix, without a trailing slash. Omit to list them all." })),
   }),
   replay: "safe",
   execute: (input: { path_prefix?: string }, api: ToolExecutionApi) =>
     Effect.gen(function* () {
-      const agents = []
+      const workers = []
       for (const member of yield* membersOf(api)) {
         if (!member.task.startsWith(input.path_prefix ?? "")) continue
-        agents.push({ agent_name: member.task, agent_status: yield* statusOf(api, member) })
+        workers.push({ name: member.task, status: yield* statusOf(api, member) })
       }
-      return json({ agents })
+      return json({ workers })
     }),
 })
 
-const interruptAgent = defineTool({
-  name: "interrupt_agent",
+const stopWorker = defineTool({
+  name: "stop_worker",
   description:
-    "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.",
+    "Stops a worker's current turn, if any, and returns its previous status. The worker stays available for messages and follow-up tasks.",
   parameters: obj({
-    target: str({ description: "Agent id or canonical task name to interrupt (from spawn_agent)." }),
+    target: str({ description: "The worker's task name, as start_worker returned it, or relative to yours." }),
   }),
   execute: (input: { target: string }, api: ToolExecutionApi) =>
     Effect.gen(function* () {
       const { own, member } = yield* resolveTarget(api, input.target)
-      if (member === undefined) return failed(`no agent ${input.target.trim()}`)
+      if (member === undefined) return failed(`no worker ${input.target.trim()}`)
       if (own === member.task || own.startsWith(`${member.task}/`))
-        return failed("an agent can't interrupt itself or an agent above it")
+        return failed("an agent can't stop itself or an agent above it")
       const previous = yield* statusOf(api, member)
       yield* (yield* api.conversation(member.conversationId))!.abort()
       return json({ previous_status: previous })
     }),
 })
+
+/**
+ * What a model on sigma's own loop is told of the worker tools, when it can call them. It names no reason to prefer
+ * one provider over another: which model a worker runs on is the person's choice, passed exactly (D11). It does not
+ * change during a conversation, whose instructions are fixed at its start (#132).
+ */
+export const WORKERS_SECTION =
+  "Workers. This session can start workers with the start_worker tool. A worker is an agent in a conversation of its own, which the user can open, watch and talk to. Start a worker when the user asks for one, or names a model or a provider for part of the work. Pass the provider and model they named, unchanged, in `provider` and `model`. When they name several, start one worker for each. With none named, leave `provider` out and the worker runs on your own models. For a quick helper inside your own turn, use your own subagent tool if you have one, or do the work yourself."
 
 const AGENTS_EXTENSION = "sigma-agents"
 
@@ -676,21 +796,34 @@ const treeOf = (harness: Harness, root: ConversationId) =>
     return tree
   })
 
-/** The subagent tools, under `limits`; their tasks come with them, so a restart resumes pending reporters. */
+/**
+ * The worker tools, under `limits`, starting workers on `providers`, and what a model is told of them; their tasks come
+ * with them, so a restart resumes pending reporters.
+ */
 export const agentTools = (
   limits: AgentLimits = DEFAULT_AGENT_LIMITS,
   agentTypes: AgentTypes = () => Effect.succeed([]),
+  providers: WorkerProviders = new Map(),
 ) =>
   defineExtension({
     name: AGENTS_EXTENSION,
     tasks: [Anchor, Reporter],
     tools: [
-      // With no subagent allowed to work, no conversation is offered spawn_agent, the root included.
-      ...(limits.maxThreads > 0 ? [spawnAgent(limits, agentTypes)] : []),
-      sendMessage,
-      followupTask(limits),
-      waitAgent,
-      listAgents,
-      interruptAgent,
+      // With no worker allowed to work, no conversation is offered start_worker, the root included.
+      ...(limits.maxThreads > 0 ? [startWorker(limits, agentTypes, providers)] : []),
+      messageWorker,
+      assignWorker(limits),
+      waitWorker,
+      listWorkers,
+      stopWorker,
+    ],
+    sections: [
+      {
+        key: "workers",
+        tag: false,
+        // A code-mode model is offered only codemode, whose scripts call start_worker, so the callable tools decide.
+        render: ({ agent }) =>
+          Effect.succeed(agent.callable.some((tool) => tool.name === "start_worker") ? WORKERS_SECTION : undefined),
+      },
     ],
   })

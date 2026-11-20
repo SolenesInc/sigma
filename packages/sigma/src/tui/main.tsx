@@ -53,7 +53,7 @@ import { VERSION } from "../version.ts"
 import { mailPayload } from "../agents.ts"
 import { Client, serverRefusal, type StartOptions } from "../client.ts"
 import { attachmentsIn, imagesIn } from "../attach.ts"
-import { describeCall, describeTargetChange } from "./calls.ts"
+import { describeCall, describeTargetChange, receivedOf } from "./calls.ts"
 import {
   clip,
   COMMANDS,
@@ -358,7 +358,7 @@ interface Tree {
   readonly parents: Readonly<Record<string, string>>
   /**
    * The subagents the server lists under the tree, by the call that started each. A call a script made, such as a
-   * code-mode `tools.spawn_agent(...)`, is `<script's call>/<key>`, and leaves no entry that names its subagent.
+   * code-mode `tools.start_worker(...)`, is `<script's call>/<key>`, and leaves no entry that names its subagent.
    */
   readonly started: Readonly<Record<string, Subagent>>
 }
@@ -491,6 +491,12 @@ const ToolCallView = (props: { followed: Followed; index: Index; tree: Tree; cal
     const message = entry && messageOf(entry)
     return message && { text: resultTextOf(message, entry), error: message.isError === true }
   }
+  // What a worker sent reads as what it said under its name, as its mail does.
+  const received = () => {
+    const shown = result()
+    const mail = shown && !shown.error ? receivedOf(props.call.name, shown.text) : undefined
+    return mail === undefined || mail.length === 0 ? undefined : mail
+  }
   const output = () =>
     props.followed.docs()["pi.live"]?.tools?.find((tool) => tool.callId === props.call.id)?.output ?? ""
   const asking = () => pendingCalls(props.followed.docs()).some(([, request]) => request.callId === props.call.id)
@@ -534,10 +540,21 @@ const ToolCallView = (props: { followed: Followed; index: Index; tree: Tree; cal
           </Show>
           <Show when={result()}>
             {(shown) => (
-              <Show when={shown().text.trim() !== ""}>
-                <text fg={shown().error ? color.yellow : color.dim} marginLeft={2}>
-                  {head(shown().text, RESULT_LINES)}
-                </text>
+              <Show
+                when={received()}
+                fallback={
+                  <Show when={shown().text.trim() !== ""}>
+                    <text fg={shown().error ? color.yellow : color.dim} marginLeft={2}>
+                      {head(shown().text, RESULT_LINES)}
+                    </text>
+                  </Show>
+                }
+              >
+                {(mail) => (
+                  <For each={mail()}>
+                    {(each) => <UserView label={each.from} tone={color.violet} text={each.text} attached={[]} />}
+                  </For>
+                )}
               </Show>
             )}
           </Show>

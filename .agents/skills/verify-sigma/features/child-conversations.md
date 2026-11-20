@@ -1,6 +1,6 @@
 # Child conversations
 
-Delegated work runs in a child conversation owned by the task or conversation that started it, foreground or background. [Subagents](./subagents.md) drives it.
+Delegated work runs in a child conversation owned by the task or conversation that started it, foreground or background. [Subagents](./workers.md) drives it.
 
 ## Sub-features
 
@@ -33,12 +33,12 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 - server-idle-exit, child-tools: a subagent's work keeps the server up after its client leaves, past the idle grace
 - server-stop, child-tools: stopping the server lets a working subagent finish and report first
-- child-tools, subagent-answer: the model spawns a subagent, waits for it, and its final answer is mailed back
+- child-tools, worker-answer: the model starts a worker, and the wait returns its final answer, which is not also delivered as a message
 - child-tools: a prompt queued while the model waits on a subagent does not end the wait, and runs after it
 - child-tools, approval-auto: a subagent of a conversation that runs calls without asking does not ask either
-- subagent-limits, child-tools: spawns in one response start at most maxThreads subagents
-- subagent-limits, child-tools: a follow-up task does not wake an idle subagent while maxThreads subagents work
+- worker-limits, child-tools: start_worker calls in one response start at most maxThreads workers
+- worker-limits, child-tools: a follow-up task does not wake an idle worker while maxThreads workers work
 - child-tools: a subagent's answer that waits in its parent's queue still reaches it when the person stops the parent
 - child-tools: a follow-up task reaches a working subagent at its next step, in the same run
-- child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks
-- child-tools, subagent-agents: interrupting a subagent stops its turn and reports what it was doing
+- child-tools, worker-message, worker-assign: a worker takes messages and follow-up tasks
+- child-tools, worker-list: interrupting a worker stops its turn and reports what it was doing

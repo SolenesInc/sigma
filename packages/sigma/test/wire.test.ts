@@ -273,7 +273,7 @@ test("server-idle-exit, child-tools: a subagent's work keeps the server up after
   const home = tempHome()
   const served = await deadline(
     servingUntilIdle(home, "50 millis", [
-      call("spawn_agent", { task_name: "writer", message: "count", fork_turns: "none" }),
+      call("start_worker", { task_name: "writer", message: "count", fork_turns: "none" }),
       { text: "spawned" },
       { text: "one two three four", delayMs: 100, agent: "/root/writer" },
       { text: "heard it" },
@@ -302,7 +302,7 @@ test("server-stop, child-tools: stopping the server lets a working subagent fini
   const home = tempHome()
   const served = await deadline(
     servingUntilIdle(home, "1 hour", [
-      call("spawn_agent", { task_name: "writer", message: "count", fork_turns: "none" }),
+      call("start_worker", { task_name: "writer", message: "count", fork_turns: "none" }),
       { text: "spawned" },
       { text: "one two three four", delayMs: 100, agent: "/root/writer" },
       { text: "heard it" },
@@ -610,12 +610,12 @@ test("start-with-id: a chosen id that names an object property, such as toString
   client.close()
 })
 
-test("child-tools, subagent-answer: the model spawns a subagent, waits for it, and its final answer is mailed back", async () => {
+test("child-tools, worker-answer: the model starts a worker, and the wait returns its final answer, which is not also delivered as a message", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "writer", message: "write a note", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { text: "the note is written", agent: "/root/writer" },
-    call("list_agents", {}),
+    call("list_workers", {}),
     { text: "writer finished" },
   ])
   const client = await RawClient.connect(server.home.socket)
@@ -624,21 +624,100 @@ test("child-tools, subagent-answer: the model spawns a subagent, waits for it, a
   await submit(client, conversation, "delegate it")
   await view.until(settled(1), 20_000)
   const results = toolResults(view).map((result) => JSON.parse(result.text))
-  expect(results[0]).toEqual({ task_name: "/root/writer", nickname: null })
-  expect(results[1]).toEqual({ message: "Wait completed.", timed_out: false })
+  expect(results[0]).toEqual({ task_name: "/root/writer" })
+  expect(results[1]).toEqual({
+    timed_out: false,
+    received: [{ from: "/root/writer", kind: "final_answer", text: "the note is written" }],
+  })
   expect(results[2]).toEqual({
-    agents: [
-      { agent_name: "/root", agent_status: "running" },
-      { agent_name: "/root/writer", agent_status: { completed: "the note is written" } },
+    workers: [
+      { name: "/root", status: "running" },
+      { name: "/root/writer", status: { completed: "the note is written" } },
     ],
   })
-  expect(mails(view)).toEqual([{ kind: "final_answer", task: "/root", sender: "/root/writer" }])
-  // The answer reached the running turn as a message, and the turn went on with it.
+  // The wait took the answer, so it reached the model once, and nothing waits in the inbox.
+  expect(mails(view)).toEqual([])
+  expect((view.view().docs["pi.inbox"] as { items: unknown[] } | undefined)?.items ?? []).toEqual([])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: writer finished", "run_end: answered"])
   client.close()
 }, 30_000)
 
-/** The conversation of the subagent a spawn_agent call started, from its result's details. */
+test("worker-provider: start_worker refuses a provider the home does not have and one that is not ready, naming the ready ones, and a fork onto another provider", async () => {
+  await using server = await runningServer([
+    call("start_worker", { task_name: "a", message: "go", provider: "gemini" }),
+    call("start_worker", { task_name: "b", message: "go", provider: "openai" }),
+    call("start_worker", { task_name: "c", message: "go", provider: "claude", fork_turns: "all" }),
+    { text: "none started" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = await start(client, server.home.dir)
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "start them")
+  await view.until(settled(1), 20_000)
+  // The test home's ChatGPT is not signed in; its fake Claude Code is.
+  expect(toolResults(view)).toEqual([
+    { text: "no provider gemini; the ready providers are script, claude", isError: true },
+    { text: "provider openai is not ready; the ready providers are script, claude", isError: true },
+    {
+      text: 'a worker on another provider starts from your message alone; set fork_turns to "none"',
+      isError: true,
+    },
+  ])
+  expect((await client.call("conversation/list")).result).toHaveLength(1)
+  client.close()
+}, 30_000)
+
+test("worker-wait: a wait that nothing reaches in time returns timed out, with the minimum it was clamped to, and the worker keeps working", async () => {
+  await using server = await runningServer([
+    call("start_worker", { task_name: "slow", message: "make it", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 0 }),
+    { text: "still waiting on slow" },
+    call("bash", { command: "echo made" }, "/root/slow"),
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = await start(client, server.home.dir)
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "start a slow one")
+  // The worker holds on its approval, so the wait reaches its minimum of 10 s.
+  await view.until(settled(1), 20_000)
+  expect(JSON.parse(toolResults(view)[1]!.text)).toEqual({
+    timed_out: true,
+    received: [],
+    message: "Requested timeout of 0ms was clamped to the minimum of 10000ms.",
+  })
+  const slow = watchView(client, spawned(view, "/root/slow"))
+  await waitingApproval(slow)
+  expect(runEnds(slow.seen())).toEqual([])
+  client.close()
+}, 30_000)
+
+test("worker-person: a person's message to a worker is answered in the worker's conversation, and its parent is told nothing", async () => {
+  await using server = await runningServer([
+    call("start_worker", { task_name: "helper", message: "first", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
+    { text: "first done", agent: "/root/helper" },
+    { text: "helper finished" },
+    { text: "hello ada", agent: "/root/helper" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = await start(client, server.home.dir)
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "delegate it")
+  await view.until(settled(1), 20_000)
+  const helper = watchView(client, spawned(view, "/root/helper"))
+  await helper.until(settled(1), 20_000)
+
+  await submit(client, spawned(view, "/root/helper"), "hi helper")
+  await helper.until(settled(2), 20_000)
+  expect(transcript(helper.seen()).slice(-3)).toEqual(["user: hi helper", "assistant: hello ada", "run_end: answered"])
+  // Nothing reaches the parent: no mail, nothing queued, no run.
+  expect(mails(view)).toEqual([])
+  expect((view.view().docs["pi.inbox"] as { items: unknown[] }).items).toEqual([])
+  expect(runEnds(view.seen())).toHaveLength(1)
+  client.close()
+}, 30_000)
+
+/** The conversation of the subagent a start_worker call started, from its result's details. */
 const spawned = (watch: ViewWatch, task: string) => {
   const result = watch
     .seen()
@@ -649,8 +728,8 @@ const spawned = (watch: ViewWatch, task: string) => {
 
 test("child-tools: a prompt queued while the model waits on a subagent does not end the wait, and runs after it", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "writer", message: "write a note", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { text: "writer finished" },
     { text: "now the next prompt" },
     { tool: { name: "bash", input: { command: "echo noted" } }, agent: "/root/writer" },
@@ -668,7 +747,10 @@ test("child-tools: a prompt queued while the model waits on a subagent does not 
   await submit(client, conversation, "and then this")
   await client.call("approval/resolve", { conversation: child, approval, author: person("ada"), allow: true })
   await view.until(settled(2), 20_000)
-  expect(JSON.parse(toolResults(view)[1]!.text)).toEqual({ message: "Wait completed.", timed_out: false })
+  expect(JSON.parse(toolResults(view)[1]!.text)).toEqual({
+    timed_out: false,
+    received: [{ from: "/root/writer", kind: "final_answer", text: "the note is written" }],
+  })
   expect(transcript(view.seen()).filter((line) => !line.startsWith("assistant: ") || line.includes("next"))).toEqual([
     "user: delegate it",
     "run_end: answered",
@@ -681,8 +763,8 @@ test("child-tools: a prompt queued while the model waits on a subagent does not 
 
 test("child-tools, approval-auto: a subagent of a conversation that runs calls without asking does not ask either", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "writer", message: "write a note", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { text: "writer finished" },
     { tool: { name: "bash", input: { command: "echo noted" } }, agent: "/root/writer" },
     { text: "the note is written", agent: "/root/writer" },
@@ -694,16 +776,18 @@ test("child-tools, approval-auto: a subagent of a conversation that runs calls w
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate it")
   await view.until(settled(1), 20_000)
-  expect(mails(view)).toEqual([{ kind: "final_answer", task: "/root", sender: "/root/writer" }])
+  expect(JSON.parse(toolResults(view)[1]!.text).received).toEqual([
+    { from: "/root/writer", kind: "final_answer", text: "the note is written" },
+  ])
   const writer = watchView(client, spawned(view, "/root/writer"))
   await writer.until(() => true)
   expect(toolResults(writer)).toEqual([{ text: "noted\n", isError: false }])
   client.close()
 }, 30_000)
 
-test("subagent-types: spawning an agent of a type sigma doesn't know is refused, naming it", async () => {
+test("worker-types: starting an agent of a type sigma doesn't know is refused, naming it", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "review", message: "review it", agent_type: "reviewer" }),
+    call("start_worker", { task_name: "review", message: "review it", agent_type: "reviewer" }),
     { text: "no reviewer" },
   ])
   const client = await RawClient.connect(server.home.socket)
@@ -723,13 +807,13 @@ const holding = SEVEN.map((name) => ({
 }))
 const spawnSeven = {
   tools: SEVEN.map((name) => ({
-    name: "spawn_agent",
+    name: "start_worker",
     input: { task_name: name, message: "hold", fork_turns: "none" },
   })),
 }
 const MAX_THREADS = "at most 6 subagents work at once (max_threads); 6 are working, so wait for one to finish"
 
-test("subagent-limits, child-tools: spawns in one response start at most maxThreads subagents", async () => {
+test("worker-limits, child-tools: start_worker calls in one response start at most maxThreads workers", async () => {
   await using server = await runningServer([spawnSeven, { text: "spawned them" }, ...holding])
   const client = await RawClient.connect(server.home.socket)
   const conversation = await start(client, server.home.dir)
@@ -742,12 +826,12 @@ test("subagent-limits, child-tools: spawns in one response start at most maxThre
   client.close()
 }, 30_000)
 
-test("subagent-limits, child-tools: a follow-up task does not wake an idle subagent while maxThreads subagents work", async () => {
+test("worker-limits, child-tools: a follow-up task does not wake an idle worker while maxThreads workers work", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "idle", message: "answer", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "idle", message: "answer", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { ...spawnSeven, tools: spawnSeven.tools.slice(0, 6) },
-    call("followup_task", { target: "idle", message: "again" }),
+    call("assign_worker", { target: "idle", message: "again" }),
     { text: "asked" },
     { text: "answered", agent: "/root/idle" },
     ...holding,
@@ -767,7 +851,7 @@ test("child-tools: a subagent's answer that waits in its parent's queue still re
   await using server = await runningServer([
     {
       tools: [
-        { name: "spawn_agent", input: { task_name: "writer", message: "write a note", fork_turns: "none" } },
+        { name: "start_worker", input: { task_name: "writer", message: "write a note", fork_turns: "none" } },
         { name: "bash", input: { command: "echo waiting" } },
       ],
     },
@@ -789,8 +873,8 @@ test("child-tools: a subagent's answer that waits in its parent's queue still re
 
 test("child-tools: a follow-up task reaches a working subagent at its next step, in the same run", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "writer", message: "write a note", fork_turns: "none" }),
-    call("followup_task", { target: "writer", message: "sign it too" }),
+    call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
+    call("assign_worker", { target: "writer", message: "sign it too" }),
     { text: "asked" },
     { tool: { name: "bash", input: { command: "echo noted" } }, agent: "/root/writer" },
     { text: "written and signed", agent: "/root/writer" },
@@ -813,14 +897,14 @@ test("child-tools: a follow-up task reaches a working subagent at its next step,
   client.close()
 }, 30_000)
 
-test("child-tools, subagent-message, subagent-followup: a subagent takes messages and follow-up tasks", async () => {
+test("child-tools, worker-message, worker-assign: a worker takes messages and follow-up tasks", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "helper", message: "first", fork_turns: "none" }),
+    call("start_worker", { task_name: "helper", message: "first", fork_turns: "none" }),
     { text: "first done", agent: "/root/helper" },
-    call("wait_agent", { timeout_ms: 600_000 }),
-    call("send_message", { target: "helper", message: "fyi" }),
-    call("followup_task", { target: "/root/helper", message: "second" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("wait_worker", { timeout_ms: 600_000 }),
+    call("message_worker", { target: "helper", message: "fyi" }),
+    call("assign_worker", { target: "/root/helper", message: "second" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { text: "second done", agent: "/root/helper" },
     { text: "all done" },
   ])
@@ -831,9 +915,15 @@ test("child-tools, subagent-message, subagent-followup: a subagent takes message
   await view.until(settled(1), 20_000)
   const helper = watchView(client, spawned(view, "/root/helper"))
   await helper.until(settled(2), 20_000)
-  expect(mails(view)).toEqual([
-    { kind: "final_answer", task: "/root", sender: "/root/helper" },
-    { kind: "final_answer", task: "/root", sender: "/root/helper" },
+  // Each answer came back through a wait, so none was delivered as a message too.
+  expect(mails(view)).toEqual([])
+  expect(
+    toolResults(view)
+      .filter((result) => result.text.startsWith('{"timed_out"'))
+      .flatMap((result) => JSON.parse(result.text).received),
+  ).toEqual([
+    { from: "/root/helper", kind: "final_answer", text: "first done" },
+    { from: "/root/helper", kind: "final_answer", text: "second done" },
   ])
   expect(mails(helper)).toEqual([
     { kind: "new_task", task: "/root/helper", sender: "/root" },
@@ -848,13 +938,13 @@ test("child-tools, subagent-message, subagent-followup: a subagent takes message
   client.close()
 }, 30_000)
 
-test("child-tools, subagent-agents: interrupting a subagent stops its turn and reports what it was doing", async () => {
+test("child-tools, worker-list: interrupting a worker stops its turn and reports what it was doing", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "slow", message: "make it", fork_turns: "none" }),
+    call("start_worker", { task_name: "slow", message: "make it", fork_turns: "none" }),
     call("bash", { command: "echo ready" }),
     call("bash", { command: "touch made" }, "/root/slow"),
-    call("interrupt_agent", { target: "slow" }),
-    call("list_agents", {}),
+    call("stop_worker", { target: "slow" }),
+    call("list_workers", {}),
     { text: "stopped it" },
   ])
   const client = await RawClient.connect(server.home.socket)
@@ -870,9 +960,9 @@ test("child-tools, subagent-agents: interrupting a subagent stops its turn and r
   await slow.until(settled(1), 20_000)
   const results = toolResults(view).map((result) => result.text)
   expect(JSON.parse(results[2]!)).toEqual({ previous_status: "running" })
-  expect(JSON.parse(results[3]!).agents).toEqual([
-    { agent_name: "/root", agent_status: "running" },
-    { agent_name: "/root/slow", agent_status: "interrupted" },
+  expect(JSON.parse(results[3]!).workers).toEqual([
+    { name: "/root", status: "running" },
+    { name: "/root/slow", status: "interrupted" },
   ])
   expect(runEnds(slow.seen())).toEqual([expect.objectContaining({ outcome: "interrupted" })])
   expect(approvalsOf(slow)!.requests).toEqual({})
@@ -906,10 +996,10 @@ const startAuto = async (client: RawClient, cwd: string, id?: string) =>
     })
   ).result.conversation as string
 
-test("subagent-root-env, tool-root-env: a subagent's command knows the conversation people started", async () => {
+test("worker-root-env, tool-root-env: a worker's command knows the conversation people started", async () => {
   await using server = await runningServer([
-    { tool: { name: "spawn_agent", input: { task_name: "envy", message: "show your root", fork_turns: "none" } } },
-    { tool: { name: "wait_agent", input: { timeout_ms: 600000 } } },
+    { tool: { name: "start_worker", input: { task_name: "envy", message: "show your root", fork_turns: "none" } } },
+    { tool: { name: "wait_worker", input: { timeout_ms: 600000 } } },
     { text: "envy answered" },
     { agent: "/root/envy", tool: { name: "bash", input: { command: "echo root=$SIGMA_ROOT_CONVERSATION" } } },
     { agent: "/root/envy", text: "shown" },
@@ -991,8 +1081,8 @@ test("status-follow, status-ended: watching status follows each run of a tree an
 
 test("status-subagent, status-snapshot: a subagent waiting on a person shows as its whole tree waiting, to watchers then and later", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "writer", message: "write a note", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { tool: { name: "bash", input: { command: "echo noted" } }, agent: "/root/writer" },
   ])
   const client = await RawClient.connect(server.home.socket)
@@ -1043,7 +1133,7 @@ test("submit-author, queue-shared: every client sees who wrote each prompt, whil
   bo.close()
 })
 
-test("subagent-limits: a tree runs at most as many subagents at once as config.toml allows", async () => {
+test("worker-limits: a tree runs at most as many workers at once as config.toml allows", async () => {
   await using server = await runningServer([spawnSeven, { text: "spawned them" }, ...holding], {
     config: { agents: { max_threads: 2 } },
   })
@@ -1059,9 +1149,9 @@ test("subagent-limits: a tree runs at most as many subagents at once as config.t
   client.close()
 }, 30_000)
 
-test("subagent-limits: with max_threads 0 in config.toml the root conversation is not offered spawn_agent", async () => {
+test("worker-limits: with max_threads 0 in config.toml the root conversation is not offered start_worker", async () => {
   await using server = await runningServer(
-    [call("spawn_agent", { task_name: "scout", message: "go", fork_turns: "none" }), { text: "alone then" }],
+    [call("start_worker", { task_name: "scout", message: "go", fork_turns: "none" }), { text: "alone then" }],
     { config: { agents: { max_threads: 0 } } },
   )
   const client = await RawClient.connect(server.home.socket)
@@ -1070,19 +1160,19 @@ test("subagent-limits: with max_threads 0 in config.toml the root conversation i
   await submit(client, conversation, "send a scout")
   await view.until(settled(1), 20_000)
   expect(toolResults(view)).toEqual([
-    { text: expect.stringContaining("Tool spawn_agent is not available"), isError: true },
+    { text: expect.stringContaining("Tool start_worker is not available"), isError: true },
   ])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: alone then", "run_end: answered"])
   expect((await client.call("conversation/list")).result).toHaveLength(1)
   client.close()
 }, 30_000)
 
-test("subagent-limits, child-tools: under the default config a subagent starts a subagent of its own, told only its own task", async () => {
+test("worker-limits, child-tools: under the default config a worker starts a worker of its own, told only its own task", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "helper", message: "go", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
-    call("spawn_agent", { task_name: "deeper", message: "dig", fork_turns: "none" }, "/root/helper"),
-    call("wait_agent", { timeout_ms: 600_000 }, "/root/helper"),
+    call("start_worker", { task_name: "helper", message: "go", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "deeper", message: "dig", fork_turns: "none" }, "/root/helper"),
+    call("wait_worker", { timeout_ms: 600_000 }, "/root/helper"),
     { text: "dug", agent: "/root/helper/deeper" },
     { text: "helper done", agent: "/root/helper" },
     { text: "all done" },
@@ -1104,13 +1194,11 @@ test("subagent-limits, child-tools: under the default config a subagent starts a
   await deeper.until(settled(1), 20_000)
   // The deeper agent keeps what the helper inherited, not the helper's own notice.
   expect((deeper.view().docs["pi.agent"] as { instructions?: string }).instructions).toBe(
-    "Report with attn when done.\n\nYour task name is /root/helper/deeper. You are a subagent; your final answer goes to /root/helper.",
+    "Report with attn when done.\n\nYour task name is /root/helper/deeper. You are a worker; your final answer goes to /root/helper.",
   )
   expect(mails(deeper)).toEqual([{ kind: "new_task", task: "/root/helper/deeper", sender: "/root/helper" }])
-  expect(mails(helper)).toEqual([
-    { kind: "new_task", task: "/root/helper", sender: "/root" },
-    { kind: "final_answer", task: "/root/helper", sender: "/root/helper/deeper" },
-  ])
+  // The helper's wait took the deeper agent's answer.
+  expect(mails(helper)).toEqual([{ kind: "new_task", task: "/root/helper", sender: "/root" }])
   expect(transcript(deeper.seen()).slice(-2)).toEqual(["assistant: dug", "run_end: answered"])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: all done", "run_end: answered"])
   client.close()
@@ -1118,14 +1206,14 @@ test("subagent-limits, child-tools: under the default config a subagent starts a
 
 const idle = (watch: ViewWatch) => (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run === undefined
 
-test("subagent-interrupt, interrupt-idle: interrupting a conversation's run leaves its subagents working, and interrupting it again, idle, stops them, so the tree goes idle", async () => {
+test("worker-interrupt, interrupt-idle: interrupting a conversation's run leaves its workers working, and interrupting it again, idle, stops them, so the tree goes idle", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "slow", message: "make it", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "slow", message: "make it", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     call("bash", { command: "touch made" }, "/root/slow"),
-    call("list_agents", {}),
-    call("followup_task", { target: "slow", message: "try again" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("list_workers", {}),
+    call("assign_worker", { target: "slow", message: "try again" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { text: "made it this time", agent: "/root/slow" },
     { text: "slow is done" },
   ])
@@ -1157,12 +1245,14 @@ test("subagent-interrupt, interrupt-idle: interrupting a conversation's run leav
   // The subagent stays in the tree, and takes a new task.
   await submit(client, conversation, "go on")
   await view.until(settled(2), 20_000)
-  expect(JSON.parse(toolResults(view).at(-3)!.text).agents).toEqual([
-    { agent_name: "/root", agent_status: "running" },
-    { agent_name: "/root/slow", agent_status: "interrupted" },
+  expect(JSON.parse(toolResults(view).at(-3)!.text).workers).toEqual([
+    { name: "/root", status: "running" },
+    { name: "/root/slow", status: "interrupted" },
   ])
   expect(transcript(slow.seen()).slice(-2)).toEqual(["assistant: made it this time", "run_end: answered"])
-  expect(mails(view)).toEqual([{ kind: "final_answer", task: "/root", sender: "/root/slow" }])
+  expect(JSON.parse(toolResults(view).at(-1)!.text).received).toEqual([
+    { from: "/root/slow", kind: "final_answer", text: "made it this time" },
+  ])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: slow is done", "run_end: answered"])
   client.close()
 }, 30_000)
@@ -1185,11 +1275,11 @@ const list = async (client: RawClient) => {
   return reply.result as Array<Listed>
 }
 
-test("subagent-spawn, subagent-model: conversation/list shows each subagent with its lineage, on its parent's model or the one its spawn_agent names, and an unlisted model fails the call", async () => {
+test("worker-start, worker-model: conversation/list shows each worker with its lineage, on its parent's model or the one its start_worker names, and an unlisted model fails the call", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "same", message: "go", fork_turns: "none" }),
-    call("spawn_agent", { task_name: "other", message: "go", fork_turns: "none", model: "script-code-mode" }),
-    call("spawn_agent", { task_name: "nope", message: "go", fork_turns: "none", model: "no-such-model" }),
+    call("start_worker", { task_name: "same", message: "go", fork_turns: "none" }),
+    call("start_worker", { task_name: "other", message: "go", fork_turns: "none", model: "script-code-mode" }),
+    call("start_worker", { task_name: "nope", message: "go", fork_turns: "none", model: "no-such-model" }),
     { text: "spawned" },
     { text: "same done", agent: "/root/same" },
     { text: "other done", agent: "/root/other" },
@@ -1676,9 +1766,9 @@ test("steer-wire, steer-place: a steering prompt reaches sigma during the run in
   client.close()
 })
 
-test("subagent-answer: a subagent's answer reaches its idle parent as input that starts a run, so the parent acts on it", async () => {
+test("worker-answer: a worker's answer reaches its idle parent as input that starts a run, so the parent acts on it", async () => {
   await using server = await runningServer([
-    call("spawn_agent", { task_name: "kid", message: "look around", fork_turns: "none" }),
+    call("start_worker", { task_name: "kid", message: "look around", fork_turns: "none" }),
     { text: "asked the kid" },
     { tool: { name: "bash", input: { command: "echo looked" } }, agent: "/root/kid" },
     { text: "all quiet", agent: "/root/kid" },
@@ -2427,13 +2517,13 @@ test("target-lost: a call on a target that is gone fails with the connector's re
   client.close()
 })
 
-test("target-subagent-fork: a subagent's calls and a fork's calls act on their parent's target", async () => {
+test("target-worker-fork: a worker's calls and a fork's calls act on their parent's target", async () => {
   using targets = new TestTargets()
   const work = targets.add("box", "box-1")
   const where = { tool: { name: "bash", input: { command: 'echo "$SIGMA_TARGET_INSTANCE $PWD"' } } }
   await using server = await targetServer(targets, [
-    call("spawn_agent", { task_name: "helper", message: "look around", fork_turns: "none" }),
-    call("wait_agent", { timeout_ms: 600_000 }),
+    call("start_worker", { task_name: "helper", message: "look around", fork_turns: "none" }),
+    call("wait_worker", { timeout_ms: 600_000 }),
     { ...where, agent: "/root/helper" },
     { text: "looked", agent: "/root/helper" },
     { text: "helper looked" },

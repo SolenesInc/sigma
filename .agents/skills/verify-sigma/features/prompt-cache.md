@@ -22,16 +22,16 @@ with what the last one had. A person sees the result in `/usage`, whose
   as they were in its first request after a section changes (an `AGENTS.md`
   file, a skill, or a forked subagent's own instructions), and sends the change after the history as a `developer` message,
   `Updated system prompt section "<name>":` and the section's new text.
-- `cache-fresh-subagent` does the same among the requests of a subagent
+- `cache-fresh-worker` does the same among the requests of a subagent
   started with `fork_turns: "none"`, under a `prompt_cache_key` of its own.
-- `cache-conversation-fork` sends a fork's requests, from a `spawn_agent`
+- `cache-conversation-fork` sends a fork's requests, from a `start_worker`
   with its parent's history or from `conversation/fork`, under its parent's
   `prompt_cache_key` and `session-id`, so its first request can read the
   history it shares with its parent from the cache. A new conversation,
   `fork_turns: "none"` subagents among them, gets a key of its own.
-- `cache-fork-subagent` sends a forked subagent's first request with its
+- `cache-fork-worker` sends a forked subagent's first request with its
   parent's `instructions` and `tools`: a subagent keeps its parent's tools,
-  `spawn_agent` among them, and its instructions are those its parent
+  `start_worker` among them, and its instructions are those its parent
   inherited followed by the line naming its task and its agent type's body. Those reach ChatGPT
   after the inherited history, as an update of the `instructions` section.
   A `fork_turns: "none"` subagent is told the same in its `instructions`.
@@ -61,7 +61,7 @@ with what the last one had. A person sees the result in `/usage`, whose
   conversation so far from the cache.
 - Type `/usage` and press `⏎` to see the `cached` column; `esc` closes it.
 - Ask a model to start a subagent, or fork with `/fork`, in
-  [Subagents](./subagents.md) and [Conversations and forks](./conversations.md).
+  [Subagents](./workers.md) and [Conversations and forks](./conversations.md).
 
 ### Agents
 
@@ -71,7 +71,7 @@ with what the last one had. A person sees the result in `/usage`, whose
 - Watch a conversation: on ChatGPT each `pi.assistant` entry's message has the
   `usage` its own request reported, `cacheRead` among it. On Claude the
   entries carry none, and the `pi.usage` document holds what each run spent.
-- `conversation/fork` and `spawn_agent`, as above.
+- `conversation/fork` and `start_worker`, as above.
 
 ## Driving it with drive.ts
 
@@ -114,9 +114,9 @@ Preconditions:
   `Updated system prompt section \"workspace\":` and holds
   `Answer in French.`, after the answer and `again`.
 
-- **A fresh subagent** (`cache-fresh-subagent`). `drive.ts r up --fake-openai fresh_subagent_tool_call`,
+- **A fresh subagent** (`cache-fresh-worker`). `drive.ts r up --fake-openai fresh_subagent_tool_call`,
   `drive.ts r sigma exec --provider openai --auto 'Ask a scout what echo prints.'`:
-  stderr `› spawn_agent(scout)` and `› wait_agent`. The log holds four
+  stderr `› start_worker(scout)` and `› wait_worker`. The log holds four
   requests, all `as recorded`: the parent's, the scout's two, the parent's
   again. `jq -c '{request, key: .body.prompt_cache_key, inputs: (.body.input|length)}'`
   on it shows requests 2 and 3 under one key, not the parent's, request 2 with
@@ -131,7 +131,7 @@ Preconditions:
 
 - **Forks** (`cache-conversation-fork`). `drive.ts r up --fake-openai subagent,fresh_subagent_tool_call`,
   `drive.ts r sigma exec --provider openai --auto 'Ask a scout where the gnome lives.'`:
-  stderr `› spawn_agent(scout)` and `› wait_agent`. Take the id and its
+  stderr `› start_worker(scout)` and `› wait_worker`. Take the id and its
   `sigma.run_end` entry's id from `drive.ts r watch <id> --save parent`, then
   `drive.ts r serve` and
   `drive.ts r rpc conversation/fork '{"conversation": "<id>", "at": <run_end id>, "author": {"id": "ada", "name": "ada"}}'`:
@@ -144,7 +144,7 @@ Preconditions:
   scout, under another. The log has no headers: the provider test checks that
   `session-id` matches each key.
 
-- **A forked subagent** (`cache-fork-subagent`). `drive.ts r up --fake-openai subagent`,
+- **A forked subagent** (`cache-fork-worker`). `drive.ts r up --fake-openai subagent`,
   `drive.ts r sigma exec --provider openai --auto --instructions 'Report with attn when done.' 'Ask a scout where the gnome lives.'`:
   `The scout says: under the floor.` Compare the scout's first request, the
   log's second, with the parent's first, and show what it added at its end:
@@ -209,10 +209,10 @@ Provider, `packages/sigma/test/openai.test.ts`:
 
 - cache-turns: each ChatGPT request of a conversation, within a run and across runs, repeats the one before it and adds to its end
 - cache-instructions-change, section-deltas: an AGENTS.md changed between two prompts reaches ChatGPT after the history, and the request keeps the instructions it started with
-- cache-fresh-subagent: a subagent started without its parent's history keeps its own requests' front, under a cache key of its own
-- cache-conversation-fork: a spawn_agent fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own
-- cache-fork-subagent: a forked subagent of a type sends its parent's cache key, instructions and tools, and gets its notice and type after the inherited history
-- subagent-types, cache-fork-subagent: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out
+- cache-fresh-worker: a worker started without its parent's history keeps its own requests' front, under a cache key of its own
+- cache-conversation-fork: a start_worker fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own
+- cache-fork-worker: a forked worker of a type sends its parent's cache key, instructions and tools, and gets its notice and type after the inherited history
+- worker-types, cache-fork-worker: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out
 
 Provider, `packages/sigma/test/claude.test.ts`:
 
@@ -306,9 +306,9 @@ ChatGPT, in a run made with `drive.ts r up --openai-kept`:
   with `input` 12,042, then the fork's `amber-412-cedar` with `input` 162 and
   `cacheRead` 11,904.
 
-- **A forked subagent** (`cache-fork-subagent`). In a new run, the same
+- **A forked subagent** (`cache-fork-worker`). In a new run, the same
   first `exec`: `noted`. Take the id, then
-  `drive.ts r watch <id> --submit 'Use spawn_agent to start a subagent named scout, with your history, and ask it which label is number 412. Wait for it, then reply with its answer only.' --until run_end --timeout 180000 --save parent`:
+  `drive.ts r watch <id> --submit 'Use start_worker to start a subagent named scout, with your history, and ask it which label is number 412. Wait for it, then reply with its answer only.' --until run_end --timeout 180000 --save parent`:
   `amber-412-cedar`. Take the scout's id from `drive.ts r rpc conversation/list`
   (`"task": "/root/scout"`), and
   `drive.ts r watch <scout id> --save scout`. The same `jq` on `scout.ndjson`:

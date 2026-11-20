@@ -601,10 +601,10 @@ test("approval-exec-deny: sigma exec shows its calls and, without --auto, denies
   expect(allowed.stderr).not.toContain("denied")
 }, 30_000)
 
-test("subagent-exec: sigma exec without --auto denies the calls its subagents would ask about too", async () => {
+test("worker-exec: sigma exec without --auto denies the calls its workers would ask about too", async () => {
   const env = await scriptEnv(home(), [
-    { tool: { name: "spawn_agent", input: { task_name: "kid", message: "go" } } },
-    { tool: { name: "wait_agent", input: { timeout_ms: 600_000 } } },
+    { tool: { name: "start_worker", input: { task_name: "kid", message: "go" } } },
+    { tool: { name: "wait_worker", input: { timeout_ms: 600_000 } } },
     { text: "the kid is done" },
     { agent: "/root/kid", tool: { name: "bash", input: { command: "echo ran" } } },
     { agent: "/root/kid", text: "could not run it" },
@@ -614,15 +614,15 @@ test("subagent-exec: sigma exec without --auto denies the calls its subagents wo
   expect(result.stderr).toContain("denied bash(echo ran): exec cannot ask")
 }, 30_000)
 
-test("subagent-exec: sigma exec continuing a subagent denies the calls of the subagents it starts", async () => {
+test("worker-exec: sigma exec continuing a worker denies the calls of the workers it starts", async () => {
   const sigmaHome = home()
   const env = await scriptEnv(sigmaHome, [
-    { tool: { name: "spawn_agent", input: { task_name: "kid", message: "get ready" } } },
-    { tool: { name: "wait_agent", input: { timeout_ms: 600_000 } } },
+    { tool: { name: "start_worker", input: { task_name: "kid", message: "get ready" } } },
+    { tool: { name: "wait_worker", input: { timeout_ms: 600_000 } } },
     { text: "the kid is ready" },
     { agent: "/root/kid", text: "ready" },
-    { agent: "/root/kid", tool: { name: "spawn_agent", input: { task_name: "grand", message: "go" } } },
-    { agent: "/root/kid", tool: { name: "wait_agent", input: { timeout_ms: 600_000 } } },
+    { agent: "/root/kid", tool: { name: "start_worker", input: { task_name: "grand", message: "go" } } },
+    { agent: "/root/kid", tool: { name: "wait_worker", input: { timeout_ms: 600_000 } } },
     { agent: "/root/kid", text: "the grandchild is done" },
     { agent: "/root/kid/grand", tool: { name: "bash", input: { command: "echo ran" } } },
     { agent: "/root/kid/grand", text: "could not run it" },

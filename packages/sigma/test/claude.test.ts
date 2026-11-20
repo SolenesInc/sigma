@@ -29,6 +29,7 @@ import {
   watchView,
   type ServerOptions,
 } from "./support/server.ts"
+import type { ScriptStep } from "@sigma/models"
 
 type Approvals = { requests: Record<string, { tool: string }> }
 const approvalsOf = (watch: ViewWatch) => watch.view().docs["sigma.approvals"] as Approvals | undefined
@@ -694,7 +695,7 @@ test("subagent-claude: a Claude subagent's approval waits and is answered in its
   expect(written.map((entry) => entry.byTaskId)).toEqual([job, job, job, job])
 })
 
-test("subagent-interrupt: stopping a Claude subagent stops only it, and its parent's run carries on", async () => {
+test("subagent-claude: stopping a Claude subagent stops only it, and its parent's run carries on", async () => {
   using claude = new FakeClaude("subagent_stopped")
   await using session = await conversationWith(claude)
   await session.submit("go")
@@ -713,7 +714,7 @@ test("subagent-interrupt: stopping a Claude subagent stops only it, and its pare
   expect(claude.log().some((entry) => entry.received?.request?.subtype === "stop_task")).toBe(true)
 })
 
-test("subagent-interrupt: stopping a run ends the Claude subagents working under it", async () => {
+test("subagent-claude: stopping a run ends the Claude subagents working under it", async () => {
   using claude = new FakeClaude("subagent_working")
   // The recording has no interrupt, so its process is closed once the stop times out.
   await using session = await conversationWith(claude, {}, { claudeStop: "100 millis" })
@@ -961,7 +962,7 @@ test("claude-job-report, subagent-claude: a background subagent's approval waits
   expect(jobsOf(session.view)).toEqual([expect.objectContaining({ state: "done" })])
 })
 
-test("subagent-interrupt, claude-job-report: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, and its report joins the transcript when the idle process closes", async () => {
+test("subagent-claude, claude-job-report: stopping a Claude run stops the background subagent Claude Code started, whose job ends stopped, and its report joins the transcript when the idle process closes", async () => {
   using claude = new FakeClaude("subagent_background_interrupted")
   await using session = await conversationWith(claude, {}, { claudeIdle: "50 millis" })
   await session.submit(
@@ -1022,7 +1023,7 @@ test("interrupt-idle, claude-job-report: stopping a Claude run leaves its backgr
   ])
 })
 
-test("subagent-spawn: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own", async () => {
+test("subagent-claude: a Claude subagent is listed under its parent with the call that started it, and takes no input of its own", async () => {
   using claude = new FakeClaude("subagent")
   await using session = await conversationWith(claude)
   await session.submit("go")
@@ -1390,7 +1391,7 @@ test("target-member-mode: a remote conversation's Claude Code has only sigma's t
   // Its skills, read with sigma's read, which Claude Code knows by its MCP name.
   expect(initialize.appendSystemPrompt).toContain("`mcp__sigma__read` its `SKILL.md`")
   expect(initialize.appendSystemPrompt).toContain(
-    "The agent types `mcp__sigma__spawn_agent` takes as `agent_type`:\n- reviewer: Reviews it",
+    "The agent types `mcp__sigma__start_worker` takes as `agent_type`:\n- reviewer: Reviews it",
   )
   expect(initialize.appendSystemPrompt).toContain(
     `- deploy: Deploy it (file: ${join(repo, ".agents", "skills", "deploy", "SKILL.md")})`,
@@ -1451,7 +1452,7 @@ test("target-member-mode, claude-resume: a remote conversation's Claude Code res
   }
 })
 
-test("target-member-mode, target-subagent-fork: a fork of a remote Claude conversation forks its session in the target's folders", async () => {
+test("target-member-mode, target-worker-fork: a fork of a remote Claude conversation forks its session in the target's folders", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("died_while_idle")
   await using session = await memberSession(claude, targets)
@@ -1745,4 +1746,118 @@ test("target-restarted, target-member-mode: a remote Claude conversation's next 
       .map((entry) => entry.data),
   ).toEqual([expect.objectContaining({ target: "box", filesKept: true })])
   client.close()
+})
+
+/** A scripted agent's conversation, on a server whose Claude Code is `claude`. */
+const scriptedWith = async (
+  claude: FakeClaude,
+  script: ReadonlyArray<ScriptStep>,
+  ask: Record<string, string> = {},
+  options: ServerOptions = {},
+) => {
+  const server = await runningServer(script, { ...options, claude: claude.options })
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = (
+    await client.call("conversation/start", { author: person("ada"), cwd: server.home.dir, ...ask })
+  ).result.conversation as string
+  const view = watchView(client, conversation)
+  return {
+    server,
+    client,
+    conversation,
+    view,
+    /** The view of the worker `task`, once its start_worker call has a result. */
+    worker: async (task: string) => {
+      await view.until((watch) => workerOf(watch, task) !== undefined)
+      return watchView(client, workerOf(view, task)!)
+    },
+    [Symbol.asyncDispose]: async () => {
+      client.close()
+      await server[Symbol.asyncDispose]()
+    },
+  }
+}
+
+/** The conversation of the worker `task`, from its start_worker result's details. */
+const workerOf = (watch: ViewWatch, task: string) => {
+  const details = watch
+    .seen()
+    .map((entry) => (entry.model?.[0] as { details?: { task?: string; conversation?: number } } | undefined)?.details)
+    .find((each) => each?.task === task)
+  return details === undefined ? undefined : String(details.conversation)
+}
+
+test("worker-provider, worker-model: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone, and the agent's wait returns the worker's answer", async () => {
+  using claude = new FakeClaude("models", "text")
+  await using session = await scriptedWith(
+    claude,
+    [
+      {
+        tool: {
+          name: "start_worker",
+          input: {
+            task_name: "poet",
+            message: "Reply with exactly: fixture text ok",
+            provider: "claude",
+            model: "claude-opus-5-5",
+            effort: "high",
+          },
+        },
+      },
+      { tool: { name: "wait_worker", input: { timeout_ms: 600_000 } } },
+      { text: "the poet answered" },
+    ],
+    { approvals: "auto", instructions: "Answer in French." },
+  )
+  await submit(session.client, session.conversation, "ask Claude for it")
+  await session.view.until(settled(1), 20_000)
+  const [started, waited] = results(session.view.seen())
+  expect(JSON.parse(started!.text)).toEqual({ task_name: "/root/poet" })
+  expect(JSON.parse(waited!.text)).toEqual({
+    timed_out: false,
+    received: [{ from: "/root/poet", kind: "final_answer", text: "fixture text ok" }],
+  })
+  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: the poet answered", "run_end: answered"])
+  // The provider and model the call named reach the worker unchanged.
+  const listed = (await session.client.call("conversation/list")).result as Array<{
+    id: string
+    model: unknown
+    lineage?: { task?: string }
+  }>
+  expect(listed.find((each) => each.lineage?.task === "/root/poet")?.model).toEqual({
+    provider: "claude",
+    model: "claude-opus-5-5",
+    effort: "high",
+  })
+  expect(claude.spawns()[0]!["--model"]).toBe("claude-opus-5-5")
+  // Claude Code is told the brief and its task, none of the parent's instructions or history.
+  expect(
+    claude.log().find((entry) => entry.initialize && entry.probe === undefined)?.initialize.appendSystemPrompt,
+  ).toBe("Your task name is /root/poet. You are a worker; your final answer goes to /root.")
+  expect(claude.userTexts()).toEqual([[expect.stringMatching(/Payload:\nReply with exactly: fixture text ok$/)]])
+})
+
+test("worker-interrupt, worker-approve: a Claude Code worker asks its own approval, and stopping its idle parent ends the worker's run and clears the approval", async () => {
+  using claude = new FakeClaude("models", "bash_allowed")
+  await using session = await scriptedWith(
+    claude,
+    [
+      { tool: { name: "start_worker", input: { task_name: "maker", message: "make it", provider: "claude" } } },
+      { text: "started it" },
+    ],
+    { approvals: "ask" },
+    // The recording has no interrupt, so the worker's process is closed once the stop times out.
+    { claudeStop: "100 millis" },
+  )
+  await submit(session.client, session.conversation, "start a maker")
+  await session.view.until(settled(1), 20_000)
+  const maker = await session.worker("/root/maker")
+  // The call waits on a person in the worker's own conversation, not its parent's.
+  await maker.until((watch) => Object.keys(approvalsOf(watch)?.requests ?? {}).length > 0)
+  expect(approvalsOf(session.view)?.requests ?? {}).toEqual({})
+
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  await maker.until((watch) => runEnds(watch.seen()).length > 0)
+  expect(runEnds(maker.seen())).toEqual([expect.objectContaining({ outcome: "interrupted" })])
+  expect(approvalsOf(maker)?.requests ?? {}).toEqual({})
 })
