@@ -84,7 +84,10 @@ export interface ClaudeProcesses {
     selection: Selection,
     openings: Openings<E>,
     /** Starts a process at `start`, which calls `wake` when Claude Code begins a turn by itself. */
-    open: (start: Start, wake: () => void) => Effect.Effect<ClaudeProcess, never, Scope.Scope>,
+    open: (
+      start: Start,
+      wake: (reports: ReadonlyArray<JobReport>) => void,
+    ) => Effect.Effect<ClaudeProcess, never, Scope.Scope>,
   ) => Effect.Effect<Lease, E, Scope.Scope>
   /** How long a stopped run waits for its process to end the turn. */
   readonly stopWithin: Duration.Input
@@ -112,13 +115,16 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
     const live = new Map<ConversationId, Live>()
     let closed = false
     /** The wakes the processes asked for, handed to `options.wake` in order. */
-    const wakes = yield* Queue.unbounded<{ readonly conversation: ConversationId; readonly process: ClaudeProcess }>()
+    const wakes = yield* Queue.unbounded<{
+      readonly conversation: ConversationId
+      readonly reports: ReadonlyArray<JobReport>
+    }>()
     if (options.wake !== undefined) {
       const handOver = options.wake
       yield* Effect.forkScoped(
         Effect.forever(
-          Effect.flatMap(Queue.take(wakes), ({ conversation, process }) =>
-            Effect.ignore(handOver(conversation, process.takeReports())),
+          Effect.flatMap(Queue.take(wakes), ({ conversation, reports }) =>
+            Effect.ignore(handOver(conversation, reports)),
           ),
         ),
       )
@@ -215,15 +221,13 @@ export const makeClaudeProcesses = (options: ClaudeProcessesOptions = {}) =>
             const { start, texts } = yield* openings.cold()
             const processScope = yield* Scope.make()
             if (options.hold !== undefined) yield* Scope.provide(options.hold, processScope)
-            let opened: ClaudeProcess | undefined
             // Claude Code began a turn by itself: the reports go to the conversation, whose run takes the turn (D3).
-            const wake = () => {
-              if (opened !== undefined) Queue.offerUnsafe(wakes, { conversation, process: opened })
+            const wake = (reports: ReadonlyArray<JobReport>) => {
+              Queue.offerUnsafe(wakes, { conversation, reports })
             }
             const process = yield* Scope.provide(open(start, wake), processScope).pipe(
               Effect.provideService(Clock.Clock, clock),
             )
-            opened = process
             if (options.record !== undefined) {
               const record = options.record
               yield* Scope.addFinalizer(

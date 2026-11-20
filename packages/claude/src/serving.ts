@@ -271,6 +271,12 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
           return resetQueued ? ({ _tag: "reset" } as const) : undefined
         }
         case "system": {
+          // A turn begins after a result, as Claude Code's follow-up for a job's end or a steer: its own result ends the
+          // run, and until then a process that exits ended the run, not the result before it.
+          if (message.subtype === "init") {
+            ended = undefined
+            return undefined
+          }
           if (message.subtype === "task_started" && message.tool_use_id) {
             const frame = {
               task_id: message.task_id,

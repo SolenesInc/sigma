@@ -225,7 +225,11 @@ export const processKey = (config: ProcessConfig) => {
  * Starts a Claude Code process at `start`; it is closed with the scope. `wake` is called when Claude Code begins a turn
  * by itself while the process serves no run (D3).
  */
-export const openProcess = (config: ProcessConfig, start: Start, wake: () => void = () => undefined) =>
+export const openProcess = (
+  config: ProcessConfig,
+  start: Start,
+  wake: (reports: ReadonlyArray<JobReport>) => void = () => undefined,
+) =>
   Effect.gen(function* () {
     const { agent, settings } = config
     const { modelId, effort } = selectionOf(agent)
@@ -645,8 +649,10 @@ export const openProcess = (config: ProcessConfig, start: Start, wake: () => voi
               taker === undefined &&
               awaitingReplay.size === 0
             ) {
+              // The reports held so far are the ones this turn is for: taken here, under the reader's lock, so a run that
+              // attaches before the wake is handed over cannot take them, and none means no job's end came before it.
               waking = true
-              wake()
+              wake(takeReports())
             }
             if (job === undefined) return take(message)
             job.inbox.push({ frame: message })

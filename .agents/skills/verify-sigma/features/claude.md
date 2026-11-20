@@ -474,7 +474,11 @@ Package, `packages/claude/test/claude.test.ts`:
   outlives both, and only a wake or `interrupt-idle` reaches it after.
 - After a cut-off, Claude Code's resume says the command
   `didn't finish before the previous session end`, but the command it
-  started may still be running; Claude Code no longer tracks it.
+  started may still be running, orphaned: Claude Code no longer tracks it,
+  and sigma does not end it (seed `s-53bxhk`).
+- A report held by a live process that no run took is committed when the
+  process closes, but not on a server stop, where the harness closes first:
+  that report is lost (seed `s-5rkpts`).
 
 ## With a real account
 
