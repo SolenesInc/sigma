@@ -19,6 +19,15 @@ export interface Link {
    * nothing until it kills the connector.
    */
   deafen(): void
+  /** Settles once the server has sent `count` frames, default 1, whose line contains `text`. */
+  wrote(text: string, count?: number): Promise<void>
+  /**
+   * Holds every frame the agent sends from now on, until `release`, as a slow link would; settles once a held frame's
+   * line contains `text`.
+   */
+  hold(text: string): Promise<void>
+  /** Delivers the held frames in order, and lets later ones through. */
+  release(): void
   /** Settles once the latest channel's connector, the agent here, has exited. */
   exited(): Promise<void>
 }
@@ -43,6 +52,11 @@ export function link(options: {
   let muted = false
   let deaf = false
   const waiting: { count: number; done: () => void }[] = []
+  const written: string[] = []
+  const writes: { text: string; count: number; done: () => void }[] = []
+  const times = (text: string) => written.filter((line) => line.includes(text)).length
+  let holding: { text: string; done: () => void } | undefined
+  const held: (() => void)[] = []
   let exited = Promise.resolve()
   const pool = new TargetPool({
     owner: options.owner ?? "test-owner",
@@ -63,10 +77,18 @@ export function link(options: {
           killed = true
           channel.kill()
         },
-        onLine: (listener) => channel.onLine((line) => deaf || listener(line)),
+        onLine: (listener) =>
+          channel.onLine((line) => {
+            if (deaf) return
+            if (holding === undefined) return listener(line)
+            held.push(() => listener(line))
+            if (line.includes(holding.text)) holding.done()
+          }),
         onClose: (listener) => channel.onClose((reason) => (deaf && !killed) || listener(reason)),
         send: (line) => {
           if (muted) return
+          written.push(line)
+          for (const waiter of writes.filter((waiter) => times(waiter.text) >= waiter.count)) waiter.done()
           if (line.includes('"t":"call"')) {
             calls++
             for (const waiter of waiting.filter((waiter) => waiter.count <= calls)) waiter.done()
@@ -82,6 +104,13 @@ export function link(options: {
     sent: (count) => (count <= calls ? Promise.resolve() : new Promise((done) => void waiting.push({ count, done }))),
     mute: () => (muted = true),
     deafen: () => (muted = deaf = true),
+    wrote: (text, count = 1) =>
+      times(text) >= count ? Promise.resolve() : new Promise((done) => void writes.push({ text, count, done })),
+    hold: (text) => new Promise((done) => void (holding = { text, done })),
+    release: () => {
+      holding = undefined
+      for (const deliver of held.splice(0)) deliver()
+    },
     exited: () => exited,
   }
 }

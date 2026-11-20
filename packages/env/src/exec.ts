@@ -177,6 +177,7 @@ class ProcessRun {
   #timedOut = false
   #interrupted = false
   #callbackError: ExecutionError | undefined
+  #unrecorded: ExecutionError | undefined
   #spillError: ExecutionError | undefined
   #spillPath: string | undefined
   #spillStream: WriteStream | undefined
@@ -233,7 +234,16 @@ class ProcessRun {
       return
     }
     this.#child = child
-    if (child.pid) this.#request.started(child.pid)
+    if (child.pid) {
+      try {
+        this.#request.started(child.pid)
+      } catch (error) {
+        // A command its registry cannot hold would outlive a crash unseen (D15), so it is killed before it does anything.
+        const cause = toError(error)
+        this.#unrecorded = new ExecutionError("spawn_error", `could not record the command: ${cause.message}`, cause)
+        this.#kill()
+      }
+    }
     if (stdinCommand !== undefined) {
       child.stdin?.on("error", () => {})
       child.stdin?.end(stdinCommand)
@@ -260,6 +270,7 @@ class ProcessRun {
     await this.#finishSpill()
     this.#emit("stdout", this.#decoders.stdout.decode())
     this.#emit("stderr", this.#decoders.stderr.decode())
+    if (this.#unrecorded) return this.#settle(this.#unrecorded)
     if (this.#callbackError) return this.#settle(this.#callbackError)
     if (this.#timedOut || this.#interrupted) {
       const error = this.#timedOut

@@ -1,7 +1,7 @@
 // The ways a command on a target stops when its server is gone (D7): the channel closes, the channel goes silent while
 // the command runs, or the next agent of the same owner sweeps it. Each is driven over a pipe to a real `sigma-env`.
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ExecutionEnv, FileChange } from "@sigma/env"
 import { spawnChannel, TargetPool } from "@sigma/env/remote"
@@ -174,6 +174,42 @@ test("env-remote-stop: another target of the same home on the same computer leav
     }),
   )
   expect(Object.values(pids).every(alive)).toBe(true)
+})
+
+test("env-remote: a watcher or reader whose open answers across its interrupt is released on the target, and the watcher reports nothing", async () => {
+  const slow = opened({ runtime: temporary("sigma-env-run-") })
+  const cwd = temporary("sigma-env-")
+  const env = slow.pool.env("here", cwd)
+  const changes: FileChange[] = []
+  /** Interrupts `open` after the agent answered it and before that answer arrives; returns once the interrupt completes. */
+  let cancels = 0
+  const crossed = (open: Effect.Effect<unknown, unknown>) =>
+    Effect.gen(function* () {
+      const answered = slow.hold('"$handle"')
+      const fiber = yield* Effect.forkDetach(open)
+      yield* Effect.promise(() => answered)
+      const interrupted = yield* Effect.forkDetach(Fiber.interrupt(fiber))
+      yield* Effect.promise(() => slow.wrote('"t":"cancel"', ++cancels))
+      slow.release()
+      yield* Fiber.join(interrupted)
+    })
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* slow.pool.connect("here")
+      yield* crossed(env.watch([{ path: cwd }], (change) => changes.push(change)))
+      yield* Effect.promise(() => slow.wrote('"method":"stop"'))
+      writeFileSync(join(cwd, "a.txt"), "a")
+      yield* crossed(env.openTextLineReader(join(cwd, "a.txt")))
+      yield* Effect.promise(() => slow.wrote('"method":"close"'))
+      // A watcher that is held sees the next change; the abandoned one, on the same folder, saw none of them.
+      const seen = yield* Deferred.make<void>()
+      const watcher = yield* env.watch([{ path: cwd }], () => Deferred.doneUnsafe(seen, Effect.void))
+      writeFileSync(join(cwd, "b.txt"), "b")
+      yield* Deferred.await(seen)
+      yield* watcher.stop()
+    }),
+  )
+  expect(changes).toEqual([])
 })
 
 test("env-remote: a connector that prints a banner before sigma-env fails the call with the banner, and the next call connects again", async () => {

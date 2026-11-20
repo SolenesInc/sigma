@@ -350,7 +350,8 @@ type Failure = FileError | ExecutionError
 
 /**
  * One call on `session`, interruptible: an interrupt sends `cancel` and completes once the agent answers, which for an
- * exec is once its processes are gone.
+ * exec is once its processes are gone. A reader or watcher opened by an answer that crossed the cancel is nobody's, so
+ * it is closed on the agent and its events dropped.
  */
 const request = <A, E extends Failure>(
   session: Session,
@@ -360,11 +361,11 @@ const request = <A, E extends Failure>(
   sent?: (id: number) => void,
 ): Effect.Effect<A, E> =>
   Effect.callback<A, E>((resume) => {
-    let finished: (() => void) | undefined
+    let finished: Settle | undefined
     const id = session.send(
       call,
       (frame) => {
-        if (finished !== undefined) return finished()
+        if (finished !== undefined) return finished(frame)
         if (frame.t === "ok") return resume(Effect.succeed(frame.value as A))
         if (frame.t === "lost")
           return resume(Effect.fail(lost(`target ${session.target} unavailable: ${frame.reason}`)))
@@ -375,7 +376,15 @@ const request = <A, E extends Failure>(
     if (typeof id === "string") return resume(Effect.fail(lost(`target ${session.target} unavailable: ${id}`)))
     sent?.(id)
     return Effect.callback<void>((done) => {
-      finished = () => done(Effect.void)
+      finished = (frame) => {
+        const handle = frame.t === "ok" ? (frame.value as Handle | undefined)?.$handle : undefined
+        if (handle !== undefined) {
+          session.unlisten(id)
+          const release = call.method === "watch" ? "stop" : "close"
+          session.send({ cwd: call.cwd, method: release, args: [], handle }, () => {})
+        }
+        done(Effect.void)
+      }
       session.cancel(id)
       if (session.reason !== undefined) done(Effect.void)
     })

@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ExecutionEnv } from "@sigma/env"
 import { LocalExecutionEnv } from "@sigma/env/local"
+import { ProcessRegistry } from "@sigma/env/registry"
 import type { TargetPool } from "@sigma/env/remote"
 import { Deferred, Effect, Fiber } from "effect"
 import { alive, link, runtimeDir } from "./support/agent.ts"
@@ -136,3 +137,16 @@ for (const [id, make] of Object.entries(kinds)) {
     expect(error).toMatchObject({ code: "callback_error", message: "onSpill failed" })
   })
 }
+
+test("crash-command-once: a command whose record cannot be written fails with spawn_error and is not left running", async () => {
+  const cwd = mkdtempSync(join("/tmp", "sigma-env-"))
+  dirs.push(cwd)
+  // A folder below a file cannot be made, as a full or read-only runtime folder cannot be written.
+  writeFileSync(join(cwd, "file"), "")
+  const env = new LocalExecutionEnv({ cwd, processes: new ProcessRegistry(join(cwd, "file", "processes")) })
+  const seconds = `61.${process.pid}`
+  const error = await Effect.runPromise(Effect.flip(env.exec(["sleep", seconds])))
+  expect([error.code, error.message.startsWith("could not record the command:")]).toEqual(["spawn_error", true])
+  const running = Bun.spawnSync(["ps", "-A", "-o", "args="]).stdout.toString()
+  expect(running.split("\n").filter((args) => args.trim() === `sleep ${seconds}`)).toEqual([])
+})

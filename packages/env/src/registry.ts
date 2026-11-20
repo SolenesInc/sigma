@@ -21,8 +21,11 @@ export class ProcessRegistry {
     writeFileSync(join(this.dir, String(group)), "")
   }
 
+  /** A record that cannot be removed is left for the next sweep, which leaves alone an id given to a later process. */
   remove(group: number): void {
-    rmSync(join(this.dir, String(group)), { force: true })
+    try {
+      rmSync(join(this.dir, String(group)), { force: true })
+    } catch {}
   }
 
   /** Records one process, which the sweep kills alone, before the groups. */
@@ -89,7 +92,9 @@ export class ProcessRegistry {
 
 /**
  * How long the sweep waits for what it killed to be gone. A SIGKILLed group was gone within 1.2 ms in 20 of 20 runs
- * on macOS; a process that outlives 5 s is stuck in the kernel, and the sweep goes on without it.
+ * on macOS. On Linux a sweep of an earlier agent and its command's group took at most 9.4 ms in 20 runs each on the
+ * host and in Podman containers under runc and crun with an init, most of it the 5 ms pause. A process that outlives
+ * 5 s is stuck in the kernel, or a zombie no init reaps (F16), and the sweep goes on without it.
  */
 const DEATH_MS = 5_000
 const PAUSE = new Int32Array(new SharedArrayBuffer(4))
