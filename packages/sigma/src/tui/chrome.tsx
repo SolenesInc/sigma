@@ -298,37 +298,62 @@ const escHint = (screen: Screen) =>
         ? ` esc  stop ${screen.background} background job${screen.background === 1 ? "" : "s"} `
         : ""
 
-/**
- * Every call waiting on a person, in rows of its own above the prompt, so none is lost up the transcript (D8, D9 of
- * s-cjk9k6). Only the first row shows the keys, which answer it.
- */
-const AsksPanel = (props: { asks: ReadonlyArray<Ask> }) => (
-  <box
-    border
-    borderStyle="rounded"
-    borderColor={color.yellow}
-    title={` WAITING ON YOU · ${props.asks.length} `}
-    titleColor={color.yellow}
-    flexDirection="column"
-    paddingLeft={1}
-    flexShrink={0}
-  >
-    <For each={props.asks}>
-      {(ask, at) => (
-        <box flexDirection="row" gap={1}>
-          <text fg={ask.by === undefined ? color.cyan : color.violet} flexShrink={0}>
-            {ask.by === undefined ? "SIGMA" : `⧉ ${ask.by}`}
-          </text>
-          <text fg={color.yellow} flexShrink={1}>{`allow ${ask.call}?`}</text>
-          <Show when={at() === 0} fallback={<text fg={color.dim}>· next</text>}>
-            <KeyCap cap="^Y" what="allow" />
-            <KeyCap cap="^N" what="deny" />
-          </Show>
-        </box>
-      )}
-    </For>
+/** One line per ask, so a long command leaves room for the answer keys. */
+const AskRow = (props: { ask: Ask; active?: boolean }) => (
+  <box flexDirection="row" height={1} flexShrink={0} gap={1}>
+    <text
+      fg={props.ask.by === undefined ? color.cyan : color.violet}
+      flexShrink={0}
+      maxWidth="25%"
+      wrapMode="none"
+      truncate
+    >
+      {props.ask.by === undefined ? "SIGMA" : `⧉ ${props.ask.by}`}
+    </text>
+    <text fg={color.yellow} wrapMode="none" truncate>{`allow ${props.ask.call}?`}</text>
+    <Show
+      when={props.active}
+      fallback={
+        <text fg={color.dim} flexShrink={0}>
+          · next
+        </text>
+      }
+    >
+      <box flexDirection="row" flexShrink={0} gap={1}>
+        <KeyCap cap="^Y" what="allow" />
+        <KeyCap cap="^N" what="deny" />
+      </box>
+    </Show>
   </box>
 )
+
+/** Keep the first ask above the scrolling list, with most of the terminal left for the conversation. */
+const AsksPanel = (props: { asks: ReadonlyArray<Ask>; rows: number }) => {
+  // Two border rows and the active approval are fixed. At 19 terminal rows, three more fit
+  // within a third of the screen, leaving 13 rows for the conversation and its controls.
+  const fixedRows = 3
+  const laterRows = () => Math.min(props.asks.length - 1, Math.max(1, Math.floor(props.rows / 3) - fixedRows))
+  return (
+    <box
+      border
+      borderStyle="rounded"
+      borderColor={color.yellow}
+      title={` WAITING ON YOU · ${props.asks.length} `}
+      titleColor={color.yellow}
+      flexDirection="column"
+      paddingLeft={1}
+      height={fixedRows + laterRows()}
+      flexShrink={0}
+    >
+      <Show when={props.asks[0]}>{(ask) => <AskRow ask={ask()} active />}</Show>
+      <Show when={laterRows() > 0}>
+        <scrollbox height={laterRows()} flexShrink={0} scrollX={false}>
+          <For each={props.asks.slice(1)}>{(ask) => <AskRow ask={ask} />}</For>
+        </scrollbox>
+      </Show>
+    </box>
+  )
+}
 
 const Prompt = (props: {
   screen: Screen
@@ -491,7 +516,7 @@ export const Shell = (props: {
           )}
         </Show>
         <Show when={props.screen.asks.length > 0}>
-          <AsksPanel asks={props.screen.asks} />
+          <AsksPanel asks={props.screen.asks} rows={dimensions().height} />
         </Show>
         <Prompt
           screen={props.screen}

@@ -652,6 +652,70 @@ test("approval-panel: with the conversation and two subagents asking, the panel 
   await quit(session)
 }, 40_000)
 
+test("approval-panel: a split terminal keeps the active approval visible while later approvals scroll", async () => {
+  const workers = ["docs", "deps", "tests", "types"]
+  const command = (name: string) =>
+    `git diff -- packages/sigma/src/${name}/component.tsx packages/sigma/src/${name}/other-component.tsx packages/sigma/src/${name}/third-component.tsx`
+  const session = await open([
+    {
+      tools: workers.map((task_name) => ({
+        name: "start_worker",
+        input: { task_name, message: `Review ${task_name}`, fork_turns: "none" },
+      })),
+    },
+    ...workers.map((name) => call("bash", { command: command(name) }, `/root/${name}`)),
+    call("bash", { command: command("parent") }),
+  ])
+  const title = "WAITING ON YOU · 5"
+  const panelIn = (screen: string) => {
+    const rows = rowsFrom(screen, title)
+    return rows.slice(
+      1,
+      rows.findIndex((row) => row.startsWith("╰")),
+    )
+  }
+  const atWidth = (columns: number) => (screen: string) =>
+    screen.split("\n").some((line) => line.includes(title) && line.endsWith("╮") && line.length === columns)
+  try {
+    await session.waitFor((screen) => screen.includes("READY"))
+    session.type("delegate\r")
+    const full = await session.waitFor(atWidth(100))
+    const original = panelIn(full).flatMap((row) => /⧉ (docs|deps|tests|types)/.exec(row)?.[1] ?? [])
+    expect(original, full).toHaveLength(workers.length)
+
+    // At this size the old panel covered the transcript, prompt and status.
+    session.resize(65, 19)
+    const split = await session.waitFor(atWidth(65))
+    expect(split).toContain("answer below")
+    expect(split).toContain("QUEUE · tab")
+    expect(split).toContain("type a message")
+    expect(split).toContain("◆ WAITING · 5 asks")
+    const splitPanel = panelIn(split)
+    expect(rowsFrom(split, title)[splitPanel.length + 1]).toMatch(/^╰─+╯$/)
+    const active = splitPanel[0]!
+    expect(active).toMatch(/SIGMA .*\^Y.*\^N/)
+    expect(splitPanel.join("\n")).not.toContain(`⧉ ${original.at(-1)}`)
+
+    const panelTop = split.split("\n").findIndex((line) => line.includes(title))
+    // Send wheel events inside the scrolling list, below the active approval.
+    session.type(`\x1b[<65;20;${panelTop + 3}M`.repeat(workers.length))
+    const scrolled = await session.waitFor((screen) =>
+      panelIn(screen).some((row) => row.includes(`⧉ ${original.at(-1)}`)),
+    )
+    expect(panelIn(scrolled)[0]).toBe(active)
+    expect(scrolled).toContain("QUEUE · tab")
+
+    session.resize(100, 30)
+    const enlarged = await session.waitFor(atWidth(100))
+    expect(panelIn(enlarged).flatMap((row) => /⧉ (docs|deps|tests|types)/.exec(row)?.[1] ?? [])).toEqual(original)
+    session.type("\x0e")
+    const next = await session.waitFor((screen) => screen.includes("WAITING ON YOU · 4"))
+    expect(rowsFrom(next, "WAITING ON YOU · 4")[1]).toMatch(new RegExp(`⧉ ${original[0]} .*\\^Y.*\\^N`))
+  } finally {
+    await quit(session)
+  }
+}, 40_000)
+
 test("skills-tui: a message that names a skill shows which skills came with it, also after a reopen", async () => {
   await using fake = new FakeOpenAi()
   fake.play("text_answer")

@@ -51,7 +51,10 @@ export const screenSession = (args: Array<string>, env: Record<string, string | 
   })
   const screen = () => {
     const buffer = terminal.buffer.active
-    return Array.from({ length: ROWS }, (_, row) => buffer.getLine(row)?.translateToString(true) ?? "").join("\n")
+    return Array.from(
+      { length: terminal.rows },
+      (_, row) => buffer.getLine(row)?.translateToString(true, 0, terminal.cols) ?? "",
+    ).join("\n")
   }
   // A tripwire for a TUI that stopped drawing: at load ~50 on 10 cores the slowest of 317 waits took 5.2 s. The suite's
   // 30 s test timeout stays the larger, so a hang shows its screen.
@@ -79,6 +82,10 @@ export const screenSession = (args: Array<string>, env: Record<string, string | 
     waitFor,
     output: () => output,
     type: (text: string) => process.terminal!.write(text),
+    resize: (cols: number, rows: number) => {
+      terminal.resize(cols, rows)
+      process.terminal!.resize(cols, rows)
+    },
     exited: process.exited,
     kill: () => process.kill(),
     hangUp: () => process.kill("SIGHUP"),

@@ -16,8 +16,10 @@ conversation was started with `--auto`, which runs every call without asking.
   `WAITING ON YOU · <n>` panel above the prompt, in rows of its own: the
   conversation's own asks first (`SIGMA allow <call>?`), then its subagents'
   (`⧉ <subagent> allow <call>?`), oldest first. `^Y` and `^N` answer the
-  first row, the only one that shows them; the rest read `· next`, and each
-  call and card in the transcript reads `· answer below`. The status bar
+  first row, the only one that shows them. The first row stays above the
+  scrolling list. The other rows read `· next`; scroll over them to see the
+  rest when the panel runs out of room. Each call and card in the
+  transcript reads `· answer below`. The status bar
   reads `◆ WAITING · <n> asks` when more than one waits, also while the
   conversation itself is idle.
 - `approval-allow-tui` allows with `^Y`: `✓ allowed by ada`, then the call's
@@ -152,6 +154,13 @@ Preconditions:
   the call and both cards read `· answer below`; the status bar reads
   `◆ WAITING · 3 asks`. Each `C-y` answers the first row, and the next moves
   up: `WAITING ON YOU · 2`, then `· 1`, then the panel is gone.
+- **Resize with several asks** (`approval-panel`). Use four workers and a
+  parent that each call `bash` with a long `git diff --` command. At five
+  asks, shrink the pane to 65×19. The first approval and its keys, the
+  transcript, the prompt, and the status bar are still visible. Scroll
+  down over the later rows to see the last worker without moving the first
+  approval. Enlarge the pane to 100×30 to see all five. `C-n` still denies
+  the parent's call and puts the oldest worker's request first.
 - **Interrupt while asking.** In a fresh run, ask as above, then
   `drive.ts r tui key Escape`, `drive.ts r tui wait interrupted`.
   `allow this call?` is gone, `◆ interrupted` shows, and the command never
