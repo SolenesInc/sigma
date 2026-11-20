@@ -96,7 +96,8 @@ const processFixture = (journey: string, recording: string, tape: ModelServer["t
     const segment = segments.get(pid)!
     // A state report that repeats the state Claude Code last reported says nothing, and whether Claude Code sends one
     // races its own background work: a background subagent's command that ends while the session is idle wakes the
-    // subagent before or after a second `idle`.
+    // subagent before or after a second `idle`. Sigma meets both alike: the provider test passed on a fixture kept with
+    // the second one.
     if (line.type === "emit_inbound" && line.frame.subtype === "session_state_changed") {
       if (states.get(pid) === line.frame.state) continue
       states.set(pid, line.frame.state)

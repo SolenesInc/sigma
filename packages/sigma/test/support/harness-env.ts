@@ -18,6 +18,11 @@ export const claudePlayEnv = (url: string) => {
       CLAUDE_CODE_OAUTH_TOKEN: "",
       CLAUDE_CONFIG_DIR: config,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      // Each of these sends Claude Code past the base URL, to a cloud the server's environment may hold credentials for.
+      CLAUDE_CODE_USE_BEDROCK: "",
+      CLAUDE_CODE_USE_VERTEX: "",
+      CLAUDE_CODE_USE_FOUNDRY: "",
+      ANTHROPIC_CUSTOM_HEADERS: "",
     } as Readonly<Record<string, string>>,
     [Symbol.dispose]: () => rmSync(config, { recursive: true, force: true }),
   }

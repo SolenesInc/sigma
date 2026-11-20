@@ -23,8 +23,6 @@ export interface Journey {
 export interface Session {
   readonly cwd: string
   readonly view: ViewWatch
-  readonly client: RawClient
-  readonly conversation: string
   readonly submit: (text: string) => Promise<unknown>
   /** Until every run submitted so far has ended. */
   readonly settle: () => Promise<void>
@@ -104,8 +102,6 @@ export const openSession = async (journey: Journey, claude: ClaudeProcessSetting
   const session: Session & AsyncDisposable = {
     cwd: home.dir,
     view,
-    client,
-    conversation,
     submit: (text) => {
       submitted = runEnds(view.seen()).length + 1
       return submit(client, conversation, text, crypto.randomUUID(), person("ada"))

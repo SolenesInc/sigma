@@ -118,13 +118,19 @@ export class ModelServer {
   }
 
   async #answer(request: Request): Promise<Response> {
-    if (!this.#dialect.route(request)) return new Response("not on the tape", { status: 404 })
-    const read = this.#dialect.read(await request.json())
     const refuse = (why: string) => {
       const message = `tape ${this.tape.header.scenario}, ${why}`
       this.refused.push(message)
       return this.#dialect.refuse(message)
     }
+    // Claude Code's `HEAD /api/hello` is answered 404 and goes on; a request with a body is one the tape must hold.
+    if (!this.#dialect.route(request))
+      return request.method === "POST"
+        ? refuse(`no route ${new URL(request.url).pathname}`)
+        : new Response("not on the tape", { status: 404 })
+    const body = await request.json().catch(() => undefined)
+    if (body === undefined) return refuse("a request whose body is not JSON")
+    const read = this.#dialect.read(body)
     const lanes = this.tape.lanes.filter((lane) => read.opening.includes(lane.when))
     if (lanes.length !== 1)
       return refuse(

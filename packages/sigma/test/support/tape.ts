@@ -75,9 +75,10 @@ export const readTape = (path: string): Tape => {
   lines.slice(1).forEach((line, index) => {
     const at = index + 2
     if (line.type === "lane") lanes.push({ name: line.name, when: line.when })
-    else if (line.type === "bind")
+    else if (line.type === "bind") {
+      if (line.from !== "tool_result") throw new Error(`${path}:${at}: a binding comes from a tool_result`)
       binds.push({ name: line.name, from: line.from, pattern: new RegExp(line.pattern, "g") })
-    else if (line.type === "expect_outbound") exchange(line, at).newest = line.frame.newest
+    } else if (line.type === "expect_outbound") exchange(line, at).newest = line.frame.newest
     else if (line.type === "emit_inbound") {
       const into = exchange(line, at)
       if (line.gate !== undefined) into.gate = line.gate
@@ -95,7 +96,10 @@ export const readTape = (path: string): Tape => {
   }
 }
 
-/** The values bound so far, by name, in the order they were first seen. */
+/**
+ * The values bound so far, by name, numbered in the order the play first saw them. A name one lane alone binds is
+ * numbered alike on every run; two lanes binding one name would number it in the order their requests came.
+ */
 export class Bindings {
   readonly #values = new Map<string, Array<string>>()
 
