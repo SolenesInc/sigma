@@ -21,8 +21,20 @@ export const sigmaEnv = (home: ReturnType<typeof tempHome>, extra: Record<string
   ...extra,
 })
 
-export const sigma = (args: Array<string>, env: Record<string, string | undefined>, cwd = env.SIGMA_HOME!) =>
-  Bun.spawn(["bun", MAIN, ...args], { env, cwd, stdout: "pipe", stderr: "pipe" })
+/** Runs `sigma` with `args`; `stdin`, when given, is what it reads. */
+export const sigma = (
+  args: Array<string>,
+  env: Record<string, string | undefined>,
+  cwd = env.SIGMA_HOME!,
+  stdin?: string,
+) =>
+  Bun.spawn(["bun", MAIN, ...args], {
+    env,
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    ...(stdin === undefined ? {} : { stdin: new Blob([stdin]) }),
+  })
 
 export const stopServer = async (home: ReturnType<typeof tempHome>) => {
   const client = await RawClient.connect(home.socket).catch(() => undefined)

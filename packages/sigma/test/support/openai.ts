@@ -10,7 +10,13 @@ const ANY = "<any>"
 
 type Reply =
   | { readonly http: { status: number; body: unknown } }
-  | { readonly events: Array<unknown>; readonly hold?: boolean; readonly crlfSplit?: boolean }
+  | {
+      readonly events: Array<unknown>
+      readonly hold?: boolean
+      readonly crlfSplit?: boolean
+      /** Sends the events only once this settles, as a model still thinking. */
+      readonly gate?: Promise<void>
+    }
 
 export interface Received {
   readonly path: string
@@ -92,9 +98,9 @@ export class FakeOpenAi {
 
   /**
    * Serves a recorded exchange and answers what each request should be. `tools` renames the tools it names, for a
-   * server whose tools have other names than the recording's.
+   * server whose tools have other names than the recording's. Its replies wait for `gate` when there is one.
    */
-  play(fixture: string, tools: Readonly<Record<string, string>> = {}) {
+  play(fixture: string, tools: Readonly<Record<string, string>> = {}, gate?: Promise<void>) {
     const expected: Array<unknown> = []
     const replies: Array<Array<any>> = []
     const held = new Set<number>()
@@ -108,7 +114,11 @@ export class FakeOpenAi {
       else if (parsed.type === "hold_open") held.add(replies.length - 1)
     }
     replies.forEach((frames, index) =>
-      this.replies.push(frames[0]?.http ? { http: frames[0].http } : { events: frames, hold: held.has(index) }),
+      this.replies.push(
+        frames[0]?.http
+          ? { http: frames[0].http }
+          : { events: frames, hold: held.has(index), ...(gate === undefined ? {} : { gate }) },
+      ),
     )
     return expected
   }
@@ -187,7 +197,8 @@ export class FakeOpenAi {
       return new Response(split, { headers: { "content-type": "text/event-stream" } })
     }
     const stream = new ReadableStream<Uint8Array>({
-      start: (controller) => {
+      start: async (controller) => {
+        await reply.gate
         for (const event of reply.events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
         if (reply.hold) {
           this.held.add(controller)

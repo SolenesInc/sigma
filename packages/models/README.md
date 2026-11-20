@@ -36,6 +36,12 @@ or the script. A home's config names instances of a kind, such as `openai` and
 - `provider`, the `Provider` this seam routes the instance's requests to,
   named by the instance's id. Claude Code runs its own loop and has none.
 
+An instance that can answer an ephemeral run has `once`: one prompt, with the
+caller's system prompt in place of its own, no tools, an optional JSON Schema
+and turn limit, answered with its text, the schema's value, turns and usage.
+ChatGPT sends one request (`onceBody`), the script plays its root's next step,
+and Claude Code's is `claudeOnce` in `packages/claude`.
+
 `scriptInstance(steps)` is the `script` provider as an instance,
 `chatGptInstance` ChatGPT's. Claude Code's account is `claudeAccount` in
 `packages/claude`.

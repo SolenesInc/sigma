@@ -75,15 +75,15 @@ export class FakeClaude {
       .map((entry) => entry.found)
   }
 
-  /** Whether a process holds, waiting for `release`. */
-  holding() {
-    return this.log().some((entry) => entry.held !== undefined)
+  /** Whether a process holds, or spawn `spawn` does, waiting for `release`. */
+  holding(spawn?: number) {
+    return this.log().some((entry) => entry.held !== undefined && (spawn === undefined || entry.spawn === spawn))
   }
 
-  /** Lets the held process go on. */
-  release() {
+  /** Lets the first held process go on, or spawn `spawn`. */
+  release(spawn?: number) {
     const log = this.log()
-    const held = log.find((entry) => entry.held !== undefined)
+    const held = log.find((entry) => entry.held !== undefined && (spawn === undefined || entry.spawn === spawn))
     const started = log.find((entry) => entry.argv && entry.probe === undefined && entry.spawn === held?.spawn)
     process.kill(started.pid, "SIGUSR1")
   }

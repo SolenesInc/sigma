@@ -1086,3 +1086,102 @@ test("openai-expired: a sign-in whose refresh is turned down fails the run and l
     message: expired,
   })
 })
+
+// The model the ephemeral recordings were made on: the account's first listed when they were.
+const EPHEMERAL_MODEL = "gpt-6.1-terra"
+const YES_OR_NO = {
+  type: "object",
+  properties: { answer: { type: "string", enum: ["yes", "no"] } },
+  required: ["answer"],
+  additionalProperties: false,
+}
+const ephemeralServer = async (fake: FakeOpenAi) => {
+  const server = await runningServer([], { openai: fake.options() })
+  await signIn(server.home)
+  const client = await RawClient.connect(server.home.socket)
+  return {
+    client,
+    run: (payload: Record<string, unknown>) =>
+      client.call("ephemeral/run", { provider: "openai", model: EPHEMERAL_MODEL, effort: "low", ...payload }),
+    [Symbol.asyncDispose]: async () => {
+      client.close()
+      await server[Symbol.asyncDispose]()
+    },
+  }
+}
+
+test("ephemeral-answer: an ephemeral run on ChatGPT answers with its system prompt alone and no tools, and the home keeps no conversation and no usage", async () => {
+  await using fake = new FakeOpenAi()
+  const expected = fake.play("ephemeral_text")
+  await using server = await ephemeralServer(fake)
+  const reply = await server.run({ system: "You answer in one word.", prompt: "Is the sky blue on a clear day?" })
+  expect(reply.result).toMatchObject({ text: "Yes.", provider: "openai", model: EPHEMERAL_MODEL, turns: 1 })
+  expect(reply.result.usage).toMatchObject({ input: 25, output: 6 })
+  // Sigma's own instructions and tools stay out: the request carries only what the caller gave.
+  expectRequests(fake, expected)
+  expect((await server.client.call("conversation/list")).result).toEqual([])
+  expect((await server.client.call("usage/get", {})).result).toEqual({ models: {}, tools: {} })
+})
+
+test("ephemeral-schema: an ephemeral run on ChatGPT asks for strict structured output and answers the value its schema matches", async () => {
+  await using fake = new FakeOpenAi()
+  const expected = fake.play("ephemeral_schema")
+  await using server = await ephemeralServer(fake)
+  const reply = await server.run({
+    system: "You classify questions.",
+    prompt: "Is the sky blue on a clear day?",
+    schema: YES_OR_NO,
+  })
+  expectRequests(fake, expected)
+  expect(JSON.parse(fake.responses()[0]!.body).text.format).toEqual({
+    type: "json_schema",
+    name: "answer",
+    schema: YES_OR_NO,
+    strict: true,
+  })
+  expect(reply.result).toMatchObject({ text: '{"answer":"yes"}', output: { answer: "yes" }, turns: 1 })
+})
+
+test("ephemeral-schema: an ephemeral run whose answer does not match its schema fails saying where", async () => {
+  await using fake = new FakeOpenAi()
+  fake.play("ephemeral_schema")
+  await using server = await ephemeralServer(fake)
+  const onlyNo = { ...YES_OR_NO, properties: { answer: { type: "string", enum: ["no"] } } }
+  const reply = await server.run({ prompt: "Is the sky blue on a clear day?", schema: onlyNo })
+  expect(errorTag(reply)).toBe("EphemeralFailed")
+  expect(reply.error!.message).toStartWith("the answer does not match the schema (/answer: ")
+  expect(reply.error!.message).toEndWith(': {"answer":"yes"}')
+})
+
+test("ephemeral-concurrent: ephemeral runs on ChatGPT at once each answer their own prompt, while a conversation's run works beside them", async () => {
+  await using fake = new FakeOpenAi()
+  const conversationGate = Promise.withResolvers<void>()
+  const firstGate = Promise.withResolvers<void>()
+  fake.play("text_answer", {}, conversationGate.promise)
+  await using session = await conversationWith(fake)
+  await session.submit("hello")
+  await deadline(fake.requested(1), DEADLINE, "the conversation's request")
+
+  fake.play("ephemeral_text", {}, firstGate.promise)
+  fake.play("ephemeral_schema")
+  const ephemeral = (payload: Record<string, unknown>) =>
+    session.client.call("ephemeral/run", {
+      provider: "openai",
+      model: EPHEMERAL_MODEL,
+      prompt: "Is the sky blue on a clear day?",
+      ...payload,
+    })
+  const first = ephemeral({ system: "You answer in one word." })
+  await deadline(fake.requested(2), DEADLINE, "the first ephemeral run's request")
+  // The second answers while the first and the conversation still wait on their models.
+  const second = await ephemeral({ system: "You classify questions.", schema: YES_OR_NO })
+  expect(second.result).toMatchObject({ output: { answer: "yes" } })
+  firstGate.resolve()
+  expect((await first).result).toMatchObject({ text: "Yes." })
+
+  conversationGate.resolve()
+  await session.view.until(settled(1))
+  expect(session.said()).toEqual(["user: hello", "assistant: Hello there", "run_end: answered"])
+  const listed = (await session.client.call("conversation/list")).result as Array<{ id: string }>
+  expect(listed.map((info) => info.id)).toEqual([session.conversation])
+})

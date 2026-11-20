@@ -108,6 +108,8 @@ client                  a program connected to the server's socket that draws
                         committed state and sends input; the TUI is one
 approval                a tool call waiting for a person to allow or deny it;
                         the first answer counts
+ephemeral run           one prompt a provider answers with no tools, outside
+                        any conversation; nothing of it is committed
 ```
 
 ## Rules that keep it what it is
@@ -205,7 +207,8 @@ Provider tests replay recorded exchanges from `fixtures/`:
   ends.
 - The fake `claude` executable (`packages/sigma/test/support/fake-claude`)
   plays one recorded Claude Code process per spawn, and one recorded probe per
-  probe (a spawn with `--no-session-persistence`). It logs what sigma sent it,
+  probe (a spawn with `--no-session-persistence` and tools; an ephemeral run's
+  has none, and plays as a spawn). It logs what sigma sent it,
   and tests judge Claude by that log.
 - The fake `agy` (`packages/sigma/test/support/fake-agy`) plays one recorded
   `agy acp` process per spawn, and `fixtures/agy/models.ndjson` for each

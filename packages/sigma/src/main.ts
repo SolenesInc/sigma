@@ -260,6 +260,74 @@ const execCommand = Command.make(
   }),
 ).pipe(Command.withDescription("Send one prompt, print the answer, and exit"))
 
+/** Reads the prompt `-` names from stdin, as attn passes a long one. */
+const promptOf = (prompt: string) =>
+  prompt === "-" ? Effect.promise(() => new Response(Bun.stdin.stream()).text()) : Effect.succeed(prompt)
+
+const ephemeralCommand = Command.make(
+  "ephemeral",
+  {
+    prompt: Argument.String("prompt").pipe(Argument.withDescription("The prompt, or - to read it from stdin")),
+    system: Flag.String("system").pipe(
+      Flag.withDescription("The whole system prompt, in place of the provider's own"),
+      Flag.optional,
+    ),
+    schema: Flag.String("schema").pipe(
+      Flag.withDescription("A JSON Schema, as JSON, the answer must match; the answer is then that JSON"),
+      Flag.optional,
+    ),
+    maxTurns: Flag.Int("max-turns").pipe(
+      Flag.withDescription("The most turns the provider may take; a ChatGPT answer is always one"),
+      Flag.optional,
+    ),
+    provider: Flag.String("provider").pipe(
+      Flag.withDescription("Answer with this provider, such as openai or claude"),
+      Flag.optional,
+    ),
+    model: Flag.String("model").pipe(Flag.withDescription("Answer with this model"), Flag.optional),
+    effort: Flag.String("effort").pipe(Flag.withDescription("Answer with this reasoning effort"), Flag.optional),
+    json: Flag.Boolean("json").pipe(
+      Flag.withDescription("Print the answer as one JSON object: text, output, provider, model, turns and usage"),
+      Flag.withDefault(false),
+    ),
+  },
+  Effect.fn(function* ({ prompt, system, schema, maxTurns, provider, model, effort, json }) {
+    let parsed: unknown
+    if (Option.isSome(schema)) {
+      try {
+        parsed = JSON.parse(schema.value)
+      } catch {
+        return yield* refuse("--schema is not JSON")
+      }
+    }
+    if (Option.isSome(maxTurns) && maxTurns.value < 1) return yield* refuse("--max-turns takes 1 or more")
+    const text = yield* promptOf(prompt)
+    const given = <K extends string, V>(key: K, value: Option.Option<V>) =>
+      Option.match(value, { onNone: () => ({}), onSome: (v) => ({ [key]: v }) as { [P in K]: V } })
+    yield* withServer(defaultHome(), (client) =>
+      client["ephemeral/run"]({
+        prompt: text,
+        ...given("system", system),
+        ...(parsed === undefined ? {} : { schema: parsed }),
+        ...given("maxTurns", maxTurns),
+        ...given("provider", provider),
+        ...given("model", model),
+        ...given("effort", effort),
+      }).pipe(
+        Effect.flatMap((answer) =>
+          Effect.sync(() => process.stdout.write(`${json ? JSON.stringify(answer) : answer.text.trimEnd()}\n`)),
+        ),
+        Effect.catchTags({
+          UnknownProvider: (error) => refuse(error.message),
+          UnknownEffort: (error) => refuse(error.message),
+          EphemeralFailed: (error) => refuse(error.message),
+          ReadOnlyServer: (error) => refuse(error.message),
+        }),
+      ),
+    )
+  }),
+).pipe(Command.withDescription("Answer one prompt with no tools, and keep nothing: no conversation, no usage"))
+
 const providerArgument = Argument.String("provider").pipe(
   Argument.withDescription("The provider, such as claude, openai or agy, or one config.toml names"),
 )
@@ -357,7 +425,15 @@ const sigma = Command.make(
   }),
 ).pipe(
   Command.withDescription("A durable coding agent that many clients share"),
-  Command.withSubcommands([serveCommand, execCommand, loginCommand, logoutCommand, schemaCommand, mcpBridgeCommand]),
+  Command.withSubcommands([
+    serveCommand,
+    execCommand,
+    ephemeralCommand,
+    loginCommand,
+    logoutCommand,
+    schemaCommand,
+    mcpBridgeCommand,
+  ]),
 )
 
 sigma.pipe(

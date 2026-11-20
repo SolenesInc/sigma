@@ -2039,6 +2039,268 @@
       },
       "stream": false
     },
+    "ephemeral/run": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          },
+          "system": {
+            "type": "string",
+            "description": "The whole system prompt, in place of the provider's own."
+          },
+          "schema": {},
+          "provider": {
+            "type": "string",
+            "description": "Absent for the home's default provider."
+          },
+          "model": {
+            "type": "string",
+            "description": "Absent for the provider's default model."
+          },
+          "effort": {
+            "type": "string"
+          },
+          "maxTurns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "The most turns the provider may take; absent for its own limit. A ChatGPT answer is always one turn."
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "additionalProperties": true
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "output": {},
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "description": "The model that answered, as its provider names it."
+          },
+          "turns": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The turns the provider took, as it counts them."
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              "output": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              "cacheRead": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              "cacheWrite": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              "totalTokens": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              "cost": {
+                "type": "object",
+                "properties": {
+                  "input": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "Infinity",
+                          "-Infinity",
+                          "NaN"
+                        ]
+                      }
+                    ]
+                  },
+                  "output": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "Infinity",
+                          "-Infinity",
+                          "NaN"
+                        ]
+                      }
+                    ]
+                  },
+                  "cacheRead": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "Infinity",
+                          "-Infinity",
+                          "NaN"
+                        ]
+                      }
+                    ]
+                  },
+                  "cacheWrite": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "Infinity",
+                          "-Infinity",
+                          "NaN"
+                        ]
+                      }
+                    ]
+                  },
+                  "total": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "Infinity",
+                          "-Infinity",
+                          "NaN"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "input",
+                  "output",
+                  "cacheRead",
+                  "cacheWrite",
+                  "total"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "input",
+              "output",
+              "cacheRead",
+              "cacheWrite",
+              "totalTokens",
+              "cost"
+            ],
+            "additionalProperties": true,
+            "description": "Tokens spent, as the providers reported them."
+          }
+        },
+        "required": [
+          "text",
+          "provider",
+          "model",
+          "turns",
+          "usage"
+        ],
+        "additionalProperties": true,
+        "description": "The answer. Nothing of the run is kept: no conversation, no usage."
+      },
+      "error": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ReadOnlyServerEncoded"
+          },
+          {
+            "$ref": "#/$defs/UnknownProviderEncoded"
+          },
+          {
+            "$ref": "#/$defs/UnknownEffortEncoded"
+          },
+          {
+            "$ref": "#/$defs/EphemeralFailedEncoded"
+          }
+        ]
+      },
+      "stream": false
+    },
     "tasks/watch": {
       "params": {
         "type": "null"
@@ -3332,6 +3594,25 @@
       "required": [
         "_tag",
         "submission",
+        "message"
+      ],
+      "additionalProperties": true
+    },
+    "EphemeralFailedEncoded": {
+      "type": "object",
+      "properties": {
+        "_tag": {
+          "type": "string",
+          "enum": [
+            "EphemeralFailed"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "_tag",
         "message"
       ],
       "additionalProperties": true

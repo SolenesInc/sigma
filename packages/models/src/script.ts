@@ -2,13 +2,14 @@
 // next unused step for its agent; with none left, it answers `You said: <the last user text>`. It streams word by
 // word, with `delayMs` before each word, and a step with `hold` stops after its first word until a file exists at that
 // path.
-import { Duration, Effect, Schema, Stream } from "effect"
+import { Duration, Effect, Option, Schema, Stream } from "effect"
 import { existsSync, watch } from "node:fs"
 import { dirname } from "node:path"
-import { nothingToSignIn, type ProviderInstance } from "./kind.ts"
+import { nothingToSignIn, type OnceAnswer, type OnceRequest, ProviderError, type ProviderInstance } from "./kind.ts"
 import type { Provider } from "./models.ts"
 import { failure, replay } from "./replay.ts"
 import { contentText } from "./text.ts"
+import { normalizeContext } from "./transcript.ts"
 import type { AssistantMessage, JsonObject, Model, TranscriptContext, Usage } from "./types.ts"
 import { uuidv7 } from "./uuid.ts"
 
@@ -177,15 +178,43 @@ export function scriptProvider(
   }
 }
 
+/** An ephemeral run on the script: the root's next step answers the prompt, in one turn. */
+const scriptOnce =
+  (stream: NonNullable<Provider["streamSimple"]>) =>
+  (request: OnceRequest): Effect.Effect<OnceAnswer, ProviderError> =>
+    Effect.gen(function* () {
+      const model = SCRIPT_MODELS.find((each) => each.id === request.model) ?? SCRIPT_MODEL
+      const context = normalizeContext({ messages: [{ role: "user", content: request.prompt, timestamp: Date.now() }] })
+      const last = yield* Stream.runLast(stream(model, context, { metadata: { agent: ROOT_AGENT } }))
+      const event = Option.getOrUndefined(last)
+      const message = event?.type === "done" ? event.message : event?.type === "error" ? event.error : undefined
+      if (message === undefined || message.stopReason === "error")
+        return yield* new ProviderError({ message: message?.errorMessage ?? "the script ended without an answer" })
+      const text = contentText(message.content)
+      let output: unknown
+      if (request.schema !== undefined) {
+        try {
+          output = JSON.parse(text)
+        } catch {
+          return yield* new ProviderError({ message: `the answer is not JSON: ${text}` })
+        }
+      }
+      return { text, ...(output === undefined ? {} : { output }), model: model.id, turns: 1, usage: message.usage }
+    })
+
 /** The `script` provider as a home's instance: always ready, its two models, nothing to sign in to. */
 export const scriptInstance = (
   steps: readonly ScriptStep[],
   agentOf?: (context: TranscriptContext) => string | undefined,
-): ProviderInstance => ({
-  id: "script",
-  kind: "script",
-  health: () => Effect.succeed({ status: "ready" }),
-  models: () => Effect.succeed(SCRIPT_MODELS.map((model) => ({ id: model.id, name: model.name, efforts: [] }))),
-  ...nothingToSignIn,
-  provider: scriptProvider(steps, agentOf),
-})
+): ProviderInstance => {
+  const provider = scriptProvider(steps, agentOf)
+  return {
+    id: "script",
+    kind: "script",
+    health: () => Effect.succeed({ status: "ready" }),
+    models: () => Effect.succeed(SCRIPT_MODELS.map((model) => ({ id: model.id, name: model.name, efforts: [] }))),
+    ...nothingToSignIn,
+    provider,
+    once: scriptOnce(provider.streamSimple!),
+  }
+}

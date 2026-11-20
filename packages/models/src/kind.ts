@@ -4,6 +4,7 @@
 // seam; Claude Code runs its own loop and gives none.
 import { Effect, Schema, type Scope } from "effect"
 import type { Provider } from "./models.ts"
+import type { Usage } from "./types.ts"
 
 export type ProviderStatus = "ready" | "signed_out" | "unavailable"
 
@@ -75,11 +76,38 @@ export interface ProviderAccount {
 export const defaultModelOf = (account: ProviderAccount): Effect.Effect<string | undefined> =>
   account.picksItsOwnModel ? Effect.succeed(undefined) : Effect.map(account.models(false), (models) => models[0]?.id)
 
+/** One prompt for an ephemeral run: answered with no tools, outside any conversation, and kept nowhere. */
+export interface OnceRequest {
+  /** Absent for the provider's own choice. */
+  readonly model?: string
+  readonly effort?: string
+  /** The whole system prompt, in place of the provider's own. */
+  readonly system?: string
+  readonly prompt: string
+  /** A JSON Schema the answer must match. */
+  readonly schema?: Record<string, unknown>
+  /** The most turns the provider may take; absent for its own limit. */
+  readonly maxTurns?: number
+}
+
+export interface OnceAnswer {
+  readonly text: string
+  /** The value a schema asked for, as the provider returned it; the caller checks it against the schema. */
+  readonly output?: unknown
+  /** The model that answered, as the provider names it. */
+  readonly model: string
+  /** The turns the provider took, as it counts them. */
+  readonly turns: number
+  readonly usage: Usage
+}
+
 export interface ProviderInstance extends ProviderAccount {
   /** The name conversations select it by, such as `openai-work`. */
   readonly id: string
   /** The `Models` seam's provider for this instance, named by `id`; absent when the provider runs its own loop. */
   readonly provider?: Provider
+  /** Answers one prompt for an ephemeral run; absent when the provider cannot. */
+  readonly once?: (request: OnceRequest) => Effect.Effect<OnceAnswer, ProviderError>
 }
 
 export interface ProviderKind<Settings> {

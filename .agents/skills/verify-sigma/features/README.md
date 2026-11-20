@@ -126,6 +126,9 @@ lists when a change touches them.
 - [Authors](./authors.md) (people, agents): every call that changes a conversation
   names its `{id, name}` author on a committed entry; the TUI and `exec` act as
   `SIGMA_AUTHOR_ID` and `SIGMA_AUTHOR_NAME`.
+- [Ephemeral run](./ephemeral-run.md) (people, agents): `sigma ephemeral` and
+  `ephemeral/run` answer one prompt with a system prompt, an optional schema
+  and no tools, on ChatGPT or Claude Code, and keep nothing in the home.
 - [Tool calls and approvals](./tool-calls-and-approvals.md) (people, agents): calls that change
   things wait for `^Y`, `^N` or `approval/resolve`; `exec` denies them and
   `--auto` allows them.

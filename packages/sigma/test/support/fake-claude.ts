@@ -50,7 +50,8 @@ if (argv[0] === "auth") {
   }
 }
 
-const isProbe = (args: ReadonlyArray<string>) => args.includes("--no-session-persistence")
+// The account probe keeps no session; an ephemeral run keeps none either, but has no tools, and plays as a spawn.
+const isProbe = (args: ReadonlyArray<string>) => args.includes("--no-session-persistence") && !args.includes("--tools=")
 const probe = isProbe(argv)
 
 const counterFile = join(dir, probe ? "probes" : "spawns")

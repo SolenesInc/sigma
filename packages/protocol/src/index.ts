@@ -983,6 +983,44 @@ export const GetUsage = Rpc.make("usage/get", {
   error: NoSuchConversation,
 })
 
+/** An ephemeral run did not answer: its provider failed or cannot run one, or the answer did not match its schema. */
+export class EphemeralFailed extends Schema.TaggedError<EphemeralFailed>()("EphemeralFailed", {
+  message: Schema.String,
+}) {}
+
+export const RunEphemeral = Rpc.make("ephemeral/run", {
+  payload: {
+    prompt: Schema.String,
+    system: Schema.optionalKey(
+      Schema.String.annotate({ description: "The whole system prompt, in place of the provider's own." }),
+    ),
+    schema: Schema.optionalKey(
+      Json.annotate({
+        description:
+          "A JSON Schema the answer must match, written for strict structured output: every property required, additionalProperties false.",
+      }),
+    ),
+    provider: Schema.optionalKey(Schema.String.annotate({ description: "Absent for the home's default provider." })),
+    model: Schema.optionalKey(Schema.String.annotate({ description: "Absent for the provider's default model." })),
+    effort: Schema.optionalKey(Schema.String),
+    maxTurns: Schema.optionalKey(
+      Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).annotate({
+        description:
+          "The most turns the provider may take; absent for its own limit. A ChatGPT answer is always one turn.",
+      }),
+    ),
+  },
+  success: Schema.Struct({
+    text: Schema.String,
+    output: Schema.optionalKey(Json.annotate({ description: "With a schema: the answer, a value that matches it." })),
+    provider: Schema.String,
+    model: Schema.String.annotate({ description: "The model that answered, as its provider names it." }),
+    turns: Schema.Int.annotate({ description: "The turns the provider took, as it counts them." }),
+    usage: UsageTotals,
+  }).annotate({ description: "The answer. Nothing of the run is kept: no conversation, no usage." }),
+  error: Schema.Union([ReadOnlyServer, UnknownProvider, UnknownEffort, EphemeralFailed]),
+})
+
 export const TaskGraphStart = Schema.TaggedStruct("graph", {
   graph: Schema.Struct({
     tasks: Schema.Record(Schema.String, Json).annotate({
@@ -1023,6 +1061,7 @@ export const SigmaRpcs = RpcGroup.make(
   Update,
   Configure,
   GetUsage,
+  RunEphemeral,
   WatchTasks,
   ResolveApproval,
   WatchStatus,

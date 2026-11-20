@@ -1,7 +1,7 @@
 // The providers of a home: every instance its config names, opened from its kind, with the sign-ins, health and model
 // lists over them, and how a new conversation's model is chosen.
 import { agyAccount, type AgySettings } from "@sigma/agy"
-import { claudeAccount, type ClaudeProcessSettings } from "@sigma/claude"
+import { claudeAccount, claudeOnce, type ClaudeProcessSettings } from "@sigma/claude"
 import { type Agent, type AgentLimits, DEFAULT_AGENT_LIMITS } from "@sigma/harness"
 import { defineDoc } from "@sigma/kernel"
 import {
@@ -101,7 +101,10 @@ const configured = (config: HomeConfig): Record<string, Instance> => ({
 /** Claude Code: its account here; its conversations run as `claude.run` tasks, so it gives no `Models` provider. */
 const claudeKind = (base: ClaudeProcessSettings): ProviderKind<Instance> => ({
   kind: "claude",
-  open: (id, settings) => Effect.succeed({ ...claudeAccount(claudeInstance(base, settings)), id }),
+  open: (id, settings) => {
+    const instance = claudeInstance(base, settings)
+    return Effect.succeed({ ...claudeAccount(instance), id, once: claudeOnce(instance) })
+  },
 })
 
 /** Antigravity's CLI: its account here; its conversations run as `agy.run` tasks, so it gives no `Models` provider. */

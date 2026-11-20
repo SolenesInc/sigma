@@ -37,6 +37,9 @@ remote hands).
 - `src/environment.ts`: how every Claude Code process starts, a run's, the account probe's and `claude auth`'s: the
   server's environment without the variables a host Claude Code session sets, then the provider instance's `env`. A
   run's settings also turn tool search on where the person's Claude Code settings leave it at `auto`.
+- `src/once.ts`: an ephemeral run (`claudeOnce`): one prompt to a Claude Code process with no tools, no setting
+  sources, no MCP servers, hooks off and no session kept, the caller's system prompt in place of Claude Code's own, a
+  schema as its structured output and a turn limit as `maxTurns`.
 - `src/account.ts`: how a Claude Code instance is signed in and which models it offers, from a probe of Claude Code,
   and signing in and out with its own commands.
 

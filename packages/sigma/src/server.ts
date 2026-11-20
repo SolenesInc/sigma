@@ -114,6 +114,7 @@ import { Setup } from "./setup.ts"
 import { VERSION } from "./version.ts"
 import { chosenNumber, ConversationIdsDoc, kernelNumber, refusedChoice } from "./ids.ts"
 import { agentModel, Providers, LastModelDoc, selectionOf } from "./providers.ts"
+import { runEphemeral } from "./ephemeral.ts"
 import { countStops, restartLimitMessage } from "./restarts.ts"
 import { endRun, LastRunEndDoc, switchModel, writeRunEnd } from "./run-end.ts"
 import { committedSignIns } from "./sign-ins.ts"
@@ -1033,6 +1034,10 @@ const Handlers = SigmaRpcs.toLayer(
               return usage ?? { models: {}, tools: {} }
             }),
       "tasks/watch": () => watchTasks,
+      // Held like a run, so an idle server outlives it; it commits nothing.
+      "ephemeral/run": writing((payload) =>
+        Effect.scoped(Effect.andThen(lifetime.hold, runEphemeral(providers, payload))),
+      ),
       "conversation/interrupt": writing(({ conversation: id, author }) =>
         Effect.gen(function* () {
           const conversation = yield* find(id)

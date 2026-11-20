@@ -15,7 +15,7 @@ import {
   USER_KIND,
 } from "@sigma/protocol"
 import { ECHO_TOOL, FAKE_INSTRUCTIONS, FakeMcpServer } from "./support/mcp.ts"
-import { DEADLINE, deadline, RawClient, TEST_TIMEOUT } from "./support/raw.ts"
+import { DEADLINE, deadline, errorTag, RawClient, TEST_TIMEOUT } from "./support/raw.ts"
 import { TestTargets } from "./support/targets.ts"
 import {
   person,
@@ -2244,4 +2244,104 @@ test("worker-claude-parent, worker-fork: a Claude Code parent's worker on Claude
     received: [{ from: "/root/echo", kind: "final_answer", text: "echo ok" }],
   })
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: echo ok", "run_end: answered"])
+})
+
+const YES_OR_NO = {
+  type: "object",
+  properties: { answer: { type: "string", enum: ["yes", "no"] } },
+  required: ["answer"],
+  additionalProperties: false,
+}
+const ephemeralServer = async (claude: FakeClaude) => {
+  const server = await runningServer([], { claude: claude.options })
+  const client = await RawClient.connect(server.home.socket)
+  return {
+    client,
+    run: (payload: Record<string, unknown>) =>
+      client.call("ephemeral/run", {
+        provider: "claude",
+        model: "claude-haiku-5-5",
+        prompt: "Is the sky blue on a clear day?",
+        ...payload,
+      }),
+    [Symbol.asyncDispose]: async () => {
+      client.close()
+      await server[Symbol.asyncDispose]()
+    },
+  }
+}
+/** Spawn `spawn`'s argv, as the fake logged it. */
+const argvOf = (claude: FakeClaude, spawn: number): Array<string> =>
+  claude.log().find((entry) => entry.argv && entry.probe === undefined && entry.spawn === spawn)!.argv
+
+test("ephemeral-answer: an ephemeral run on Claude Code answers with its system prompt alone, no tools, no settings and no session kept, and the home keeps no conversation and no usage", async () => {
+  using claude = new FakeClaude("ephemeral_text")
+  await using server = await ephemeralServer(claude)
+  const reply = await server.run({ system: "You answer in one word.", maxTurns: 1 })
+  expect(reply.result).toMatchObject({ text: "Yes.", provider: "claude", model: "claude-haiku-5-5", turns: 1 })
+  expect(reply.result.usage).toMatchObject({ input: 2, output: 6, cacheWrite: 551 })
+  expect(reply.result.usage.cost.total).toBeGreaterThan(0)
+  expect(argvOf(claude, 0)).toEqual(
+    expect.arrayContaining([
+      "--tools=",
+      "--setting-sources=",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+      "--max-turns=1",
+      "--model=claude-haiku-5-5",
+    ]),
+  )
+  const initialize = claude.log().find((entry) => entry.initialize)!.initialize
+  expect(initialize.systemPrompt).toEqual(["You answer in one word."])
+  expect(claude.userTexts()).toEqual([["Is the sky blue on a clear day?"]])
+  expect((await server.client.call("conversation/list")).result).toEqual([])
+  expect((await server.client.call("usage/get", {})).result).toEqual({ models: {}, tools: {} })
+})
+
+test("ephemeral-schema: an ephemeral run on Claude Code hands it the schema and answers the value Claude Code gave for it", async () => {
+  using claude = new FakeClaude("ephemeral_schema")
+  await using server = await ephemeralServer(claude)
+  const reply = await server.run({ system: "You classify questions.", schema: YES_OR_NO, maxTurns: 2 })
+  expect(reply.result).toMatchObject({ text: '{"answer":"yes"}', output: { answer: "yes" }, turns: 2 })
+  expect(argvOf(claude, 0)).toContain(`--json-schema=${JSON.stringify(YES_OR_NO)}`)
+})
+
+test("ephemeral-turn-limit: an ephemeral run that reaches its turn limit on Claude Code fails saying so", async () => {
+  using claude = new FakeClaude("ephemeral_turn_limit")
+  await using server = await ephemeralServer(claude)
+  const reply = await server.run({ system: "You classify questions.", schema: YES_OR_NO, maxTurns: 2 })
+  expect(errorTag(reply)).toBe("EphemeralFailed")
+  expect(reply.error!.message).toBe("Claude Code ended the run at its turn limit of 2")
+})
+
+test("ephemeral-concurrent: ephemeral runs on Claude Code at once each answer their own prompt, while a conversation's run works beside them", async () => {
+  using claude = new FakeClaude("text", "ephemeral_text", "ephemeral_schema").holdBefore("success")
+  await using session = await conversationWith(claude)
+  await session.submit("Reply with exactly: fixture text ok")
+  await claude.logged((fake) => fake.holding(0))
+  const ephemeral = (payload: Record<string, unknown>) =>
+    session.client.call("ephemeral/run", {
+      provider: "claude",
+      model: "claude-haiku-5-5",
+      prompt: "Is the sky blue on a clear day?",
+      ...payload,
+    })
+  const first = ephemeral({ system: "You answer in one word." })
+  await claude.logged((fake) => fake.holding(1))
+  const second = ephemeral({ system: "You classify questions.", schema: YES_OR_NO })
+  await claude.logged((fake) => fake.holding(2))
+  // The second answers while the first and the conversation still wait on their models.
+  claude.release(2)
+  expect((await second).result).toMatchObject({ output: { answer: "yes" } })
+  claude.release(1)
+  expect((await first).result).toMatchObject({ text: "Yes." })
+  claude.release(0)
+  await session.view.until(settled(1))
+  expect(transcript(session.view.view().entries)).toEqual([
+    "user: Reply with exactly: fixture text ok",
+    "assistant: fixture text ok",
+    "run_end: answered",
+  ])
+  const listed = (await session.client.call("conversation/list")).result as Array<{ id: string }>
+  expect(listed.map((info) => info.id)).toEqual([session.conversation])
 })

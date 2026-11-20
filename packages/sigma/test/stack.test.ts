@@ -458,6 +458,42 @@ test("mode-print, answer-exec, server-on-demand: sigma exec starts a server, pri
   ])
 })
 
+test("ephemeral-cli, server-on-demand: sigma ephemeral starts a server, prints the answer, and leaves no conversation", async () => {
+  const sigmaHome = home()
+  const result = await finished(
+    sigma(["ephemeral", "--system", "Be brief.", "hello there"], await scriptEnv(sigmaHome)),
+  )
+  expect(result).toMatchObject({ code: 0, stdout: "You said: hello there\n", stderr: "" })
+  expect(await conversationsOf(sigmaHome)).toEqual([])
+}, 30_000)
+
+test("ephemeral-cli, ephemeral-schema: sigma ephemeral --json reads a prompt from stdin and prints the answer and the value its schema matches", async () => {
+  const env = await scriptEnv(home(), [{ text: '{"answer":"yes"}' }])
+  const schema = JSON.stringify({
+    type: "object",
+    properties: { answer: { enum: ["yes", "no"] } },
+    required: ["answer"],
+  })
+  const result = await finished(
+    sigma(["ephemeral", "--json", "--schema", schema, "--max-turns", "1", "-"], env, undefined, "Is the sky blue?"),
+  )
+  expect(result).toMatchObject({ code: 0, stderr: "" })
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    text: '{"answer":"yes"}',
+    output: { answer: "yes" },
+    provider: "script",
+    turns: 1,
+  })
+}, 30_000)
+
+test("ephemeral-cli, ephemeral-schema: sigma ephemeral exits 1 saying why, for a schema that is not JSON and an answer that is not", async () => {
+  const env = await scriptEnv(home())
+  const unreadable = await finished(sigma(["ephemeral", "--schema", "{nope", "go"], env))
+  expect(unreadable).toMatchObject({ code: 1, stdout: "", stderr: "--schema is not JSON\n" })
+  const notJson = await finished(sigma(["ephemeral", "--schema", '{"type":"object"}', "go"], env))
+  expect(notJson).toMatchObject({ code: 1, stdout: "", stderr: "the answer is not JSON: You said: go\n" })
+}, 30_000)
+
 test("target-cli, target-unavailable: sigma exec refuses --target without --cwd, and says why a target cannot be reached", async () => {
   const env = await scriptEnv(home(), [{ text: "never" }])
   const noFolder = await finished(sigma(["exec", "--target", "box", "go"], env))

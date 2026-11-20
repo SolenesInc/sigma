@@ -1,8 +1,16 @@
 // ChatGPT through a ChatGPT sign-in: the account (sign-in, token refresh, health, the model catalog) and the provider
 // behind the `Models` seam, which sends each request to `/codex/responses` and streams its answer back.
-import { Effect, Queue, Semaphore, Stream } from "effect"
+import { Effect, Option, Queue, Semaphore, Stream } from "effect"
 import { rmSync } from "node:fs"
-import { ProviderError, type Health, type ProviderAccount, type ProviderInstance } from "../kind.ts"
+import {
+  defaultModelOf,
+  ProviderError,
+  type Health,
+  type OnceAnswer,
+  type OnceRequest,
+  type ProviderAccount,
+  type ProviderInstance,
+} from "../kind.ts"
 import type { Provider } from "../models.ts"
 import type { AssistantMessage, AssistantMessageEvent } from "../types.ts"
 import { catalog, CHATGPT_API, CLIENT_VERSION, type Catalog } from "./catalog.ts"
@@ -200,6 +208,76 @@ const post = (chatgpt: ChatGpt, baseUrl: string, body: unknown, sessionId: strin
     }
   })
 
+/**
+ * The seam's events for one request to `/codex/responses`: `body`, or why it could not be made, which ends the stream
+ * as its `error` event without a request.
+ */
+const responseEvents = (
+  chatgpt: ChatGpt,
+  options: ChatGptOptions,
+  template: AssistantMessage,
+  made: () => { readonly body: unknown; readonly inputs: ReadonlyMap<string, string> },
+  sessionId: string | undefined,
+  onPayload?: (body: unknown) => Promise<unknown>,
+) =>
+  Stream.callback<AssistantMessageEvent>((queue) =>
+    Effect.gen(function* () {
+      const controller = yield* Effect.acquireRelease(
+        Effect.sync(() => new AbortController()),
+        (controller) => Effect.sync(() => controller.abort()),
+      )
+      let inputs: ReadonlyMap<string, string> = new Map()
+      let body: unknown
+      try {
+        ;({ body, inputs } = made())
+      } catch (error) {
+        // A malformed grammar tool: the request is never sent, and the run ends saying which tool.
+        const reader = new ResponseReader(template, inputs)
+        yield* Queue.offer(queue, reader.fail(error instanceof Error ? error.message : String(error)))
+        return yield* Queue.end(queue)
+      }
+      if (onPayload !== undefined) {
+        const replaced = yield* Effect.promise(() => onPayload(body))
+        if (replaced !== undefined) body = replaced
+      }
+      const reader = new ResponseReader(template, inputs)
+      const answered = yield* Effect.result(post(chatgpt, options.baseUrl, body, sessionId, controller.signal))
+      if (answered._tag === "Failure") {
+        yield* Queue.offer(queue, reader.fail(answered.failure.message))
+        return yield* Queue.end(queue)
+      }
+      yield* Queue.offer(queue, reader.start())
+      const stream = events(answered.success.body!, controller.signal)
+      while (!reader.ended) {
+        const next = yield* Effect.tryPromise({
+          try: () => stream.next(),
+          catch: (error) => String(error),
+        }).pipe(Effect.result)
+        if (next._tag === "Failure") {
+          yield* Queue.offer(queue, reader.fail(`the response stream broke: ${next.failure}`))
+          break
+        }
+        if (next.success.done) {
+          yield* Queue.offer(queue, reader.fail(STREAM_CUT))
+          break
+        }
+        for (const event of reader.push(next.success.value)) yield* Queue.offer(queue, event)
+      }
+      yield* Queue.end(queue)
+    }),
+  )
+
+const templateOf = (api: string, provider: string, model: string): AssistantMessage => ({
+  role: "assistant",
+  content: [],
+  api,
+  provider,
+  model,
+  usage: ZERO_USAGE,
+  stopReason: "pending",
+  timestamp: Date.now(),
+})
+
 /** The provider behind the seam for one instance, named `id`. */
 export const chatGptProvider = (id: string, chatgpt: ChatGpt, options: ChatGptOptions): Provider => ({
   id,
@@ -207,74 +285,80 @@ export const chatGptProvider = (id: string, chatgpt: ChatGpt, options: ChatGptOp
     return chatgpt.catalog.chatModels(id, options.baseUrl)
   },
   streamSimple: (model, context, request) =>
-    Stream.callback<AssistantMessageEvent>((queue) =>
-      Effect.gen(function* () {
-        const controller = yield* Effect.acquireRelease(
-          Effect.sync(() => new AbortController()),
-          (controller) => Effect.sync(() => controller.abort()),
-        )
-        const template: AssistantMessage = {
-          role: "assistant",
-          content: [],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: ZERO_USAGE,
-          stopReason: "pending",
-          timestamp: Date.now(),
-        }
-        let inputs: ReadonlyMap<string, string> = new Map()
-        let body: unknown
-        try {
-          inputs = grammarInputs(getCurrentTools(context.messages))
-          body = requestBody(
-            {
-              model: model.id,
-              instructions: options.instructions,
-              ...(request.reasoning === undefined ? {} : { reasoning: request.reasoning }),
-              ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
-            },
-            context,
-          )
-        } catch (error) {
-          // A malformed grammar tool: the request is never sent, and the run ends saying which tool.
-          const reader = new ResponseReader(template, inputs)
-          yield* Queue.offer(queue, reader.fail(error instanceof Error ? error.message : String(error)))
-          return yield* Queue.end(queue)
-        }
-        if (request.onPayload !== undefined) {
-          const replaced = yield* Effect.promise(async () => request.onPayload!(body, model))
-          if (replaced !== undefined) body = replaced
-        }
-        const reader = new ResponseReader(template, inputs)
-        const answered = yield* Effect.result(
-          post(chatgpt, options.baseUrl, body, request.sessionId, controller.signal),
-        )
-        if (answered._tag === "Failure") {
-          yield* Queue.offer(queue, reader.fail(answered.failure.message))
-          return yield* Queue.end(queue)
-        }
-        yield* Queue.offer(queue, reader.start())
-        const stream = events(answered.success.body!, controller.signal)
-        while (!reader.ended) {
-          const next = yield* Effect.tryPromise({
-            try: () => stream.next(),
-            catch: (error) => String(error),
-          }).pipe(Effect.result)
-          if (next._tag === "Failure") {
-            yield* Queue.offer(queue, reader.fail(`the response stream broke: ${next.failure}`))
-            break
-          }
-          if (next.success.done) {
-            yield* Queue.offer(queue, reader.fail(STREAM_CUT))
-            break
-          }
-          for (const event of reader.push(next.success.value)) yield* Queue.offer(queue, event)
-        }
-        yield* Queue.end(queue)
+    responseEvents(
+      chatgpt,
+      options,
+      templateOf(model.api, model.provider, model.id),
+      () => ({
+        inputs: grammarInputs(getCurrentTools(context.messages)),
+        body: requestBody(
+          {
+            model: model.id,
+            instructions: options.instructions,
+            ...(request.reasoning === undefined ? {} : { reasoning: request.reasoning }),
+            ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+          },
+          context,
+        ),
       }),
+      request.sessionId,
+      request.onPayload === undefined ? undefined : async (body) => request.onPayload!(body, model),
     ),
 })
+
+/**
+ * The body of an ephemeral run's one request: the caller's system prompt alone as `instructions`, the prompt, no tools,
+ * and a schema as ChatGPT's strict structured output, as `codex exec --output-schema` asks for it.
+ */
+export const onceBody = (model: string, request: OnceRequest) => ({
+  model,
+  ...(request.effort === undefined || request.effort === "off" ? {} : { reasoning: { effort: request.effort } }),
+  instructions: request.system ?? "",
+  input: [{ type: "message", role: "user", content: [{ type: "input_text", text: request.prompt }] }],
+  tools: [],
+  tool_choice: "auto",
+  parallel_tool_calls: false,
+  store: false,
+  stream: true,
+  ...(request.schema === undefined
+    ? {}
+    : { text: { format: { type: "json_schema", name: "answer", schema: request.schema, strict: true } } }),
+})
+
+/** An ephemeral run: one request, so one turn, whose answer's text is the schema's value when there is a schema. */
+const once = (id: string, chatgpt: ChatGpt, options: ChatGptOptions) => (request: OnceRequest) =>
+  Effect.gen(function* () {
+    const model = request.model ?? (yield* defaultModelOf(chatgpt.account))
+    if (model === undefined) return yield* failure("ChatGPT lists no models")
+    const body = onceBody(model, request)
+    const ended = yield* responseEvents(
+      chatgpt,
+      options,
+      templateOf(CHATGPT_API, id, model),
+      () => ({ body, inputs: new Map() }),
+      undefined,
+    ).pipe(Stream.runLast)
+    const message = Option.getOrUndefined(ended)
+    const final = message?.type === "done" ? message.message : message?.type === "error" ? message.error : undefined
+    if (final === undefined || final.stopReason === "error" || final.stopReason === "aborted")
+      return yield* failure(final?.errorMessage ?? STREAM_CUT)
+    const text = final.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("")
+    let output: unknown
+    if (request.schema !== undefined) {
+      try {
+        output = JSON.parse(text)
+      } catch {
+        return yield* failure(`the answer is not JSON: ${text}`)
+      }
+    }
+    return {
+      text,
+      ...(output === undefined ? {} : { output }),
+      model,
+      turns: 1,
+      usage: final.usage,
+    } satisfies OnceAnswer
+  })
 
 /** A ChatGPT instance: its account, and the provider its conversations run on. */
 export const chatGptInstance = (id: string, options: ChatGptOptions): Effect.Effect<ProviderInstance> =>
@@ -282,4 +366,5 @@ export const chatGptInstance = (id: string, options: ChatGptOptions): Effect.Eff
     ...chatgpt.account,
     id,
     provider: chatGptProvider(id, chatgpt, options),
+    once: once(id, chatgpt, options),
   }))

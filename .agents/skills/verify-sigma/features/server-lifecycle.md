@@ -9,7 +9,7 @@ running server once its runs settle.
 
 ## Sub-features
 
-- `server-on-demand` starts a server for the first `exec` or TUI.
+- `server-on-demand` starts a server for the first `exec`, `ephemeral` or TUI.
 - `server-shared` lets clients that start together share one server.
 - `server-refuse` makes `sigma serve` refuse a home that already has a server.
 - `server-idle-exit` exits the server 30 s after its last watch closes,
@@ -140,6 +140,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 
 - server-stop: sigma serve answers server/stop, then exits 0
 - mode-print, answer-exec, server-on-demand: sigma exec starts a server, prints the answer and exits 0
+- ephemeral-cli, server-on-demand: sigma ephemeral starts a server, prints the answer, and leaves no conversation
 - server-restart: sigma serve --restart replaces the running server once its run settles
 - server-restart: sigma exec waiting on a run that serve --restart lets finish prints the answer and exits 0
 - server-restart: a server that starts while serve --restart replaces the old one gives way, though it waited on the old one's lock
