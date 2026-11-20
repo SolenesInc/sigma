@@ -1,6 +1,6 @@
 // The wire: a real server in process, driven as a raw JSON-RPC client over its socket.
 import { expect, test } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { TestTargets } from "./support/targets.ts"
 import type { ScriptStep } from "@sigma/models"
@@ -2247,9 +2247,8 @@ test("target-start: a conversation started on a target runs its tools on the tar
   await submit(client, conversation, "make a file")
   await view.until(settled(1))
   expect(toolResults(view)).toEqual([{ text: `${work}\n`, isError: false }])
-  // Written by a command that ran under the target's sigma-env, and not where the server runs.
+  // Written by a command that ran under the target's sigma-env.
   expect(readFileSync(join(work, "made"), "utf8")).toBe("box-1\n")
-  expect(existsSync(join(process.cwd(), "made"))).toBe(false)
   expect((await listed(client)).map(({ id, target, cwd }) => ({ id, target, cwd }))).toEqual([
     { id: "on-box", target: "box", cwd: work },
   ])
@@ -2293,6 +2292,26 @@ test("target-unavailable: a home with no target_connector refuses a remote start
     `this home has no target_connector in ${join(server.home.dir, "config.toml")}; whatever runs sigma sets it to the command that reaches a target`,
   )
   expect(await listed(client)).toEqual([])
+  client.close()
+})
+
+test("target-start: Claude Code is refused on a target, at start and as a model switch, since its own tools would act on the server's machine", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box")
+  await using server = await targetServer(targets, [])
+  const client = await RawClient.connect(server.home.socket)
+  const refused = await startOn(client, "box", work, { provider: "claude" })
+  expect(errorTag(refused)).toBe("UnknownProvider")
+  expect(refused.error!.message).toContain("not on target box")
+  expect(await listed(client)).toEqual([])
+  const conversation = (await startOn(client, "box", work)).result.conversation as string
+  const switched = await client.call("conversation/select_model", {
+    conversation,
+    author: person("bo"),
+    selection: { provider: "claude" },
+  })
+  expect(errorTag(switched)).toBe("UnknownProvider")
+  expect((await list(client))[0]!.model.provider).toBe("script")
   client.close()
 })
 

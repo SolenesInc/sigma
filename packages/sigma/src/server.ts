@@ -36,7 +36,8 @@ import {
   type SubmissionId,
   type Tx,
 } from "@sigma/kernel"
-import { fromProviders, type Models } from "@sigma/models"
+import type { AgentHello } from "@sigma/env/protocol"
+import { fromProviders, type Models, type ProviderInstance } from "@sigma/models"
 import type { ImageProcessor } from "@sigma/tools"
 import { createNodePhotonImages } from "@sigma/tools/images/node"
 import {
@@ -184,7 +185,8 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         // Closed after the harness, so the runs stop before their targets' channels end; ending a channel stops the
         // target's commands (D7).
         const targets = yield* Effect.acquireRelease(
-          Effect.sync(() => openTargets(home, connector)),
+          // A read-only server changes nothing, and a hello on a target sweeps what an earlier server left running there.
+          Effect.sync(() => openTargets(home, readOnly ? undefined : connector)),
           (targets) => targets.close(),
         )
         const local = (cwd: string) => new LocalExecutionEnv({ cwd, processes: commands })
@@ -411,9 +413,31 @@ const Handlers = SigmaRpcs.toLayer(
     // Starts with a chosen id one at a time, so two starts with one new id make one conversation.
     const choosing = yield* Semaphore.make(1)
 
+    // Claude Code's own tools act on the machine it runs on, the server's; on a target it waits for member mode.
+    const refusedOnTarget = (
+      target: string | undefined,
+      selection: { readonly provider: string },
+      instance: ProviderInstance,
+    ) =>
+      isLocal(target) || instance.kind !== "claude"
+        ? Effect.void
+        : Effect.fail(
+            new UnknownProvider({
+              provider: selection.provider,
+              message: `${selection.provider} runs Claude Code, whose tools would act on this machine, not on target ${target}; choose a ChatGPT model`,
+            }),
+          )
+    // A remote target is reached before a start: one that cannot be reached starts nothing (D4).
+    const reach = (target: string | undefined) =>
+      isLocal(target)
+        ? Effect.succeed(undefined)
+        : targets.connect(target).pipe(
+            Effect.map((hello) => ({ target, hello })),
+            Effect.mapError((error) => new TargetUnavailable({ target, reason: error.reason })),
+          )
     const startConversation = (
       cwd: string,
-      target: string | undefined,
+      reached: { readonly target: string; readonly hello: AgentHello } | undefined,
       id: string | undefined,
       approvals: "ask" | "auto" | undefined,
       instructions: string | undefined,
@@ -422,20 +446,14 @@ const Handlers = SigmaRpcs.toLayer(
     ) =>
       Effect.gen(function* () {
         yield* writable
-        // A remote target is reached first: one that cannot be reached starts nothing (D4).
-        const remote = isLocal(target) ? undefined : target
-        const hello =
-          remote === undefined
-            ? undefined
-            : yield* targets
-                .connect(remote)
-                .pipe(Effect.mapError((error) => new TargetUnavailable({ target: remote, reason: error.reason })))
+        const remote = reached?.target
         const last = yield* Effect.orDie(harness.session.snapshot(LastModelDoc))
         const project = yield* projectDefaultModel(
           envOf({ cwd, ...(remote === undefined ? {} : { target: remote }) }),
           cwd,
         )
         const { selection, instance } = yield* providers.choose(project, ask, last?.selection)
+        yield* refusedOnTarget(remote, selection, instance)
         const model = yield* agentModel(selection, instance)
         // One commit: a second start with the same id finds the first one's mapping.
         let started: ConversationId | undefined
@@ -447,7 +465,7 @@ const Handlers = SigmaRpcs.toLayer(
             init: (tx, created) =>
               Effect.gen(function* () {
                 started = created
-                if (hello !== undefined) yield* recordTarget(tx, created, remote!, hello)
+                if (reached !== undefined) yield* recordTarget(tx, created, reached.target, reached.hello)
                 if (approvals === "auto") yield* approveAutomatically(tx, created)
                 if (id !== undefined) (yield* tx.doc(ConversationIdsDoc)).ids[id] = Number(created)
                 ;(yield* tx.doc(LastModelDoc)).selection = { ...selection }
@@ -566,7 +584,7 @@ const Handlers = SigmaRpcs.toLayer(
       "conversation/start": ({ cwd, target, id, approvals, instructions, author, ...ask }) =>
         Effect.gen(function* () {
           if (id === undefined)
-            return yield* startConversation(cwd, target, undefined, approvals, instructions, ask, author)
+            return yield* startConversation(cwd, yield* reach(target), undefined, approvals, instructions, ask, author)
           // A conversation's number opens it, as its chosen id does, and answers with the id every other call names it
           // by; a number that names none is refused below.
           const numbered = kernelNumber(id)
@@ -578,13 +596,22 @@ const Handlers = SigmaRpcs.toLayer(
           }
           const refused = refusedChoice(id)
           if (refused !== undefined) return yield* Effect.fail(new InvalidConversationId({ message: refused }))
+          const chosen = Effect.gen(function* () {
+            const existing = chosenNumber(yield* Effect.orDie(harness.session.snapshot(ConversationIdsDoc)), id)
+            if (existing === undefined) return undefined
+            const agent = yield* Effect.orDie(harness.resolveAgent(idFromNumber<ConversationId>(existing)))
+            return { conversation: id, model: selectionOf(agent) }
+          })
+          // An id that names a conversation keeps it, whatever its target's state. A new one's target is reached
+          // outside the permit, so a target slow to answer holds up no other start.
+          const found = yield* chosen
+          if (found !== undefined) return found
+          const reached = yield* reach(target)
           return yield* choosing.withPermits(1)(
             Effect.gen(function* () {
-              const existing = chosenNumber(yield* Effect.orDie(harness.session.snapshot(ConversationIdsDoc)), id)
-              if (existing === undefined)
-                return yield* startConversation(cwd, target, id, approvals, instructions, ask, author)
-              const agent = yield* Effect.orDie(harness.resolveAgent(idFromNumber<ConversationId>(existing)))
-              return { conversation: id, model: selectionOf(agent) }
+              return (
+                (yield* chosen) ?? (yield* startConversation(cwd, reached, id, approvals, instructions, ask, author))
+              )
             }),
           )
         }),
@@ -593,7 +620,7 @@ const Handlers = SigmaRpcs.toLayer(
           const conversation = yield* takingInput(id)
           const agent = yield* agentOf(conversation)
           const env = envOf(agent)
-          const skills = yield* skillsOf(providers.instances, agent, workspaceOf(agent, env))
+          const skills = skillsOf(providers.instances, agent, workspaceOf(agent, env))
           const { content, attached } = userInput(
             text,
             yield* attachedSkills(env, text, skills),
@@ -628,6 +655,7 @@ const Handlers = SigmaRpcs.toLayer(
           const conversation = yield* takingInput(id)
           const instance = providers.instances.get(selection.provider)
           if (instance === undefined) return yield* new UnknownProvider({ provider: selection.provider })
+          yield* refusedOnTarget((yield* agentOf(conversation)).target, selection, instance)
           const model = yield* agentModel(selection, instance)
           const subagent = (yield* lineageOf(harness, conversation.id)) !== undefined
           yield* Effect.orDie(

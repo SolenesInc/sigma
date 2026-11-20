@@ -2,7 +2,8 @@
 
 A conversation's model is a provider, a model and a reasoning effort. A new
 conversation takes `--provider`, `--model` and `--effort`, else the
-`default_model` of the nearest `.sigma/config.toml` above its directory, then
+`default_model` of the nearest `.sigma/config.toml` above its directory (read
+on its target, for a conversation on one), then
 of `SIGMA_HOME/config.toml`, then the model chosen last. `/model` in the TUI
 lists every provider's models and their efforts; switching is a `sigma.model` entry
 every client sees, the status bar follows it, and it takes effect from the

@@ -16,7 +16,9 @@ on. attn will use targets to run a member's work in a sandbox.
   (`local` for one started without), a start with an id that names a
   conversation keeps that one's target, and a ChatGPT conversation is told
   the `AGENTS.md` files and skills the target has at its folder, never what
-  the home has at the same path.
+  the home has at the same path. A start or a model switch that would run
+  Claude Code on a target is refused with `UnknownProvider`: its own tools
+  would act on the server's machine.
 - `target-unavailable` refuses a start whose target the connector cannot
   reach, or a home with no `target_connector`, with `TargetUnavailable`
   carrying the connector's reason, and creates nothing.
@@ -35,14 +37,16 @@ on. attn will use targets to run a member's work in a sandbox.
   before the restarted run calls again, and commits the call as interrupted.
 - `target-cli` starts a conversation on a target from `sigma --target <t>
 --cwd <path>`, and the TUI shows `on <t>` before the folder, also when the
-  conversation is opened again.
+  conversation is opened again. `--target` without `--cwd` is refused, and
+  an unreachable target prints its reason on one line.
 
 ## How to get to it
 
 ### People
 
 - `sigma --target <t> --cwd <path on t>` and `sigma exec --target <t> --cwd
-<path>`; `--cwd` alone sets a local conversation's folder.
+<path>`; `--cwd` alone sets a local conversation's folder. A remote
+  `--target` needs `--cwd`.
 - The TUI's header shows `on <t>  <path>` for a conversation on a target,
   and the transcript shows `◆ <t> restarted as <instance>: files kept,
 processes gone` or `◆ <t> was replaced by <instance>: ...`.
@@ -101,7 +105,9 @@ Preconditions:
 - **Subagents.** A subagent and a fork act on their parent's target.
 - **Provider.** On ChatGPT the tools and the workspace's `AGENTS.md` and
   skills come through the target. Claude Code on a target (member mode) is
-  not built yet: its own tools would act on the home.
+  not built yet, so it is refused there: its own tools would act on the home.
+- **Read-only server.** It reaches no target: a hello would sweep what an
+  earlier server left running there.
 
 ## Tests
 
@@ -110,7 +116,8 @@ Preconditions:
   `packages/sigma/test/wire.test.ts`.
 - Provider: `target-start, agents-md, skills-found: ...` in
   `packages/sigma/test/openai.test.ts`.
-- Stack: `target-server-restart: ...` in `packages/sigma/test/stack.test.ts`.
+- Stack: `target-server-restart: ...` and `target-cli, target-unavailable: ...`
+  in `packages/sigma/test/stack.test.ts`.
 - Screen: `target-cli: ...` and `target-restarted, target-replaced: ...` in
   `packages/sigma/test/screen.test.ts`.
 

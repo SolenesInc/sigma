@@ -92,6 +92,12 @@ const startWith = (flags: {
   ...Option.match(flags.instructions, { onNone: () => ({}), onSome: (instructions) => ({ instructions }) }),
 })
 
+/** Why these flags cannot start a conversation, if they cannot: a folder here means nothing on another computer. */
+const startRefusal = (flags: { readonly target: Option.Option<string>; readonly cwd: Option.Option<string> }) =>
+  Option.isSome(flags.target) && flags.target.value !== LOCAL_TARGET && Option.isNone(flags.cwd)
+    ? `--target ${flags.target.value} needs --cwd, the folder on that computer to work in`
+    : undefined
+
 const refuseFailedServer = <A, E, R>(effect: Effect.Effect<A, E | ServerFailed, R>) =>
   Effect.catchIf(
     effect,
@@ -216,6 +222,8 @@ const execCommand = Command.make(
     ...startFlags,
   },
   Effect.fn(function* ({ prompt, conversation, json, ...flags }) {
+    const refusal = startRefusal(flags)
+    if (refusal !== undefined) return yield* refuse(refusal)
     const home = defaultHome()
     const id = Option.getOrUndefined(conversation)
     const ok = yield* exec(prompt, id, startWith(flags), json).pipe(
@@ -227,6 +235,7 @@ const execCommand = Command.make(
         InvalidConversationId: (error) => refuse(error.message),
         UnreadableImage: (error) => refuse(error.message),
         ReadOnlyServer: (error) => refuse(error.message),
+        TargetUnavailable: (error) => refuse(error.message),
       }),
     )
     if (ok === false) process.exitCode = 1
@@ -280,6 +289,8 @@ const sigma = Command.make(
     ...startFlags,
   },
   Effect.fn(function* ({ prompt, conversation, ...flags }) {
+    const refusal = startRefusal(flags)
+    if (refusal !== undefined) return yield* refuse(refusal)
     const home = defaultHome()
     const { tui } = yield* Effect.promise(async () => {
       await import("@opentui/solid/preload")
@@ -292,6 +303,7 @@ const sigma = Command.make(
         UnknownProvider: (error) => refuse(error.message),
         UnreadableImage: (error) => refuse(error.message),
         ReadOnlyServer: (error) => refuse(error.message),
+        TargetUnavailable: (error) => refuse(error.message),
       }),
     )
   }),

@@ -7,7 +7,7 @@ import { hostname } from "node:os"
 import { join } from "node:path"
 import type { ExecutionEnv } from "@sigma/env"
 import type { AgentHello } from "@sigma/env/protocol"
-import { type Channel, spawnChannel, TargetPool, type TargetUnreachable } from "@sigma/env/remote"
+import { type Channel, spawnChannel, TargetPool } from "@sigma/env/remote"
 import { defineExtension, type Harness } from "@sigma/harness"
 import { type ConversationId, defineDoc, type Tx } from "@sigma/kernel"
 import { LOCAL_TARGET, TARGET_CHANGED_KIND } from "@sigma/protocol"
@@ -15,7 +15,7 @@ import { Effect } from "effect"
 import type { Home } from "./home.ts"
 
 /** The command sigma asks the connector to run on the target. */
-export const SIGMA_ENV = ["sigma-env"] as const
+const SIGMA_ENV = ["sigma-env"] as const
 
 /** Whether `target` names the server's own machine: absent, or `local`. */
 export const isLocal = (target: string | undefined): target is undefined | typeof LOCAL_TARGET =>
@@ -25,8 +25,7 @@ export const isLocal = (target: string | undefined): target is undefined | typeo
  * Whose commands this home's sigma-env agents run: a hash of the home's hostname and directory, so two homes sharing a
  * target do not kill each other's commands at the sweep (D7).
  */
-export const ownerOf = (home: Home) =>
-  createHash("sha256").update(`${hostname()}\n${home.dir}`).digest("hex").slice(0, 16)
+const ownerOf = (home: Home) => createHash("sha256").update(`${hostname()}\n${home.dir}`).digest("hex").slice(0, 16)
 
 /** A channel that is gone before it opens, for a home with no connector. */
 const refused = (reason: string): Channel => ({
@@ -52,11 +51,14 @@ export const openTargets = (home: Home, connector: ReadonlyArray<string> | undef
 /** The instance and files a conversation's target had when sigma last reached it (D6). */
 export type TargetPair = { readonly instance: string; readonly files: string }
 
-/** The conversation's last pair, and the change the model was last told of. */
-export const TargetDoc = defineDoc<{
-  last?: TargetPair
-  changed?: { readonly to: TargetPair; readonly filesKept: boolean }
-}>({
+/** A change behind a conversation's target: the pair it has now, and whether its files survived. */
+type TargetChange = { readonly to: TargetPair; readonly filesKept: boolean }
+
+/**
+ * The conversation's last pair, and the change the model was last told of. The change is kept, not only announced
+ * once: a request prepared again after the commit that recorded it (a blocking compaction, a crash) must still tell it.
+ */
+export const TargetDoc = defineDoc<{ last?: TargetPair; changed?: TargetChange }>({
   kind: "sigma.target",
   version: 1,
   scope: "conversation",
@@ -87,7 +89,7 @@ export const recordTarget = (tx: Tx, conversation: ConversationId, target: strin
   })
 
 /** What the model reads of the last change behind its target (D6). */
-const changeText = ({ to, filesKept }: { readonly to: TargetPair; readonly filesKept: boolean }) =>
+const changeText = ({ to, filesKept }: TargetChange) =>
   filesKept
     ? `The computer behind this conversation restarted (now instance ${to.instance}). Your files are as you left them; processes you started are gone.`
     : `The computer behind this conversation was replaced (now instance ${to.instance}). Files, processes and changes from before are gone.`
@@ -109,8 +111,7 @@ export const targetSection = (targets: TargetPool, harness: () => Harness) =>
             const target = agent.target
             if (isLocal(target)) return undefined
             const hello = yield* targets.connect(target)
-            const conversation = yield* harness().conversation(conversationId)
-            if (conversation === undefined) return shown.target
+            const conversation = (yield* harness().conversation(conversationId))!
             yield* conversation.commit((tx) => recordTarget(tx, conversationId, target, hello))
             const doc = yield* harness().session.snapshot(TargetDoc, conversationId)
             return doc?.changed === undefined ? undefined : changeText(doc.changed)
@@ -126,5 +127,3 @@ export const envOn = (
   home: Home,
   agent: { readonly cwd?: string; readonly target?: string },
 ): ExecutionEnv => (isLocal(agent.target) ? local(agent.cwd ?? home.dir) : targets.env(agent.target, agent.cwd ?? "/"))
-
-export type { TargetUnreachable }

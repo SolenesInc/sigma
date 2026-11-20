@@ -1,7 +1,7 @@
 // Targets for tests: folders on this machine that `connector.ts` reaches, each running sigma-env as an instance with
 // the ids the test sets. A test restarts an instance by giving it a new instance id, replaces it with new instance and
-// files ids, and loses it by removing it; it stops the running agent by the pid the connector wrote.
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+// files ids, and loses it by removing its instance file; it stops the running agent by the pid the connector wrote.
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 const CONNECTOR = Bun.fileURLToPath(new URL("./connector.ts", import.meta.url))
@@ -33,7 +33,7 @@ export class TestTargets {
   }
 
   /** The ids the target's next sigma-env reports. */
-  set(name: string, instance: string, files: string) {
+  private set(name: string, instance: string, files: string) {
     writeFileSync(join(this.root, name, "instance"), instance)
     writeFileSync(join(this.root, name, "files"), files)
   }
@@ -41,16 +41,6 @@ export class TestTargets {
   /** Makes the target another machine at `from`: what the home has there is not what the target has at `to`. */
   map(name: string, from: string, to: string) {
     writeFileSync(join(this.root, name, "map"), JSON.stringify({ from, to }))
-  }
-
-  /** The pid of the target's sigma-env, as its connector wrote it. */
-  pid(name: string) {
-    return Number(readFileSync(join(this.root, name, "pid"), "utf8"))
-  }
-
-  /** Makes the connector refuse the target from now on. */
-  remove(name: string) {
-    rmSync(join(this.root, name, "instance"))
   }
 
   /** A shell command that kills the target's sigma-env, which a model's bash call can run on it. */

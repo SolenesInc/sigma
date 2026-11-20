@@ -1032,9 +1032,9 @@ const conversationScreen = Effect.fnUntraced(function* (
 
   // Images are the person's, read on this machine: from the conversation's folder when it is here too.
   const remote = info !== undefined && info.target !== LOCAL_TARGET
-  const imageDir = () => (remote ? process.cwd() : (screen.cwd ?? process.cwd()))
+  const imageDir = (cwd: string | undefined) => (remote ? process.cwd() : (cwd ?? process.cwd()))
   if (prompt !== undefined) {
-    const images = imagesIn(prompt, remote ? process.cwd() : (info?.cwd ?? process.cwd()))
+    const images = imagesIn(prompt, imageDir(info?.cwd))
     yield* client["conversation/submit"]({
       conversation,
       requestId: crypto.randomUUID(),
@@ -1157,7 +1157,7 @@ const conversationScreen = Effect.fnUntraced(function* (
     submit: (text, steer) => {
       if (readOnly()) return setNotice(READ_ONLY_NOTICE)
       setNotice(undefined)
-      const images = imagesIn(text, imageDir())
+      const images = imagesIn(text, imageDir(screen.cwd))
       const payload = {
         conversation,
         requestId: crypto.randomUUID(),
@@ -1182,7 +1182,7 @@ const conversationScreen = Effect.fnUntraced(function* (
         ),
       )
     },
-    attachments: (text) => attachmentsIn(text, imageDir()).map((attachment) => attachment.name),
+    attachments: (text) => attachmentsIn(text, imageDir(screen.cwd)).map((attachment) => attachment.name),
     answer: (allow) => {
       const asking = [root, ...Object.values(tree.children)].find((each) => pendingCalls(each.docs()).length > 0)
       const pending = asking && pendingCalls(asking.docs())[0]

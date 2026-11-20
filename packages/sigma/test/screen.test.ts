@@ -109,18 +109,30 @@ test("target-cli: sigma --target --cwd starts a conversation on the target, the 
   await quit(reopened)
 })
 
-test("target-restarted, target-replaced: the TUI shows when the computer behind its target restarted", async () => {
+test("target-restarted, target-replaced: the TUI shows when the computer behind its target restarted or was replaced", async () => {
   using targets = new TestTargets()
   const work = targets.add("box", "box-1", "vol-1")
   const sigmaHome = home()
   writeFileSync(join(sigmaHome.dir, "config.toml"), targets.configToml)
   const restart = `echo box-2 > ../instance; ${targets.killCommand("box")}`
-  const script = [{ tool: { name: "bash", input: { command: restart } } }, { text: "noted" }]
+  const replace = `echo box-3 > ../instance; echo vol-3 > ../files; ${targets.killCommand("box")}`
+  const script = [
+    { tool: { name: "bash", input: { command: restart } } },
+    { text: "noted" },
+    { tool: { name: "bash", input: { command: replace } } },
+    { text: "noted again" },
+  ]
   const session = await open(script, ["--target", "box", "--cwd", work, "--auto"], sigmaHome)
   await session.waitFor((screen) => screen.includes("READY"))
   session.type("go\r")
   await session.waitFor(
-    (screen) => screen.includes("box restarted as box-2: files kept, processes gone") && screen.includes("noted"),
+    (screen) => screen.includes("box restarted as box-2: files kept, processes gone") && screen.includes("READY"),
+  )
+  session.type("again\r")
+  await session.waitFor(
+    (screen) =>
+      screen.includes("box was replaced by box-3: files, processes and changes from before are gone") &&
+      screen.includes("noted again"),
   )
   await quit(session)
 })

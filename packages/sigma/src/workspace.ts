@@ -199,28 +199,31 @@ const skillsInstructions = (skills: ReadonlyArray<Skill>, read: string) =>
 
 const skillName = (text: string) => (text.match(/^[\p{L}\p{N}\-_.:]*/u)?.[0] ?? "").replace(/[.:]+$/, "")
 
-/** The skills `text` names, each with its `SKILL.md` read through `env` now. */
+/** The skills `text` names, each with its `SKILL.md` read through `env` now; `skills` is read only when it names one. */
 export const attachedSkills = (
   env: ExecutionEnv,
   text: string,
-  skills: ReadonlyArray<Skill>,
-): Effect.Effect<Array<AttachedSkill>> => {
-  const trimmed = text.trimStart()
-  const names = [
-    ...(trimmed.startsWith("/") ? [skillName(trimmed.slice(1))] : []),
-    ...[...trimmed.matchAll(/\$/g)].map((match) => skillName(trimmed.slice(match.index + 1))),
-  ]
-  const named: Array<Skill> = []
-  for (const name of names) {
-    const skill = skills.find((known) => known.name === name)
-    if (skill && !named.includes(skill)) named.push(skill)
-  }
-  return Effect.map(all(named.map((skill) => read(env, skill.path))), (texts) =>
-    named.flatMap((skill, at) =>
+  skills: Effect.Effect<ReadonlyArray<Skill>>,
+): Effect.Effect<Array<AttachedSkill>> =>
+  Effect.gen(function* () {
+    const trimmed = text.trimStart()
+    const names = [
+      ...(trimmed.startsWith("/") ? [skillName(trimmed.slice(1))] : []),
+      ...[...trimmed.matchAll(/\$/g)].map((match) => skillName(trimmed.slice(match.index + 1))),
+    ]
+    // Text that names no skill reads nothing, so most input is taken without a look at the workspace.
+    if (names.length === 0) return []
+    const known = yield* skills
+    const named: Array<Skill> = []
+    for (const name of names) {
+      const skill = known.find((candidate) => candidate.name === name)
+      if (skill && !named.includes(skill)) named.push(skill)
+    }
+    const texts = yield* all(named.map((skill) => read(env, skill.path)))
+    return named.flatMap((skill, at) =>
       texts[at] === undefined ? [] : [{ name: skill.name, path: skill.path, text: texts[at]! }],
-    ),
-  )
-}
+    )
+  })
 
 export interface AgentType {
   readonly name: string
@@ -332,11 +335,10 @@ export const workspaceInstructions = (
 export const skillsOf = (
   instances: ReadonlyMap<string, ProviderInstance>,
   agent: { readonly model?: { readonly provider: string } },
-  workspace: Workspace | undefined,
+  workspace: Workspace,
 ): Effect.Effect<ReadonlyArray<Skill>> => {
   const provider = agent.model?.provider
-  if (provider === undefined || instances.get(provider)?.kind !== "openai" || workspace === undefined)
-    return Effect.succeed([])
+  if (provider === undefined || instances.get(provider)?.kind !== "openai") return Effect.succeed([])
   return skillsFor(workspace)
 }
 

@@ -386,6 +386,17 @@ test("mode-print, answer-exec, server-on-demand: sigma exec starts a server, pri
   ])
 }, 30_000)
 
+test("target-cli, target-unavailable: sigma exec refuses --target without --cwd, and says why a target cannot be reached", async () => {
+  const env = await scriptEnv(home(), [{ text: "never" }])
+  const noFolder = await finished(sigma(["exec", "--target", "box", "go"], env))
+  expect(noFolder).toMatchObject({ code: 1, stdout: "" })
+  expect(noFolder.stderr).toBe("--target box needs --cwd, the folder on that computer to work in\n")
+  const unreachable = await finished(sigma(["exec", "--target", "box", "--cwd", "/work", "go"], env))
+  expect(unreachable).toMatchObject({ code: 1, stdout: "" })
+  expect(unreachable.stderr).toStartWith("target box unavailable: this home has no target_connector")
+  expect(unreachable.stderr.trimEnd().split("\n")).toHaveLength(1)
+}, 30_000)
+
 test("mode-print, answer-exec-fail: sigma exec exits 1 and says why when the run fails", async () => {
   const env = await scriptEnv(home(), [{ text: "half an ", fail: "provider went away" }])
   const result = await finished(sigma(["exec", "go"], env))
