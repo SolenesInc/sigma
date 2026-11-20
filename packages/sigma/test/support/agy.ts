@@ -61,6 +61,13 @@ export class FakeAgy {
       .filter((frame) => method === undefined || frame.method === method)
   }
 
+  /** What sigma's MCP server, its bridge, answered agy, in order. */
+  mcpAnswers(): Array<any> {
+    return this.log()
+      .filter((entry) => entry.mcp !== undefined)
+      .map((entry) => entry.mcp)
+  }
+
   /** The texts of each prompt sigma sent, in order. */
   prompts(): Array<string> {
     return this.received("session/prompt").map((frame) =>

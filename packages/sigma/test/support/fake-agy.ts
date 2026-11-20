@@ -2,7 +2,8 @@
 // it to FAKE_AGY_DIR/log.ndjson. A journey is ndjson: a `spawn` line starts each process; `expect_outbound` waits for
 // the frame sigma sends (a request by method, an answer by id, a notification by method); `emit_inbound` writes what
 // agy said; `hook` runs the Stop hook sigma gave the session as `additionalDirectories`, as agy does at a turn-over; and
-// `exit` ends the process. The ids sigma chose are mapped to the ones it sends now; `<workspace>` is the session's
+// `exit` ends the process. `mcp_inbound` writes what agy sent sigma's MCP server, which it starts from the session's
+// `mcpServers` as agy does, and `mcp_outbound` waits for that server's answer of the same id and logs it. The ids sigma chose are mapped to the ones it sends now; `<workspace>` is the session's
 // folder. An account probe, a process whose folder is a `sigma-agy-probe-` one, plays FAKE_AGY_PROBE instead, by
 // default `models.ndjson`.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -96,6 +97,44 @@ const receive = async (wanted: (frame: any) => boolean) => {
   }
 }
 
+/** Sigma's MCP server for the session, the first of its `mcpServers`, started at the first `mcp_inbound`. */
+let mcpServers: Array<{ command: string; args: string[]; env?: Array<{ name: string; value: string }> }> = []
+let mcp: { write: (frame: unknown) => void; receive: (wanted: (frame: any) => boolean) => Promise<any> } | undefined
+const startMcp = () => {
+  const server = mcpServers[0]!
+  const env: Record<string, string> = { ...(process.env as Record<string, string>) }
+  for (const { name, value } of server.env ?? []) env[name] = value
+  const child = Bun.spawn([server.command, ...server.args], { stdin: "pipe", stdout: "pipe", stderr: "inherit", env })
+  const frames: Array<any> = []
+  let arrived: (() => void) | undefined
+  void (async () => {
+    let buffer = ""
+    for await (const chunk of child.stdout) {
+      buffer += new TextDecoder().decode(chunk)
+      let newline: number
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline)
+        buffer = buffer.slice(newline + 1)
+        if (line.trim() !== "") frames.push(JSON.parse(line))
+        arrived?.()
+      }
+    }
+  })()
+  return {
+    write: (frame: unknown) => {
+      child.stdin.write(`${JSON.stringify(frame)}\n`)
+      child.stdin.flush()
+    },
+    receive: async (wanted: (frame: any) => boolean) => {
+      while (true) {
+        const index = frames.findIndex(wanted)
+        if (index >= 0) return frames.splice(index, 1)[0]
+        await new Promise<void>((resolve) => (arrived = resolve))
+      }
+    },
+  }
+}
+
 /** Runs the Stop hook sigma gave the session, with agy's payload for `session`. */
 const stop = async (session: string) => {
   if (hooks === undefined) return
@@ -129,10 +168,13 @@ for (const step of segments[probe ? 0 : spawn] ?? []) {
       if (expected.method === "session/new" || expected.method === "session/load") {
         workspace = params.cwd ?? workspace
         hooks = params.additionalDirectories?.[0]
+        mcpServers = params.mcpServers ?? []
       }
     } else received = await receive((frame) => frame.method === undefined && frame.id === expected.id)
     log({ received })
   } else if (step.type === "emit_inbound") write(substitute(step.frame))
+  else if (step.type === "mcp_inbound") (mcp ??= startMcp()).write(substitute(step.frame))
+  else if (step.type === "mcp_outbound") log({ mcp: await mcp!.receive((frame) => frame.id === step.frame.id) })
   else if (step.type === "hook") await stop(step.session)
   else if (step.type === "exit") {
     log({ exited: `exit ${step.code}` })

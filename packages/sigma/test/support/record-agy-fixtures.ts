@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect } from "effect"
 import { agyAccount } from "@sigma/agy"
+import type { ScriptStep } from "@sigma/models"
 import { RawClient } from "./raw.ts"
 import { person, runEnds, runningServer, settled, submit, tempHome, type ViewWatch, watchView } from "./server.ts"
 
@@ -35,6 +36,8 @@ type Journey = {
   readonly ask?: "ask" | "auto"
   /** agy signed out: it runs in an empty home of its own. */
   readonly signedOut?: boolean
+  /** The steps of the home's `script` provider, which a worker the journey's Gemini starts there plays. */
+  readonly script?: ReadonlyArray<ScriptStep>
   readonly run: (session: Session) => Promise<void>
 }
 
@@ -152,6 +155,25 @@ const journeys: Record<string, Journey> = {
       await s.settle(2)
     },
   },
+  worker_parent: {
+    script: [{ agent: "/root/helper", text: "hello from the worker" }],
+    run: async (s) => {
+      await s.submit(
+        "Use the mcp_sigma_start_worker tool with task_name helper, provider script and message: Say hello. Then call mcp_sigma_wait_worker, and reply with exactly the text the worker sent.",
+      )
+      await s.settle(1)
+    },
+  },
+  worker_wait_limit: {
+    // The worker's bash call waits for a person nobody is, so it never answers.
+    script: [{ agent: "/root/slow", tool: { name: "bash", input: { command: "echo made" } } }],
+    run: async (s) => {
+      await s.submit(
+        "Use the mcp_sigma_start_worker tool with task_name slow, provider script and message: Make it. Then call mcp_sigma_wait_worker once with timeout_ms 600000, and reply with exactly what it returned, without calling it again.",
+      )
+      await s.settle(1)
+    },
+  },
   subagent_wake: {
     ask: "auto",
     run: async (s) => {
@@ -175,7 +197,7 @@ const record = async (name: string, journey: Journey) => {
     home,
     agy: { executable: RECORDER, env: { RECORD_AGY_TO: to, ...(journey.signedOut ? signedOutEnv() : {}) } },
   }
-  let server = await runningServer([], options)
+  let server = await runningServer(journey.script ?? [], options)
   let client = await RawClient.connect(home.socket)
   const conversation = (
     await client.call("conversation/start", {
@@ -208,7 +230,7 @@ const record = async (name: string, journey: Journey) => {
     restart: async () => {
       client.close()
       await server.stop()
-      server = await runningServer([], options)
+      server = await runningServer(journey.script ?? [], options)
       client = await RawClient.connect(home.socket)
       view = watchView(client, conversation)
     },

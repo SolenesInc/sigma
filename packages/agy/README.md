@@ -14,12 +14,19 @@ an `agy` instance's account. Measured against `agy` 1.5.13.
 - `src/process.ts`: one `agy` process as the hosted run's connection. It opens a fresh session (`session/new`, with
   the conversation's instructions as `_meta.antigravity.systemPrompt.append`) or loads one (`session/load`, dropping
   the updates the load replays), then sets `model` and `thought_level` after every open. It never changes `agy`'s
-  mode and offers it no MCP servers. Its translation: message chunks are what was said, a tool call is a sighted call
+  mode. Its translation: message chunks are what was said, a tool call is a sighted call
   (`beforeRun`), a permission request is `approve` (`allow_once` or `reject_once`; a denial is committed as the call's
   result), and a prompt's result is the turn-over with what it spent. A call still running at the turn-over is a job,
   whose `completed` or `failed` is its end; anything `agy` says while no turn is open is a turn it began by itself,
   which the Stop hook ends. An idle stop cancels the session; closing sends `session/close`. A conversation on a
   target other than `local` is refused, since `agy`'s tools act where `agy` runs.
+- `src/bridge.ts`: sigma's own tools (`ProcessConfig.own`) over MCP (D14). Each process serves them on a unix socket
+  in the folder the adapter is given (the home's `bridges/`), and offers `agy` one stdio MCP server, `sigma`, whose
+  command pipes to that socket (`sigma mcp-bridge <socket>`). `agy` names them `mcp_sigma_<name>`, asks permission for
+  each call, which the process allows at once since the tool's task asks a person (F18), and then sends a `tools/call`
+  with no call id, which the process pairs with the call it announced by name and arguments, less the `toolSummary`
+  `agy` adds to every announced call, and runs through `runOwn`. A call from one of `agy`'s own subagents, under
+  another conversation id, is refused. The adapter's `ownToolLimit` is 150 s: `agy` cuts an MCP call at 180 s (F28).
 - `src/account.ts`: whether `agy` is signed in and which models and thinking levels it offers, from a probe that
   initializes and opens one session; signing in is `agy`'s own, in a terminal.
 

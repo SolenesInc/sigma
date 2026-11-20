@@ -277,7 +277,7 @@ test("claude-idle-compaction: an idle Claude conversation past 200,000 tokens co
   // The recording's runs report a context of about 230,000 tokens and write the 1-hour cache.
   using claude = new FakeClaude("idle_compaction")
   const clock = await testClock()
-  await using session = await conversationWith(claude, { approvals: "auto" }, { claudeClock: clock })
+  await using session = await conversationWith(claude, { approvals: "auto" }, { clock })
   await session.submit("Reply with exactly: one")
   await session.view.until(settled(1))
   // Past the 30 minutes a process waits for its next run: one that waits to compact stays live.
@@ -306,7 +306,7 @@ test("claude-idle-compaction: a conversation whose last request wrote the 5-minu
   // Recorded under a sign-in Claude Code gives the 5-minute cache, as it does an API key.
   using claude = new FakeClaude("idle_compaction_5m")
   const clock = await testClock()
-  await using session = await conversationWith(claude, { approvals: "auto" }, { claudeClock: clock })
+  await using session = await conversationWith(claude, { approvals: "auto" }, { clock })
   await session.submit("Reply with exactly: one")
   await session.view.until(settled(1))
   await advance(clock, "3 minutes")
@@ -323,7 +323,7 @@ test("claude-idle-compaction, claude-idle-release: a short context, or claude_id
   ] as const) {
     using claude = new FakeClaude(fixture)
     const clock = await testClock()
-    await using session = await conversationWith(claude, { approvals: "auto" }, { claudeClock: clock, config })
+    await using session = await conversationWith(claude, { approvals: "auto" }, { clock, config })
     await session.submit(fixture === "text" ? "Reply with exactly: fixture text ok" : "Reply with exactly: one")
     await session.view.until(settled(1))
     await advance(clock, "1 hour")

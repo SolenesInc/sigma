@@ -50,8 +50,8 @@ export interface ServerOptions {
   /** How long a Claude Code process stays live after its run; 0 closes it when the run ends. */
   readonly claudeIdle?: Duration.Input
   readonly claudeStop?: Duration.Input
-  /** The clock the live Claude Code processes keep time by, which the test advances. */
-  readonly claudeClock?: Clock.Clock
+  /** The clock the live Claude Code processes and `wait_worker` keep time by, which the test advances. */
+  readonly clock?: Clock.Clock
   /** Seconds `bash` lets a command run when its call gives no `timeout`. */
   readonly bashTimeout?: number
 }
@@ -86,7 +86,7 @@ export const runningServer = async (
         ...(options.readOnly === undefined ? {} : { readOnly: options.readOnly }),
         ...(options.claudeIdle === undefined ? {} : { claudeIdle: options.claudeIdle }),
         ...(options.claudeStop === undefined ? {} : { claudeStop: options.claudeStop }),
-        ...(options.claudeClock === undefined ? {} : { claudeClock: options.claudeClock }),
+        ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.bashTimeout === undefined ? {} : { bashTimeout: options.bashTimeout }),
       }).pipe(Layer.provide(recorder)),
       scope,

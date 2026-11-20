@@ -1,7 +1,7 @@
 // Records a real `agy acp` as a `fixtures/agy` journey: a server given this as its agy executable runs the real agy,
 // and every frame sigma sends (`expect_outbound`) and agy answers (`emit_inbound`) is appended to RECORD_AGY_TO, after a
 // `spawn` line per process. The Stop hook sigma gives a session is wrapped: agy runs the recorder's hook, which records
-// a `hook` line and then runs sigma's. The session's folder becomes `<workspace>` and the home directory /home/person.
+// a `hook` line and then runs sigma's; so is sigma's MCP server, by `record-agy-mcp.ts`. The session's folder becomes `<workspace>` and the home directory /home/person.
 // What agy writes may quote the recording machine: read a recording before committing it. RECORD_AGY_REAL names the
 // real agy; default `agy` on PATH.
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
@@ -62,11 +62,18 @@ const outbound = lines(Bun.stdin.stream(), (line) => {
   if (frame.method === "session/new" || frame.method === "session/load") {
     workspace = frame.params.cwd
     const given = frame.params.additionalDirectories?.[0]
-    if (given !== undefined) frame.params.additionalDirectories = [wrapHooks(given)]
     record({
       type: "expect_outbound",
       frame: { ...frame, params: { ...frame.params, additionalDirectories: ["<hooks>"] } },
     })
+    if (given !== undefined) frame.params.additionalDirectories = [wrapHooks(given)]
+    // Sigma's MCP server, its bridge, runs under the recorder's, which records what passes through it.
+    frame.params.mcpServers = (frame.params.mcpServers ?? []).map((server: any) => ({
+      ...server,
+      command: process.execPath,
+      args: [join(import.meta.dir, "record-agy-mcp.ts"), server.command, ...server.args],
+      env: [...(server.env ?? []), { name: "RECORD_AGY_TO", value: to }],
+    }))
   } else record({ type: "expect_outbound", frame })
   child.stdin.write(`${JSON.stringify(frame)}\n`)
   child.stdin.flush()

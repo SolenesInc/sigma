@@ -1,8 +1,9 @@
 # Workers
 
-A model on sigma's own loop (ChatGPT, or the script), and Claude Code, which
-reaches them over sigma's MCP server as `mcp__sigma__<tool>`, can start
-workers with the worker tools: `start_worker`, `wait_worker`, `message_worker`,
+A model on sigma's own loop (ChatGPT, or the script), Claude Code, which
+reaches them over sigma's MCP server as `mcp__sigma__<tool>`, and Gemini
+through `agy`, which reaches them as `mcp_sigma_<tool>` over sigma's bridge,
+can start workers with the worker tools: `start_worker`, `wait_worker`, `message_worker`,
 `assign_worker`, `list_workers` and `stop_worker`. A worker is a conversation
 of its own, under its parent in a tree, on any ready provider of the home:
 its parent's, by default, or the `provider` and `model` its `start_worker`
@@ -43,6 +44,9 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
   appended system prompt, before the conversation's instructions, naming
   `mcp__sigma__start_worker`; on a target, where Claude Code has no Agent
   tool, it says `For a quick helper inside your own turn, do the work yourself.`
+  `agy` gets it as `_meta.antigravity.systemPrompt.append` on `session/new`,
+  naming `mcp_sigma_start_worker`. A harness's section also says that every
+  worker it starts begins from its message alone.
 - `worker-claude-parent` offers a local Claude Code the six worker tools on
   sigma's MCP server `sigma`, beside its own tools and the person's settings,
   each always loaded rather than behind its tool search. Each call is committed
@@ -51,6 +55,16 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
   prompt for it is allowed at once (`"behavior":"allow"` in the fake's log),
   and a tool that asks a person asks once, through sigma, as on a target. A
   call a Claude subagent makes is committed in the subagent's conversation.
+- `worker-gemini-parent` offers Gemini the six worker tools over MCP: `agy`
+  starts `sigma mcp-bridge <socket>` from the session's `mcpServers`, which
+  pipes its stdio to a socket in the home's `bridges/` that the `agy` process
+  serves; the socket goes with the process, and a server that starts removes
+  any a killed one left. Each `tools/call` is paired with the call `agy`
+  announced by name and arguments, committed under sigma's name with the
+  arguments `agy` passed over MCP (not the `toolSummary` it adds to the
+  announced call), and run by sigma; `agy`'s own permission request for it is
+  allowed at once, so a tool that asks a person asks once, through sigma. A
+  call from one of `agy`'s own subagents is refused.
 - `worker-wake-mail` mails a worker's answer naming its jobs still working,
   as `Still working: "<job title>".` after the answer, and never waits for
   them. When a job's end wakes an idle Claude Code worker, the wake run's
@@ -58,9 +72,10 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
   returns with `"kind": "message"`.
 - `worker-fork` gives a worker on its parent's provider its parent's history up to the start
   (its view's `conversation.parent`), or none with `"fork_turns": "none"`. Only a
-  parent on sigma's own loop forks: a Claude Code parent's worker, on Claude
-  Code too, starts a session of its own from its brief, its workers section
-  says so; it does not fork with `"fork_turns": "all"` either.
+  parent on sigma's own loop forks: a Claude Code or Gemini parent's worker,
+  on its own provider too, starts a session of its own from its brief, as
+  `start_worker`'s description and its workers section say; it does not fork
+  with `"fork_turns": "all"` either.
 - `worker-model` runs a worker on its parent's model, or on the `model` and
   `effort` its `start_worker` names, unchanged. A provider whose loop sigma
   runs must list the model, or the call fails; Claude Code takes any name.
@@ -89,7 +104,10 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
 - `worker-wait` returns `{"timed_out": true, "received": []}` when nothing
   arrives within `timeout_ms` (default 30 s, clamped to 10 s at least, with a
   `message` saying so), and returns early, with nothing received and
-  `Wait interrupted by new input.`, when a person steers input in.
+  `Wait interrupted by new input.`, when a person steers input in. A parent
+  on `agy`, which cuts an MCP call at 180 s, waits at most 150 s per call,
+  and a wait cut short says
+  `Waited 150000ms, the longest one call can wait here; call wait_worker again to keep waiting.`
 - `worker-person` answers a person's input to a worker in the worker's own
   conversation; its parent is told nothing.
 - `worker-assign` wakes an idle worker with `assign_worker`, and each of
@@ -569,7 +587,8 @@ Preconditions:
   `lineage` naming `parent`, `root`, `call` (the `start_worker` call's id),
   `title` and `task`, and with the model its `start_worker` named. Ids are
   numbers, or the id a client chose at `conversation/start`.
-- **Provider.** Claude keeps Claude Code's own subagents, which take input only through their parent. OpenAI uses Codex's agent tools.
+- **Provider.** Claude Code and `agy` keep their own subagents, which take input only through their parent; `agy`'s are not shown as conversations. OpenAI uses the worker tools alone.
+- **Every pair of providers.** A parent on any of Claude Code, ChatGPT and Gemini starts a worker on either of the other two with the same tools, and reads its answer the same way. The real-account round trips below drive all six.
 
 ## Tests
 
@@ -622,6 +641,12 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - target-member-mode, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types
 - claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation
 - worker-claude-parent, worker-fork: a Claude Code parent's worker on Claude Code starts a session of its own from its brief, not a fork of the parent's
+
+Provider, `packages/sigma/test/agy.test.ts`:
+
+- gemini-answer, provider-agy, worker-section: Gemini's answer through agy is committed as sigma's message, with what the turn spent
+- worker-gemini-parent, worker-answer: Gemini starts a worker through sigma's MCP bridge and reads its answer with wait_worker; agy's own asks for sigma's tools are allowed at once and nobody is asked
+- worker-gemini-parent, worker-wait: a Gemini parent's wait returns timed out within 150 s, before agy would cut the call, saying to wait again
 - worker-wake-mail: a Claude Code worker whose run ends with a job working mails its answer naming the job, and the parent never waits for the job
 - worker-wake-mail: a Claude Code worker's wake run, after its job ends, mails its answer to the parent as a message naming no job left
 - subagent-claude: a Claude subagent works in a conversation of its own under the one that started it
@@ -644,6 +669,10 @@ Provider, `packages/sigma/test/claude.test.ts`:
   sits until its timeout.
 - A subagent's run is its own: wait for its end with `watch` on its
   conversation, not the parent's.
+- The fake `agy` plays a recording's `mcp_inbound` lines into the real
+  `sigma mcp-bridge` it starts from the session's `mcpServers`, and logs the
+  bridge's answers as `mcp` lines. `record-agy` records them by running the
+  bridge under `record-agy-mcp.ts`.
 - `[agents]` is read when the server starts: write `config.toml` before the
   first `exec`, `serve` or TUI start, or `rpc server/stop` after it.
 - A recording proves sigma's side only; the fake Claude does not run the
@@ -657,7 +686,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 ## With a real account
 
 Proves that a real model chooses to start subagents and that Claude Code's
-real subagents ask. Follow the skill's [Real accounts](../SKILL.md#real-accounts),
+real subagents ask, and that each harness starts workers on the other two. Follow the skill's [Real accounts](../SKILL.md#real-accounts),
 and start each run with its first check. No step needs a person. Give every
 `tui wait` `--timeout 180000`, and save `evidence/` and the screens.
 
@@ -706,3 +735,25 @@ message...`) as its summary; neither the card nor the subagent shows that
   wait for `waiting on you`: the card shows `allow Bash(touch /tmp/sigma-verify/r/sub-made)?`.
   Press `C-y` and wait for `READY`: the card reads `done`, and
   `/tmp/sigma-verify/r/sub-made` exists.
+
+Round trips between any two, in one run made with
+`drive.ts r up --real-claude --real-agy --openai-kept`, after its first
+check names all three `ready`. For each parent `<p>` of `claude`, `openai`
+and `agy`, and each other provider `<w>`, start the parent with
+`drive.ts r rpc conversation/start '{"author": {"id": "ada", "name": "ada"}, "cwd": "/tmp/sigma-verify/r", "provider": "<p>", "approvals": "auto"}'`
+(add `"model": "gemini-4-hydrogen", "effort": "low"` for `agy`), then
+`drive.ts r watch <id> --submit 'Start a worker on the provider <w> with the message: reply with exactly: found it. Wait for it with wait_worker, then tell me what it said.' --until run_end --timeout 300000 --save <p>-<w>`:
+one `start_worker` with `"provider": "<w>"`, a `wait_worker` whose result
+holds `found it` from `/root/...`, and the parent's answer naming it;
+`conversation/list` holds the worker on `<w>` with the parent as `parent`.
+
+- **A Gemini worker that wakes.** From a Claude parent, send
+  `Start a worker on the provider agy with the message: run the shell command "sleep 30; echo woke-marker" in the background, reply with exactly: started, and when it finishes tell me what it printed. Wait for it with wait_worker until you have its second message, then tell me what it printed.`:
+  the first `wait_worker` returns `final_answer` `started` with
+  `Still working: "..."`, a later one returns a `message` naming
+  `woke-marker`, and the worker's conversation shows a `hosted.report` and a
+  second `sigma.run_end`.
+- **The worker-choice eval.** `bun .agents/skills/verify-sigma/evals/worker-choice/run.ts`
+  runs the requests in that folder's `cases.json` on the three providers,
+  three runs a cell, and prints a table of case by harness; its README says
+  what each case counts as right and when to rerun it.

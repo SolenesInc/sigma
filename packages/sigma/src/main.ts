@@ -280,6 +280,34 @@ const schemaCommand = Command.make(
   }),
 ).pipe(Command.withDescription("Print the protocol's JSON Schema"))
 
+/**
+ * Pipes stdio to a bridge socket: `agy` starts it as the MCP server of sigma's own tools, which the server serves on
+ * that socket (D14). It ends when either side does.
+ */
+const mcpBridgeCommand = Command.make(
+  "mcp-bridge",
+  { socket: Argument.String("socket").pipe(Argument.withDescription("The bridge socket the server made")) },
+  Effect.fn(function* ({ socket }) {
+    yield* Effect.promise(async () => {
+      const { promise: ended, resolve: end } = Promise.withResolvers<void>()
+      const connection = await Bun.connect({
+        unix: socket,
+        socket: {
+          data: (_socket, chunk) => void process.stdout.write(chunk),
+          close: () => end(),
+          error: () => end(),
+        },
+      })
+      void (async () => {
+        for await (const chunk of Bun.stdin.stream()) connection.write(chunk)
+        connection.end()
+        end()
+      })()
+      await ended
+    })
+  }),
+).pipe(Command.withDescription("Serve sigma's tools to agy over stdio (started by agy, not by people)"))
+
 const sigma = Command.make(
   "sigma",
   {
@@ -311,7 +339,7 @@ const sigma = Command.make(
   }),
 ).pipe(
   Command.withDescription("A durable coding agent that many clients share"),
-  Command.withSubcommands([serveCommand, execCommand, loginCommand, logoutCommand, schemaCommand]),
+  Command.withSubcommands([serveCommand, execCommand, loginCommand, logoutCommand, schemaCommand, mcpBridgeCommand]),
 )
 
 sigma.pipe(

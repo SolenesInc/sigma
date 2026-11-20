@@ -1,7 +1,12 @@
 // Gemini through agy: a real server in process, driven as a raw JSON-RPC client, with agy played by the fake `agy`
 // replaying a recorded `agy acp` process per spawn (fixtures/agy, recorded with Gemini 4 Hydrogen at low thinking).
 import { expect, test } from "bun:test"
+import { Duration, Effect } from "effect"
+import { TestClock } from "effect/testing"
+import type { ScriptStep } from "@sigma/models"
 import type { EntryRecord, ProviderModels, ProviderSnapshot } from "@sigma/protocol"
+import { readdirSync } from "node:fs"
+import { join } from "node:path"
 import { FakeAgy } from "./support/agy.ts"
 import { TestTargets } from "./support/targets.ts"
 import { RawClient } from "./support/raw.ts"
@@ -49,8 +54,13 @@ const calls = (entries: ReadonlyArray<EntryRecord>) =>
 const usageOf = (watch: ViewWatch) =>
   watch.view().docs["pi.usage"] as { models?: Record<string, { input: number; output: number; cacheRead: number }> }
 
-const conversationWith = async (agy: FakeAgy, ask: Record<string, string> = {}, options: ServerOptions = {}) => {
-  let server = await runningServer([], { ...options, agy: agy.options })
+const conversationWith = async (
+  agy: FakeAgy,
+  ask: Record<string, string> = {},
+  options: ServerOptions = {},
+  script: ReadonlyArray<ScriptStep> = [],
+) => {
+  let server = await runningServer(script, { ...options, agy: agy.options })
   let client = await RawClient.connect(server.home.socket)
   const conversation = (
     await client.call("conversation/start", {
@@ -86,7 +96,7 @@ const conversationWith = async (agy: FakeAgy, ask: Record<string, string> = {}, 
     restart: async () => {
       client.close()
       await server.stop()
-      server = await runningServer([], { ...options, agy: agy.options, home: server.home })
+      server = await runningServer(script, { ...options, agy: agy.options, home: server.home })
       client = await RawClient.connect(server.home.socket)
       view = watchView(client, conversation)
       await view.until(() => true)
@@ -98,7 +108,7 @@ const conversationWith = async (agy: FakeAgy, ask: Record<string, string> = {}, 
   }
 }
 
-test("gemini-answer, provider-agy: Gemini's answer through agy is committed as sigma's message, with what the turn spent", async () => {
+test("gemini-answer, provider-agy, worker-section: Gemini's answer through agy is committed as sigma's message, with what the turn spent", async () => {
   using agy = new FakeAgy("text")
   await using session = await conversationWith(agy)
   await session.submit("Reply with exactly: fixture text ok")
@@ -114,15 +124,110 @@ test("gemini-answer, provider-agy: Gemini's answer through agy is committed as s
   // The session opened with the conversation's model and thinking level, and sigma's Stop hook beside it.
   const [opened] = agy.received("session/new")
   expect(opened.params.additionalDirectories).toHaveLength(1)
-  expect(opened.params.mcpServers).toEqual([])
-  // agy is offered none of sigma's tools, so a conversation without instructions appends nothing to its prompt.
-  expect(opened.params._meta).toBeUndefined()
+  // agy is offered sigma's worker tools on one MCP server, sigma's bridge, and its prompt gains their section by the
+  // names agy gives them.
+  expect(opened.params.mcpServers).toEqual([
+    { name: "sigma", command: expect.any(String), args: expect.arrayContaining(["mcp-bridge"]), env: [] },
+  ])
+  const appended: string = opened.params._meta.antigravity.systemPrompt.append
+  expect(appended).toStartWith("Workers. This session can start workers with the mcp_sigma_start_worker tool.")
+  expect(appended).toContain("Every worker you start, on your provider too, starts from your message alone")
   expect(agy.received("session/set_config_option").map((frame) => [frame.params.configId, frame.params.value])).toEqual(
     [
       ["model", MODEL],
       ["thought_level", "low"],
     ],
   )
+})
+
+test("worker-gemini-parent, worker-answer: Gemini starts a worker through sigma's MCP bridge and reads its answer with wait_worker; agy's own asks for sigma's tools are allowed at once and nobody is asked", async () => {
+  using agy = new FakeAgy("worker_parent")
+  await using session = await conversationWith(agy, {}, {}, [{ agent: "/root/helper", text: "hello from the worker" }])
+  await session.submit(
+    "Use the mcp_sigma_start_worker tool with task_name helper, provider script and message: Say hello. Then call mcp_sigma_wait_worker, and reply with exactly the text the worker sent.",
+  )
+  await session.view.until(settled(1))
+  const entries = session.view.view().entries
+  // Each call is committed once, under sigma's name, with the arguments agy passed over MCP: not agy's toolSummary.
+  expect(calls(entries).map(({ name, arguments: args }) => ({ name, arguments: args }))).toEqual([
+    { name: "start_worker", arguments: { message: "Say hello", provider: "script", task_name: "helper" } },
+    { name: "wait_worker", arguments: {} },
+  ])
+  expect(results(entries).map(({ text, isError }) => ({ text: JSON.parse(text), isError }))).toEqual([
+    { text: { task_name: "/root/helper" }, isError: false },
+    {
+      text: {
+        timed_out: false,
+        received: [{ from: "/root/helper", kind: "final_answer", text: "hello from the worker" }],
+      },
+      isError: false,
+    },
+  ])
+  expect(transcript(entries).slice(-2)).toEqual(["assistant: hello from the worker", "run_end: answered"])
+  // agy's permission requests for the two calls were allowed at once, and no approval reached a person.
+  expect(
+    agy
+      .received()
+      .filter((frame) => frame.result?.outcome !== undefined)
+      .map((frame) => frame.result.outcome),
+  ).toEqual([
+    { outcome: "selected", optionId: "allow" },
+    { outcome: "selected", optionId: "allow" },
+  ])
+  expect(session.view.seen().filter((entry) => entry.kind === "sigma.approval")).toEqual([])
+  // agy heard each result over the bridge.
+  expect(agy.mcpAnswers().map((answer) => answer.result?.content?.[0]?.text)).toContain(
+    '{"timed_out":false,"received":[{"from":"/root/helper","kind":"final_answer","text":"hello from the worker"}]}',
+  )
+  // The bridge's socket goes with the process.
+  await session.server.stop()
+  await agy.logged((fake) => fake.log().some((entry) => entry.exited !== undefined))
+  expect(readdirSync(join(session.server.home.dir, "bridges"))).toEqual([])
+})
+
+/**
+ * A clock that moves only when the test moves it, and says when a wait of `wait` begins: the test moves it then, so
+ * the wait cannot begin after the move and miss it.
+ */
+const waitClock = async (wait: Duration.Input) => {
+  const clock = await Effect.runPromise(Effect.scoped(TestClock.make()))
+  const began = Promise.withResolvers<void>()
+  const millis = Duration.toMillis(Duration.fromInputUnsafe(wait))
+  const watched = new Proxy(clock, {
+    get: (target, key) => {
+      if (key === "sleep")
+        return (duration: Duration.Duration) => {
+          if (Duration.toMillis(duration) === millis) began.resolve()
+          return target.sleep(duration)
+        }
+      const value = Reflect.get(target, key)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
+  return { clock: watched, began: began.promise, advance: () => Effect.runPromise(clock.adjust(wait)) }
+}
+
+test("worker-gemini-parent, worker-wait: a Gemini parent's wait returns timed out within 150 s, before agy would cut the call, saying to wait again", async () => {
+  using agy = new FakeAgy("worker_wait_limit")
+  const wait = await waitClock("150 seconds")
+  // The worker's call waits on a person nobody is, so it never answers.
+  await using session = await conversationWith(agy, {}, { clock: wait.clock }, [
+    { agent: "/root/slow", tool: { name: "bash", input: { command: "echo made" } } },
+  ])
+  await session.submit(
+    "Use the mcp_sigma_start_worker tool with task_name slow, provider script and message: Make it. Then call mcp_sigma_wait_worker once with timeout_ms 600000, and reply with exactly what it returned, without calling it again.",
+  )
+  await wait.began
+  await wait.advance()
+  await session.view.until(settled(1))
+  const entries = session.view.view().entries
+  expect(calls(entries).map((call) => call.name)).toEqual(["start_worker", "wait_worker"])
+  expect(JSON.parse(results(entries)[1]!.text)).toEqual({
+    timed_out: true,
+    received: [],
+    message: "Waited 150000ms, the longest one call can wait here; call wait_worker again to keep waiting.",
+  })
+  expect(runEnds(session.view.seen()).map((end) => end.outcome)).toEqual(["answered"])
 })
 
 const reportsOf = (entries: ReadonlyArray<EntryRecord>) =>

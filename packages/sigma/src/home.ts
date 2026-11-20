@@ -15,6 +15,8 @@ export interface Home {
   readonly log: string
   /** The process groups of the local commands running now, one file each; see `ProcessRegistry`. */
   readonly processes: string
+  /** The sockets sigma's tools are served to `agy` processes on, one each (D14). */
+  readonly bridges: string
 }
 
 export const homeAt = (dir: string): Home => ({
@@ -25,6 +27,7 @@ export const homeAt = (dir: string): Home => ({
   nextLock: join(dir, "sigma.next.lock"),
   log: join(dir, "sigma.log"),
   processes: join(dir, "processes"),
+  bridges: join(dir, "bridges"),
 })
 
 export const defaultHome = () => homeAt(resolve(process.env.SIGMA_HOME ?? join(homedir(), ".sigma")))

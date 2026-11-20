@@ -12,8 +12,9 @@ for its next run; a new one, as after a server restart, loads `agy`'s session
 and is told only what it missed. A command `agy` runs on after its turn ends
 is a job: the run ends with Gemini's holding message, and the command's end
 shows as a report that wakes the conversation into a run nobody prompted, in
-which Gemini answers about it. Sigma never changes `agy`'s permission mode,
-offers it none of sigma's own tools, and does not sign in to Google.
+which Gemini answers about it. Sigma offers `agy` its worker tools over MCP
+(`worker-gemini-parent` in [Workers](./workers.md)), never changes `agy`'s
+permission mode, and does not sign in to Google.
 
 ## Sub-features
 

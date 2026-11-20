@@ -29,6 +29,11 @@ export interface Adapter<S = any> {
    * holds no sign-in; `undefined` when it does not say so.
    */
   readonly signIn?: (message: string) => string | undefined
+  /**
+   * The longest a call of sigma's own tools may take before the harness cuts it, so a tool that waits, as `wait_worker`
+   * does, returns within it; `undefined` when the harness waits as long as the tool takes (D15).
+   */
+  readonly ownToolLimit?: Duration.Input
 }
 
 /** What a process is started with. */

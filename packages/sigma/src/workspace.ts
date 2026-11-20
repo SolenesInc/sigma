@@ -299,11 +299,14 @@ export const toldOfWorkspace = (
   return kind === "openai" || (kind === "claude" && agent.target !== undefined && agent.target !== "local")
 }
 
-/** The name a conversation's model calls sigma's tool `name` by: Claude Code reaches it over sigma's MCP server. */
+/** What each harness prefixes the tools of sigma's MCP server with, which it names `sigma`. */
+const MCP_PREFIX: Readonly<Record<string, string>> = { claude: "mcp__sigma__", agy: "mcp_sigma_" }
+
+/** The name a conversation's model calls sigma's tool `name` by: a harness reaches it over sigma's MCP server. */
 export const toolNamer =
   (instances: ReadonlyMap<string, ProviderInstance>, agent: { readonly model?: { readonly provider: string } }) =>
   (name: string) =>
-    agent.model !== undefined && instances.get(agent.model.provider)?.kind === "claude" ? `mcp__sigma__${name}` : name
+    `${MCP_PREFIX[(agent.model === undefined ? undefined : instances.get(agent.model.provider)?.kind) ?? ""] ?? ""}${name}`
 
 /** What the model is told of the agent types `start_worker` takes, or `""` when there are none. */
 const agentTypesInstructions = (types: ReadonlyArray<AgentType>, spawn: string) =>

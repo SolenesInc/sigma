@@ -385,7 +385,7 @@ const startDescription = (providers: WorkerProviders) => {
   const list = providerList(providers)
   return `Starts a worker: an agent in a conversation of its own, which the user can open, watch and talk to, and which keeps working after your turn ends. Returns the worker's task name at once. Its final answer comes back through wait_worker, or as a message when you are not waiting.
 If your task is \`/root/task1\` and you name a worker "scout", its task name is \`/root/task1/scout\`. You can call it \`scout\` or \`/root/task1/scout\`; other agents reach it by its full name.
-A worker runs on your provider and model unless you name others. Set \`provider\` and \`model\` only to what the user named, unchanged.${list === "" ? "" : ` The providers are ${list}.`} On your provider the worker has your tools and starts with your history, unless \`fork_turns\` is "none". On another provider it starts from your message alone, with none of your history or instructions, so write a complete brief; it runs that provider's default model when you name none.
+A worker runs on your provider and model unless you name others. Set \`provider\` and \`model\` only to what the user named, unchanged.${list === "" ? "" : ` The providers are ${list}.`} On your provider the worker has your tools. A worker starts from your message alone, with none of your history or instructions, so write a complete brief, when it runs on another provider or you run in a harness (Claude Code or agy); otherwise it starts with your history, unless \`fork_turns\` is "none". On another provider it runs that provider's default model when you name none.
 Start workers only when the user, or instructions such as AGENTS.md or a skill, ask for workers, delegation or parallel work.`
 }
 
@@ -418,7 +418,7 @@ const startSchema = (providers: WorkerProviders) =>
     fork_turns: opt(
       oneOf(["all", "none"], {
         description:
-          'Your history to give the worker: "all", the default on your provider, or "none". A worker on another provider always starts with none.',
+          'Your history to give the worker: "all", the default on your provider, or "none". A worker on another provider, or one you start from a harness (Claude Code or agy), always starts with none.',
       }),
     ),
   })
@@ -704,62 +704,85 @@ const takeMail = (api: ToolExecutionApi) =>
     }),
   )
 
-const waitWorker = defineTool({
-  name: "wait_worker",
-  description:
-    "Waits for your workers and returns what they sent: a finished worker's final answer, or a message from one. What it returns is not delivered to you again. Returns timed_out true when nothing arrives in time; call it again to keep waiting. Returns early, with nothing received, when the user sends new input.",
-  parameters: obj({
-    timeout_ms: opt(
-      int({
-        description: `Timeout in milliseconds. Defaults to ${DEFAULT_WAIT_MS}, min ${MIN_WAIT_MS}, max ${MAX_WAIT_MS}.`,
-      }),
-    ),
-  }),
-  replay: "safe",
-  execute: (input: { timeout_ms?: number }, api: ToolExecutionApi) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const requested = input.timeout_ms === undefined ? undefined : Math.max(0, input.timeout_ms)
-        if (requested !== undefined && requested > MAX_WAIT_MS)
-          return failed(`timeout_ms must be at most ${MAX_WAIT_MS} (asked for ${requested})`)
-        const timeout = requested === undefined ? DEFAULT_WAIT_MS : Math.max(requested, MIN_WAIT_MS)
-        const clamped =
-          requested !== undefined && requested < timeout
-            ? { message: `Requested timeout of ${requested}ms was clamped to the minimum of ${timeout}ms.` }
-            : {}
-        const watch = yield* api.watchDoc(InboxDoc, api.conversationId)
-        if (watch === undefined) return json({ timed_out: true, received: [], ...clamped })
-        // A steered item reaches the model after this turn, so it is news. Workers' mail is taken and returned; other
-        // input steered while the turn runs, such as a person's, ends the wait with nothing received. A follow-up
-        // waits for the run to end, so it does not. Mail another call or a step took first is waited past.
-        const outcome = yield* Stream.concat(
-          Stream.make({ inbox: watch.value, first: true }),
-          watch.changes.pipe(Stream.map((change) => ({ inbox: change.value, first: false }))),
-        ).pipe(
-          // The first look also finds what a run of this call before a restart took; after it, only a steered item
-          // is worth a commit.
-          Stream.filter(
-            ({ inbox, first }) => first || (inbox.items as ReadonlyArray<Queued>).some((item) => item.mode === "steer"),
-          ),
-          Stream.mapEffect(({ inbox }) =>
-            Effect.map(takeMail(api), (received) => {
-              if (received.length > 0) return json({ timed_out: false, received, ...clamped })
-              const steered = (inbox.items as ReadonlyArray<Queued>).some(
-                (item) => item.mode === "steer" && !takeable(item),
-              )
-              return steered
-                ? json({ timed_out: false, received: [], message: "Wait interrupted by new input." })
-                : undefined
-            }),
-          ),
-          Stream.filter((result) => result !== undefined),
-          Stream.runHead,
-          Effect.timeoutOption(Duration.millis(timeout)),
-        )
-        return Option.getOrUndefined(Option.flatten(outcome)) ?? json({ timed_out: true, received: [], ...clamped })
-      }),
-    ),
-})
+/** What the worker tools need of the server beyond the home's providers. */
+export interface WorkerOptions {
+  /**
+   * The longest one call of a conversation on `provider` may wait, when its harness cuts a call of sigma's tools sooner
+   * than `wait_worker` would return (D15); `undefined` when it waits as long as the call does.
+   */
+  readonly waitLimit?: (provider: string) => Duration.Input | undefined
+  /** What a wait keeps time by; default the server's clock. Tests advance one. */
+  readonly clock?: Clock.Clock
+}
+
+const waitWorker = ({ waitLimit, clock }: WorkerOptions) =>
+  defineTool({
+    name: "wait_worker",
+    description:
+      "Waits for your workers and returns what they sent: a finished worker's final answer, or a message from one. What it returns is not delivered to you again. Returns timed_out true when nothing arrives in time; call it again to keep waiting. Returns early, with nothing received, when the user sends new input.",
+    parameters: obj({
+      timeout_ms: opt(
+        int({
+          description: `Timeout in milliseconds. Defaults to ${DEFAULT_WAIT_MS}, min ${MIN_WAIT_MS}, max ${MAX_WAIT_MS}.`,
+        }),
+      ),
+    }),
+    replay: "safe",
+    execute: (input: { timeout_ms?: number }, api: ToolExecutionApi) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const requested = input.timeout_ms === undefined ? undefined : Math.max(0, input.timeout_ms)
+          if (requested !== undefined && requested > MAX_WAIT_MS)
+            return failed(`timeout_ms must be at most ${MAX_WAIT_MS} (asked for ${requested})`)
+          const wanted = requested === undefined ? DEFAULT_WAIT_MS : Math.max(requested, MIN_WAIT_MS)
+          const provider = (yield* api.agent).model?.provider
+          const limit = provider === undefined ? undefined : waitLimit?.(provider)
+          const most = limit === undefined ? undefined : Duration.toMillis(Duration.fromInputUnsafe(limit))
+          // The harness would cut a longer call, so the wait returns first and says to wait again (D15).
+          const timeout = most === undefined ? wanted : Math.min(wanted, most)
+          const clamped =
+            requested !== undefined && requested < wanted
+              ? { message: `Requested timeout of ${requested}ms was clamped to the minimum of ${wanted}ms.` }
+              : timeout < wanted
+                ? {
+                    message: `Waited ${timeout}ms, the longest one call can wait here; call wait_worker again to keep waiting.`,
+                  }
+                : {}
+          const watch = yield* api.watchDoc(InboxDoc, api.conversationId)
+          if (watch === undefined) return json({ timed_out: true, received: [], ...clamped })
+          // A steered item reaches the model after this turn, so it is news. Workers' mail is taken and returned; other
+          // input steered while the turn runs, such as a person's, ends the wait with nothing received. A follow-up
+          // waits for the run to end, so it does not. Mail another call or a step took first is waited past.
+          const outcome = yield* Stream.concat(
+            Stream.make({ inbox: watch.value, first: true }),
+            watch.changes.pipe(Stream.map((change) => ({ inbox: change.value, first: false }))),
+          ).pipe(
+            // The first look also finds what a run of this call before a restart took; after it, only a steered item
+            // is worth a commit.
+            Stream.filter(
+              ({ inbox, first }) =>
+                first || (inbox.items as ReadonlyArray<Queued>).some((item) => item.mode === "steer"),
+            ),
+            Stream.mapEffect(({ inbox }) =>
+              Effect.map(takeMail(api), (received) => {
+                if (received.length > 0) return json({ timed_out: false, received, ...clamped })
+                const steered = (inbox.items as ReadonlyArray<Queued>).some(
+                  (item) => item.mode === "steer" && !takeable(item),
+                )
+                return steered
+                  ? json({ timed_out: false, received: [], message: "Wait interrupted by new input." })
+                  : undefined
+              }),
+            ),
+            Stream.filter((result) => result !== undefined),
+            Stream.runHead,
+            Effect.timeoutOption(Duration.millis(timeout)),
+            clock === undefined ? (effect) => effect : Effect.provideService(Clock.Clock, clock),
+          )
+          return Option.getOrUndefined(Option.flatten(outcome)) ?? json({ timed_out: true, received: [], ...clamped })
+        }),
+      ),
+  })
 
 const isMail = (item: { readonly entry?: unknown }) =>
   (item.entry as { readonly kind?: string } | undefined)?.kind === MAIL_ENTRY_KIND
@@ -923,6 +946,7 @@ export const agentTools = (
   limits: AgentLimits = DEFAULT_AGENT_LIMITS,
   agentTypes: AgentTypes = () => Effect.succeed([]),
   providers: WorkerProviders = new Map(),
+  options: WorkerOptions = {},
 ) =>
   defineExtension({
     name: AGENTS_EXTENSION,
@@ -932,7 +956,7 @@ export const agentTools = (
       ...(limits.maxThreads > 0 ? [startWorker(limits, agentTypes, providers)] : []),
       messageWorker,
       assignWorker(limits),
-      waitWorker,
+      waitWorker(options),
       listWorkers,
       stopWorker,
     ].map(inTree),

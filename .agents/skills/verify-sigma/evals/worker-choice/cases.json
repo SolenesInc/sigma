@@ -1,0 +1,37 @@
+[
+  {
+    "id": "names-model",
+    "expect": "exact",
+    "prompt": "Have a worker on the provider {other} with the model {other_model} write a haiku about rain, and show me its haiku."
+  },
+  {
+    "id": "two-models",
+    "expect": "two",
+    "prompt": "Ask two workers whether Python's list.sort is stable: one on the provider {other} with the model {other_model}, and one on the provider {third} with the model {third_model}. Tell me both answers."
+  },
+  {
+    "id": "unnamed",
+    "expect": "unnamed",
+    "prompt": "Start a worker on the question 'why do SQLite WAL checkpoints stall?' that I can open and talk to myself while you and I carry on. Don't wait for it; just tell me it is started."
+  },
+  {
+    "id": "asks-subagent",
+    "expect": "native",
+    "prompt": "Use a subagent to work out 17 times 23 and tell me its answer."
+  },
+  {
+    "id": "three-files",
+    "expect": "no-worker",
+    "prompt": "Read a.txt, b.txt and c.txt in this directory and tell me how many lines each has. Use helpers in parallel if that is quicker."
+  },
+  {
+    "id": "read-code",
+    "expect": "no-handoff",
+    "prompt": "Read sum.py in this directory and tell me in one sentence what total([]) returns."
+  },
+  {
+    "id": "plain",
+    "expect": "no-handoff",
+    "prompt": "What is 17 times 23? Answer with the number."
+  }
+]

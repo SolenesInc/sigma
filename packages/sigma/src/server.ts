@@ -1,6 +1,7 @@
 // The server a home runs: one Harness over `kernel.sqlite`, served over the home's socket with the protocol
 // (`@sigma/protocol`). Conversations run on the home's providers (`./providers.ts`).
-import { agyAdapter } from "@sigma/agy"
+import { join } from "node:path"
+import { agyAdapter, clearBridges } from "@sigma/agy"
 import { claudeAdapter } from "@sigma/claude"
 import {
   appendReport,
@@ -226,6 +227,8 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         // again beside the old copies (D15). The home's lock is held, so none of them is another server's.
         const commands = new ProcessRegistry(home.processes)
         if (!readOnly) commands.sweep()
+        // A killed server leaves its agy processes' bridge sockets; none of them is another server's either (D14).
+        if (!readOnly) clearBridges(home.bridges)
         // Closed after the harness, so the runs stop before their targets' channels end; ending a channel stops the
         // target's commands (D7).
         const targets = yield* Effect.acquireRelease(
@@ -253,7 +256,18 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         }
         const typesOf: AgentTypes = (agent, env) =>
           env === undefined ? Effect.succeed([]) : agentTypes(agent.model?.provider, workspaceOf(agent, env))
-        const base = [sigmaTools(images, bashTimeout), agentTools(agents, typesOf, instances), codeModeTools(sandbox)]
+        const adapters = [
+          claudeAdapter((provider) => claude.get(provider)),
+          agyAdapter((provider) => agy.get(provider), { dir: home.bridges, command: bridgeCommand }),
+        ]
+        // A harness that cuts a call of sigma's tools sooner than a wait returns, as agy does, limits each wait (D15).
+        const waitLimit = (provider: string) =>
+          adapters.find((adapter) => adapter.settings(provider) !== undefined)?.ownToolLimit
+        const workers = agentTools(agents, typesOf, instances, {
+          waitLimit,
+          ...(live.clock === undefined ? {} : { clock: live.clock }),
+        })
+        const base = [sigmaTools(images, bashTimeout), workers, codeModeTools(sandbox)]
         for (const extension of base) registry.install(extension)
         registry.install(
           workspaceInstructions(
@@ -269,12 +283,12 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
             (provider) => claude.has(provider),
           ),
         )
-        // A local conversation's Claude Code has its own tools and subagents, and is offered sigma's worker tools beside
-        // them (D17). A remote one's runs in member mode, with only sigma's (D9). agy runs only locally, with its own.
+        // A local conversation's harness, Claude Code or agy, has its own tools and subagents, and is offered sigma's
+        // worker tools beside them (D17), agy's over the bridge (D14). A remote one's Claude Code runs in member mode,
+        // with only sigma's (D9); agy runs only locally.
         const hosted = hostedRunTasks({
-          adapters: [claudeAdapter((provider) => claude.get(provider)), agyAdapter((provider) => agy.get(provider))],
-          // agy is offered none of sigma's tools, so its prompt does not name them.
-          offered: (agent) => (claude.has(agent.model?.provider ?? "") ? offeredToHarness(agent) : []),
+          adapters,
+          offered: offeredToHarness,
           title: (conversation) => titleOf(harness, conversation),
           processes,
           member: {
@@ -956,6 +970,14 @@ const afterReply = (effect: Effect.Effect<void>) =>
   )
 
 /** How the server's live Claude Code processes wait for their conversation's next run. */
+/** The command `agy` runs to reach a bridge socket: this sigma's `mcp-bridge` (D14). */
+const bridgeCommand = (socket: string) => {
+  const main = join(import.meta.dir, "main.ts")
+  return main.startsWith("/$bunfs")
+    ? { command: process.execPath, args: ["mcp-bridge", socket] }
+    : { command: process.execPath, args: [main, "mcp-bridge", socket] }
+}
+
 export interface ClaudeLiveOptions {
   /** How long a Claude Code process stays live for its conversation's next run; default `IDLE_RELEASE`. */
   readonly idle?: Duration.Input
@@ -974,8 +996,8 @@ export interface ServerOptions {
   readonly claudeIdle?: Duration.Input
   /** How long a stopped run waits for Claude Code to end its turn before closing its process; default `STOP_TIMEOUT`. */
   readonly claudeStop?: Duration.Input
-  /** What the live Claude Code processes keep time by; default the server's clock. Tests advance one. */
-  readonly claudeClock?: Clock.Clock
+  /** What the live Claude Code processes and `wait_worker` keep time by; default the server's clock. Tests advance one. */
+  readonly clock?: Clock.Clock
   /** Show the home and change nothing: no run resumes, and calls that would change it are refused. */
   readonly readOnly?: boolean
   readonly providers: ProviderOptions
@@ -998,7 +1020,7 @@ export const serverLayer = (home: Home, options: ServerOptions) =>
         {
           ...(options.claudeIdle === undefined ? {} : { idle: options.claudeIdle }),
           ...(options.claudeStop === undefined ? {} : { stop: options.claudeStop }),
-          ...(options.claudeClock === undefined ? {} : { clock: options.claudeClock }),
+          ...(options.clock === undefined ? {} : { clock: options.clock }),
           idleCompaction: options.providers.config.claude_idle_compaction !== false,
         },
         options.providers.config.target_connector,

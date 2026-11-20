@@ -5,19 +5,25 @@
 // What each ACP event becomes (plot s-5r0qqa, Design):
 //   agent_message_chunk           text; the text so far is said at the next call or at the turn's end
 //   tool_call                     said, with the call's arguments (F45), and `beforeRun`, so the call is committed
-//   request_permission            `approve`: allow_once, or reject_once and the call's result is DENIED (D9)
+//   request_permission            `approve`: allow_once, or reject_once and the call's result is DENIED (D9); an own
+//                                 tool's is allowed at once, since its tool task asks (F18)
 //   tool_call_update completed    results; for a call still in_progress at a turn's end, that job's end (D12)
 //   a prompt's result             what the turn spent; with no prompt left outstanding, the turn is over
 //   Stop hook for the session     the end of a turn `agy` began by itself, which no prompt's result ends (D12)
 //   the first update outside a turn that is not a job's end    woke
 // A turn ended by a denial or by `session/cancel` fires no Stop (measured on 1.5.13), so a prompt's result is a
 // turn-over too; the Stop hook is what ends a wake.
+//
+// Sigma's own tools (`ProcessConfig.own`) reach agy over MCP through the bridge (D14), as `mcp_sigma_<name>`. A
+// `tools/call` carries no call id, so it is paired with the ACP call agy announced first with the same name and
+// arguments (F43), less the `toolSummary` agy adds to every call it announces (measured on 1.5.13).
 import {
   type Adapter,
   type Connection,
   DENIED,
   type Frame,
   type Host,
+  type OwnResult,
   Inbox,
   isMember,
   type Part,
@@ -29,6 +35,7 @@ import {
 import type { ToolCall, Usage } from "@sigma/models"
 import { Effect } from "effect"
 import { type Acp, type Answer, type Incoming, INITIALIZE, type Json, SIGN_IN, signedOut, startAcp } from "./acp.ts"
+import { type BridgeCall, type BridgeOptions, openBridge } from "./bridge.ts"
 import { openStopHook } from "./hook.ts"
 
 /** How an `agy` instance is started: its executable, environment and extra arguments to `agy acp`. */
@@ -44,6 +51,18 @@ const CLOSE_PATIENCE_MS = 5_000
 
 /** The name `agy` is shown by. */
 const NAME = "agy"
+
+/** The prefix `agy` gives the tools of sigma's MCP server, which it names `sigma` (F17). */
+const OWN_TOOL = "mcp_sigma_"
+
+/** What `agy` adds to the arguments of every call it announces, and does not pass to an MCP tool (1.5.13). */
+const SUMMARY = "toolSummary"
+
+/** Why an `agy` subagent's call of sigma's tools is refused: it has no conversation of its own in sigma. */
+export const SUBAGENT_REFUSAL = "sigma's tools serve the agent the person talks to, not a subagent it started"
+
+/** The longest `agy` lets an MCP call take is 180 s (F28); an own tool returns within this, as `wait_worker` does (D15). */
+export const OWN_TOOL_LIMIT = "150 seconds"
 
 /** What a job's call says until its end: `agy` runs it on after its turn ended (F40). */
 export const IN_BACKGROUND = "still running in the background; its end comes as a report"
@@ -74,6 +93,8 @@ type Call = {
   job?: boolean
   /** A person stopped the job. */
   stopped?: boolean
+  /** One of sigma's own tools, which its `tools/call` runs, unless the bridge has paired it with one already. */
+  own?: "waiting" | "paired"
 }
 
 type Event =
@@ -84,6 +105,7 @@ type Event =
   | { readonly type: "decided"; readonly request: number | string; readonly allow: boolean | undefined }
   | { readonly type: "interrupt" }
   | { readonly type: "stop-job"; readonly job: string }
+  | { readonly type: "own"; readonly request: BridgeCall; readonly done: (result: OwnResult) => void }
 
 const ZERO = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
 
@@ -106,7 +128,12 @@ const promptOf = (said: ReadonlyArray<Said>) =>
  * Starts `agy acp` at `start`, as a connection; it is closed with the scope, after `session/close`, which ends the
  * daemon commands `agy` would otherwise leave running (s-7bmc8w F7).
  */
-export const openConnection = (config: ProcessConfig<AgySettings>, start: Start, host: Host) =>
+export const openConnection = (
+  config: ProcessConfig<AgySettings>,
+  start: Start,
+  host: Host,
+  bridge: BridgeOptions | undefined,
+) =>
   Effect.gen(function* () {
     const { agent, settings } = config
     const output = new Inbox<Frame>()
@@ -117,6 +144,27 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
     }
     const hook = yield* openStopHook
     const events = new Inbox<Event>()
+    const own = new Set(config.own.map((tool) => tool.name))
+    /** Sigma's name of a tool agy calls: one of sigma's own loses its MCP prefix. */
+    const named = (tool: string) =>
+      tool.startsWith(OWN_TOOL) && own.has(tool.slice(OWN_TOOL.length)) ? tool.slice(OWN_TOOL.length) : undefined
+    const mcpServers =
+      bridge === undefined || config.own.length === 0
+        ? []
+        : [
+            {
+              ...(yield* openBridge(
+                bridge,
+                config.own.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description,
+                  inputSchema: tool.parameters,
+                })),
+                (request) => new Promise((done) => events.push({ type: "own", request, done })),
+              )).server,
+              env: [],
+            },
+          ]
     const cwd = agent.cwd ?? process.cwd()
     const acp: Acp = yield* Effect.acquireRelease(
       Effect.sync(() => startAcp(commandOf(settings, cwd, { SIGMA_ROOT_CONVERSATION: config.rootConversation }))),
@@ -161,14 +209,14 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       }
       const directories = { additionalDirectories: [hook.dir] }
       if (start._tag === "resume") {
-        const loading = acp.request("session/load", { sessionId: start.session, cwd, mcpServers: [], ...directories })
+        const loading = acp.request("session/load", { sessionId: start.session, cwd, mcpServers, ...directories })
         const loaded = await loading.answer
         if (loaded.error) return { failure: failedOpen(loaded, true) }
         return { replayEnds: loading.id }
       }
       const made = await acp.call("session/new", {
         cwd,
-        mcpServers: [],
+        mcpServers,
         ...directories,
         // Measured on 1.5.13: this key reaches the model, and `_meta.systemPrompt.append` does not (F25).
         ...(config.instructions === undefined
@@ -228,20 +276,64 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
         return [{ type: "woke" }]
       }
 
-      /** Shows the run a call `agy` announced, once, and commits it before it runs. */
+      /** The `tools/call`s the bridge took that no announced call matched yet, oldest first. */
+      const unpaired: Array<Extract<Event, { type: "own" }>> = []
+
+      /** Runs a `tools/call` as the announced call `id`, through the tool task `runOwn` gives it (F18). */
+      const runOwn = (id: string, { request, done }: Extract<Event, { type: "own" }>) => {
+        calls.get(id)!.own = "paired"
+        void host
+          .callbacks(undefined, request.signal)
+          .then((callbacks) => callbacks.runOwn(id, calls.get(id)!.call.name, request.arguments, request.signal))
+          .then(done, (error) => done({ content: [{ type: "text", text: String(error) }], isError: true }))
+      }
+
+      /** The announced own call a `tools/call` is: the first waiting one with its name and arguments (F43). */
+      const pair = (request: BridgeCall) => {
+        const wanted = JSON.stringify(request.arguments)
+        for (const [id, known] of calls) {
+          if (known.own !== "waiting" || known.call.name !== request.name) continue
+          const { [SUMMARY]: _, ...args } = known.call.arguments as Json
+          if (JSON.stringify(args) === wanted) return id
+        }
+        return undefined
+      }
+
+      /** A `tools/call` the bridge took: run it as the call it pairs with, or hold it until agy announces that call. */
+      const ownCall = (event: Extract<Event, { type: "own" }>) => {
+        if (event.request.conversation !== undefined && event.request.conversation !== session) {
+          event.done({ content: [{ type: "text", text: SUBAGENT_REFUSAL }], isError: true })
+          return
+        }
+        const id = pair(event.request)
+        if (id === undefined) unpaired.push(event)
+        else runOwn(id, event)
+      }
+
+      /** Shows the run a call `agy` announced, once, and commits it before it runs; an own call commits as it runs. */
       const sight = (update: Json): Frame[] => {
         const id = String(update.toolCallId)
         if (calls.has(id)) return []
         const name = String(update.name ?? update.title ?? "tool")
+        const ownName = named(name)
         const call: ToolCall = {
           type: "toolCall",
           id,
-          name,
+          name: ownName ?? name,
           arguments: (update.rawInput ?? update.args ?? {}) as ToolCall["arguments"],
         }
-        calls.set(id, { call, title: String(update.title ?? name) })
+        calls.set(id, {
+          call,
+          title: String(update.title ?? name),
+          ...(ownName === undefined ? {} : { own: "waiting" }),
+        })
         const said = [...flush(), { type: "said", response: responseId(), at: at(), content: [call as Part] } as Frame]
         responses++
+        if (ownName !== undefined) {
+          const held = unpaired.findIndex((event) => pair(event.request) === id)
+          if (held !== -1) runOwn(id, unpaired.splice(held, 1)[0]!)
+          return said
+        }
         void host
           .callbacks(undefined)
           .then((callbacks) => callbacks.beforeRun(call))
@@ -257,7 +349,8 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       const background = (): Frame[] => {
         const out: Frame[] = []
         for (const [id, known] of calls) {
-          if (known.job) continue
+          // An own call is answered within its turn: agy waits for its MCP call, which its tool task ends.
+          if (known.job || known.own !== undefined) continue
           if (known.refused) {
             out.push({ type: "results", at: at(), results: [{ call: id, text: DENIED, isError: true }] })
             calls.delete(id)
@@ -362,6 +455,13 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
       const ask = (id: number | string, params: Json): Frame[] => {
         const change = params.toolCall as Json
         const out = [...wake(), ...sight(change)]
+        if (calls.get(String(change.toolCallId))?.own !== undefined) {
+          // An own tool's tool task asks a person when the tool asks, so agy's ask is allowed at once (F18).
+          const options = (params.options ?? []) as Array<{ optionId: string; kind: string }>
+          const allow = options.find((each) => each.kind === "allow_once")?.optionId ?? "allow"
+          acp.reply(id, { outcome: { outcome: "selected", optionId: allow } })
+          return out
+        }
         const aborted = new AbortController()
         asking.set(id, { params, aborted })
         const call = calls.get(String(change.toolCallId))!.call
@@ -469,6 +569,9 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
               hushed = true
             }
             break
+          case "own":
+            ownCall(event)
+            break
           case "stop-job": {
             const known = calls.get(event.job)
             if (known === undefined) break
@@ -550,11 +653,18 @@ const inert = (frames: Inbox<Frame>): Connection => ({
 /** The task kind of an `agy` conversation's runs. */
 export const AGY_RUN_KIND = "agy.run"
 
-/** `agy` as a harness of the hosted run; `settings` says how the `agy` of a provider instance starts. */
-export const agyAdapter = (settings: (provider: string) => AgySettings | undefined): Adapter<AgySettings> => ({
+/**
+ * `agy` as a harness of the hosted run; `settings` says how the `agy` of a provider instance starts, and `bridge` where
+ * sigma's own tools are served to it from (D14). Without one it is offered none.
+ */
+export const agyAdapter = (
+  settings: (provider: string) => AgySettings | undefined,
+  bridge?: BridgeOptions,
+): Adapter<AgySettings> => ({
   kind: AGY_RUN_KIND,
   name: NAME,
   api: "agy",
   settings,
-  open: openConnection,
+  open: (config, start, host) => openConnection(config, start, host, bridge),
+  ownToolLimit: OWN_TOOL_LIMIT,
 })
