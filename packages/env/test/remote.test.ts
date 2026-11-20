@@ -3,7 +3,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import type { ExecutionEnv } from "@sigma/env"
+import type { ExecutionEnv, FileChange } from "@sigma/env"
 import { spawnChannel, TargetPool } from "@sigma/env/remote"
 import { Deferred, Effect, Fiber } from "effect"
 import { AGENT, alive, link } from "./support/agent.ts"
@@ -107,6 +107,28 @@ test("env-remote-stop: a call on a channel gone silent without closing, and the 
   expect(String(quiet._tag === "Failure" ? quiet.cause : "")).toContain(
     "target here unavailable: no frame from sigma-env for 1.5 s",
   )
+})
+
+test("env-remote-stop: an open watcher on a channel gone silent without closing reports failed once the silence limit passes", async () => {
+  const dead = opened({ runtime: temporary("sigma-env-run-"), silenceMs: 1000 })
+  const env = dead.pool.env("here", temporary("sigma-env-"))
+  const changes = await Effect.runPromise(
+    Effect.gen(function* () {
+      const failed = yield* Deferred.make<void>()
+      const changes: FileChange[] = []
+      yield* env.watch([{ path: env.cwd }], (change) => {
+        changes.push(change)
+        if (change.kind === "failed") Deferred.doneUnsafe(failed, Effect.void)
+      })
+      // No call waits now: only the watcher is open when the link dies both ways without an EOF (F21).
+      dead.deafen()
+      yield* Deferred.await(failed)
+      return changes
+    }),
+  )
+  expect(changes.map((change) => (change.kind === "failed" ? change.error.message : change.kind))).toEqual([
+    "target here unavailable: no frame from sigma-env for 1 s",
+  ])
 })
 
 test("env-remote-stop: a new agent of the same owner kills an earlier agent and its commands before it answers the hello", async () => {

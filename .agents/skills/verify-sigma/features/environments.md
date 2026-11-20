@@ -18,7 +18,7 @@ Tools work through an execution environment, per conversation, for commands, fil
 - `env-shell` [kernel] Shell execution streams, spills, times out, aborts and reports exit codes.
 - `env-truncate` [kernel] Truncation by lines and UTF-8 bytes reports what it cut.
 - `env-remote` [kernel] `RemoteExecutionEnv` acts on another computer through `sigma-env` over a connector's channel, as the local env acts here.
-- `env-remote-stop` [kernel] A target's commands die when the server's channel closes, after 120 s with no frame while they run, or at the next agent's sweep for the same home and target, before its hello; another home's or another target's commands on the same computer keep running.
+- `env-remote-stop` [kernel] A target's commands die when the server's channel closes, after 120 s with no frame while they run, or at the next agent's sweep for the same home and target, before its hello; another home's or another target's commands on the same computer keep running. On the server's side, a call in flight or an open watcher on a channel with no frame from the agent for 120 s fails, the watcher with `failed`.
 
 ## How to get to it
 

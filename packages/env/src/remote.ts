@@ -1,7 +1,8 @@
 // An `ExecutionEnv` on a target, served by `sigma-env` over a channel the target's connector opens (D1). One channel per
 // target, shared by every view of it; a lost channel fails its calls with the connector's reason, and the next call
-// connects again once (D5). While a call is in flight the client pings and the agent answers, so each end can tell
-// a silent peer: the agent stops its commands (D7), and the client kills the connector and fails its calls (D17).
+// connects again once (D5). While a call is in flight or a watcher is open the client pings and the agent answers, so
+// each end can tell a silent peer: the agent stops its commands (D7), and the client kills the connector and fails its
+// calls and watchers (D17).
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { posix } from "node:path"
@@ -39,7 +40,7 @@ import {
   type WireError,
 } from "./protocol.ts"
 
-/** Pings while a call is in flight: over 4 minutes at load 2 to 15 they arrived at most 15 ms late (F14). */
+/** Pings while a call is in flight or a watcher open: over 4 minutes at load 2 to 15 they arrived at most 15 ms late (F14). */
 const PING_MS = 5_000
 /**
  * How long a connector may take to bring the agent's hello: a start through ssh and `docker exec`, with the sweep and
@@ -174,14 +175,20 @@ class Session {
           return fail(`target agent speaks env protocol ${frame.protocol}; this server needs ${PROTOCOL}`)
         return greet(frame)
       }
-      this.#watch()
-      if (frame.t === "event") return this.#listeners.get(frame.id)?.(frame)
-      if (frame.t === "hello" || frame.t === "pong") return
-      const settle = this.#waiting.get(frame.id)
-      this.#waiting.delete(frame.id)
-      this.#ended(frame.id, frame.t === "err")
-      this.#watch()
-      settle?.(frame)
+      clearTimeout(this.#silence)
+      this.#silence = undefined
+      if (frame.t === "event") {
+        this.#listeners.get(frame.id)?.(frame)
+        return this.#track()
+      }
+      if (frame.t !== "hello" && frame.t !== "pong") {
+        const settle = this.#waiting.get(frame.id)
+        this.#waiting.delete(frame.id)
+        // A watcher's events outlive its answer; an exec's end with it, and a failed call has none.
+        if (this.#execs.delete(frame.id) || frame.t === "err") this.#listeners.delete(frame.id)
+        settle?.(frame)
+      }
+      this.#track()
     })
     let lose!: (reason: string) => void
     this.closed = new Promise((resolve) => {
@@ -220,8 +227,7 @@ class Session {
     this.#waiting.set(id, settle)
     if (listener !== undefined) this.#listeners.set(id, listener)
     if (call.handle === undefined && call.method === "exec") this.#execs.add(id)
-    this.#ping ??= setInterval(() => this.#frame({ t: "ping" }), PING_MS)
-    if (this.#silence === undefined) this.#watch()
+    this.#track()
     this.#frame({ id, t: "call", ...call })
     return id
   }
@@ -233,27 +239,25 @@ class Session {
   /** Stops routing events to call `id`, as a stopped watcher does. */
   unlisten(id: number): void {
     this.#listeners.delete(id)
-  }
-
-  #ended(id: number, failed: boolean) {
-    // A watcher's events outlive its answer; an exec's end with it, and a failed call has none.
-    if (this.#execs.delete(id) || failed) this.#listeners.delete(id)
-    if (this.#waiting.size === 0 && this.#ping !== undefined) {
-      clearInterval(this.#ping)
-      this.#ping = undefined
-    }
+    this.#track()
   }
 
   /**
-   * Restarts the silence timer while a call is in flight; each frame from the agent calls it. A link that dies without
-   * closing (F21) gives no EOF, so past the limit the connector is killed and every waiting call fails, a pending
-   * cancel too (D17).
+   * Pings and arms the silence timer while a call is in flight or a watcher is open, and stops both otherwise; each
+   * frame from the agent disarms the timer before this rearms it. A link that dies without closing (F21) gives no EOF,
+   * so past the limit the connector is killed, every waiting call fails, a pending cancel too, and every open watcher
+   * reports failed (D17).
    */
-  #watch() {
-    clearTimeout(this.#silence)
-    this.#silence = undefined
-    if (this.#waiting.size === 0 || this.#reason !== undefined) return
-    this.#silence = setTimeout(() => {
+  #track() {
+    if ((this.#waiting.size === 0 && this.#listeners.size === 0) || this.#reason !== undefined) {
+      clearTimeout(this.#silence)
+      this.#silence = undefined
+      clearInterval(this.#ping)
+      this.#ping = undefined
+      return
+    }
+    this.#ping ??= setInterval(() => this.#frame({ t: "ping" }), PING_MS)
+    this.#silence ??= setTimeout(() => {
       this.#lost(`no frame from sigma-env for ${this.#silenceMs / 1000} s`)
       this.channel.kill()
     }, this.#silenceMs)
