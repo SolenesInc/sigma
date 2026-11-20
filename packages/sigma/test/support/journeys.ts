@@ -40,9 +40,7 @@ export interface Session {
   readonly appears: (path: string) => Promise<void>
 }
 
-/** The subagent's task: a background command that waits for `go`, so it is still working when the subagent ends. */
-export const OUTLIVES_COMMAND = "until [ -e go ]; do sleep 0.1; done; echo outlived > outlived.txt; echo outlived"
-export const OUTLIVES_PROMPT =
+export const STOPPED_AT_END_PROMPT =
   "Use the Agent tool to start a general-purpose subagent, not in the background, and give it this task in its own words: begin a long command in the background and come back at once. Do not run any command yourself. Then reply with exactly what the subagent reported."
 
 export const BACKGROUND_OUTLIVES_PROMPT =
@@ -72,11 +70,11 @@ export const journeys: Readonly<Record<string, Journey>> = {
   },
   // A foreground subagent starts a background command and ends while the command still works: Claude Code stops the
   // command as the subagent ends.
-  subagent_command_outlives: {
+  subagent_command_stopped_at_end: {
     harnesses: ["claude"],
     ask: "auto",
     play: async (s) => {
-      await s.submit(OUTLIVES_PROMPT)
+      await s.submit(STOPPED_AT_END_PROMPT)
       await s.settle()
     },
   },

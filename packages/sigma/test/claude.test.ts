@@ -33,7 +33,7 @@ import {
   type ServerOptions,
 } from "./support/server.ts"
 import type { ScriptStep } from "@sigma/models"
-import { BACKGROUND_OUTLIVES_PROMPT, OUTLIVES_PROMPT } from "./support/journeys.ts"
+import { BACKGROUND_OUTLIVES_PROMPT, STOPPED_AT_END_PROMPT } from "./support/journeys.ts"
 
 type Approvals = { requests: Record<string, { tool: string }> }
 const approvalsOf = (watch: ViewWatch) => watch.view().docs["sigma.approvals"] as Approvals | undefined
@@ -1023,15 +1023,15 @@ test("subagent-claude, claude-job-report: stopping a Claude run stops the backgr
 })
 
 test("claude-subagent-command, subagent-claude: a background command a foreground Claude subagent starts ends with the subagent, and is a job of neither conversation", async () => {
-  using claude = new FakeClaude("subagent_command_outlives")
+  using claude = new FakeClaude("subagent_command_stopped_at_end")
   await using session = await conversationWith(claude, { approvals: "auto" })
-  await session.submit(OUTLIVES_PROMPT)
+  await session.submit(STOPPED_AT_END_PROMPT)
   await session.view.until(settled(1))
   const child = await subagentOf(session)
   await child.view.until(childEnded)
 
   expect(transcript(session.view.seen())).toEqual([
-    `user: ${OUTLIVES_PROMPT}`,
+    `user: ${STOPPED_AT_END_PROMPT}`,
     "assistant: ",
     "assistant: started",
     "run_end: answered",

@@ -1,4 +1,4 @@
-{"type":"transcript_start","provider":"claude","dialect":"anthropic","scenario":"subagent_command_outlives","metadata":{"source":"authored","model":"claude-haiku-5-5","harness":"Claude Code 2.1.312"}}
+{"type":"transcript_start","provider":"claude","dialect":"anthropic","scenario":"subagent_command_stopped_at_end","metadata":{"source":"authored","model":"claude-haiku-5-5","harness":"Claude Code 2.1.312"}}
 {"type":"lane","name":"parent","when":"Use the Agent tool to start a general-purpose subagent"}
 {"type":"lane","name":"sub","when":"Start this command with the Bash tool"}
 {"type":"bind","name":"task","from":"tool_result","pattern":"Command running in background with ID: ([a-z0-9]+)"}

@@ -3,15 +3,15 @@
 // did not expect, or left an exchange of the tape unasked.
 import { expect, test } from "bun:test"
 import { claudePlayEnv } from "./support/harness-env.ts"
-import { journeys, openSession, OUTLIVES_PROMPT } from "./support/journeys.ts"
+import { journeys, openSession, STOPPED_AT_END_PROMPT } from "./support/journeys.ts"
 import { ModelServer } from "./support/model-server.ts"
 import { runEnds, transcript, type ViewWatch } from "./support/server.ts"
 
 const jobs = (watch: ViewWatch) => (watch.view().docs["hosted.jobs"] as { jobs?: object } | undefined)?.jobs ?? {}
 
 test("claude-subagent-command, subagent-claude: the real Claude Code ends a foreground subagent's background command with the subagent, so neither conversation has a job", async () => {
-  const journey = journeys.subagent_command_outlives!
-  await using model = ModelServer.play("subagent_command_outlives", "claude")
+  const journey = journeys.subagent_command_stopped_at_end!
+  await using model = ModelServer.play("subagent_command_stopped_at_end", "claude")
   using play = claudePlayEnv(model.url)
   await using session = await openSession(journey, { env: play.env }, model)
   await journey.play(session)
@@ -21,7 +21,7 @@ test("claude-subagent-command, subagent-claude: the real Claude Code ends a fore
   expect(model.problems()).toEqual([])
 
   expect(transcript(session.seen())).toEqual([
-    `user: ${OUTLIVES_PROMPT}`,
+    `user: ${STOPPED_AT_END_PROMPT}`,
     "assistant: ",
     "assistant: started",
     "run_end: answered",
