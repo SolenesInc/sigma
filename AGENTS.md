@@ -203,7 +203,9 @@ Provider tests replay recorded exchanges from `fixtures/`:
 - The fake `agy` (`packages/sigma/test/support/fake-agy`) plays one recorded
   `agy acp` process per spawn, and `fixtures/agy/models.ndjson` for each
   probe. It runs the Stop hook sigma gave the session where the recording
-  did, and logs what sigma sent it.
+  did, and gives sigma what agy said before it only once the hook has run or
+  sigma asks something, so every test meets a Stop read ahead of what agy said
+  before it. It logs what sigma sent it.
 - Screen and stack tests point `SIGMA_CLAUDE` and `SIGMA_AGY` at the fakes, so
   no test reaches a real Claude or agy. A stack test that needs ChatGPT points
   `SIGMA_OPENAI_URL` at the fake OpenAI server.

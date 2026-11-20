@@ -1,11 +1,14 @@
 // Records a real `agy acp` as a `fixtures/agy` journey: a server given this as its agy executable runs the real agy,
 // and every frame sigma sends (`expect_outbound`) and agy answers (`emit_inbound`) is appended to RECORD_AGY_TO, after a
-// `spawn` line per process. The Stop hook sigma gives a session is wrapped: agy runs the recorder's hook, which records
-// a `hook` line and then runs sigma's; so is sigma's MCP server, by `record-agy-mcp.ts`. The session's folder becomes `<workspace>` and the home directory /home/person.
+// `spawn` line per process. A Stop of the session is recorded as a `hook` line where sigma's request that places it
+// is answered, which is where the Stop falls in what agy says (`packages/agy/src/hook.ts`); a subagent's Stop, which
+// sigma does not place, is not recorded. Sigma's MCP server is wrapped by `record-agy-mcp.ts`. The session's folder
+// becomes `<workspace>` and the home directory /home/person.
+// Sigma's requests of its own methods (`sigma/…`), and their answers, are left out: the fake agy answers those itself.
 // What agy writes may quote the recording machine: read a recording before committing it. RECORD_AGY_REAL names the
 // real agy; default `agy` on PATH.
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
-import { homedir, tmpdir } from "node:os"
+import { appendFileSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 
 const to = process.env.RECORD_AGY_TO!
@@ -19,27 +22,8 @@ const replace = (text: string) => {
 }
 const record = (line: object) => appendFileSync(to, `${replace(JSON.stringify(line))}\n`)
 
-/** The recorder's hook directory: its Stop hook appends a `hook` line, then runs the hook sigma gave the session. */
-const wrapHooks = (sigmaHooks: string) => {
-  const dir = mkdtempSync(join(tmpdir(), "record-agy-"))
-  mkdirSync(join(dir, ".agents"))
-  const script = join(dir, ".agents", "stop.sh")
-  writeFileSync(
-    script,
-    `#!/bin/sh
-payload=$(cat)
-id=$(printf '%s' "$payload" | sed -n 's/.*"conversationId":"\\([^"]*\\)".*/\\1/p')
-printf '{"type":"hook","session":"%s"}\\n' "$id" >> '${to}'
-printf '%s' "$payload" | '${join(sigmaHooks, ".agents", "stop.sh")}'
-`,
-  )
-  chmodSync(script, 0o755)
-  writeFileSync(
-    join(dir, ".agents", "hooks.json"),
-    JSON.stringify({ record: { Stop: [{ type: "command", command: script }] } }),
-  )
-  return dir
-}
+/** Sigma's requests of its own methods, by id, with the session each names. */
+const own = new Map<number | string, string | undefined>()
 
 record({ type: "spawn" })
 const child = Bun.spawn([real, ...process.argv.slice(2)], { stdin: "pipe", stdout: "pipe", stderr: "inherit" })
@@ -61,12 +45,10 @@ const outbound = lines(Bun.stdin.stream(), (line) => {
   const frame = JSON.parse(line)
   if (frame.method === "session/new" || frame.method === "session/load") {
     workspace = frame.params.cwd
-    const given = frame.params.additionalDirectories?.[0]
     record({
       type: "expect_outbound",
       frame: { ...frame, params: { ...frame.params, additionalDirectories: ["<hooks>"] } },
     })
-    if (given !== undefined) frame.params.additionalDirectories = [wrapHooks(given)]
     // Sigma's MCP server, its bridge, runs under the recorder's, which records what passes through it.
     frame.params.mcpServers = (frame.params.mcpServers ?? []).map((server: any) => ({
       ...server,
@@ -74,14 +56,20 @@ const outbound = lines(Bun.stdin.stream(), (line) => {
       args: [join(import.meta.dir, "record-agy-mcp.ts"), server.command, ...server.args],
       env: [...(server.env ?? []), { name: "RECORD_AGY_TO", value: to }],
     }))
-  } else record({ type: "expect_outbound", frame })
+  } else if (frame.method?.startsWith("sigma/") && frame.id !== undefined) own.set(frame.id, frame.params?.sessionId)
+  else record({ type: "expect_outbound", frame })
   child.stdin.write(`${JSON.stringify(frame)}\n`)
   child.stdin.flush()
 }).then(() => child.stdin.end())
 process.on("SIGTERM", () => child.kill())
 
 await lines(child.stdout, (line) => {
-  record({ type: "emit_inbound", frame: JSON.parse(line) })
+  const frame = JSON.parse(line)
+  if (frame.method === undefined && own.has(frame.id)) {
+    const session = own.get(frame.id)
+    own.delete(frame.id)
+    if (session !== undefined) record({ type: "hook", session })
+  } else record({ type: "emit_inbound", frame })
   process.stdout.write(`${line}\n`)
 })
 void outbound

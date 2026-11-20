@@ -1,10 +1,13 @@
 // The fake `agy`: plays one recorded `agy acp` process of a `fixtures/agy` journey per spawn, and logs what sigma sent
 // it to FAKE_AGY_DIR/log.ndjson. A journey is ndjson: a `spawn` line starts each process; `expect_outbound` waits for
 // the frame sigma sends (a request by method, an answer by id, a notification by method); `emit_inbound` writes what
-// agy said; `hook` runs the Stop hook sigma gave the session as `additionalDirectories`, as agy does at a turn-over; and
-// `exit` ends the process. `mcp_inbound` writes what agy sent sigma's MCP server, which it starts from the session's
-// `mcpServers` as agy does, and `mcp_outbound` waits for that server's answer of the same id and logs it. The ids sigma chose are mapped to the ones it sends now; `<workspace>` is the session's
-// folder. An account probe, a process whose folder is a `sigma-agy-probe-` one, plays FAKE_AGY_PROBE instead, by
+// agy said; `hook` runs the Stop hook sigma gave the session as `additionalDirectories`, as agy does at a turn-over, and
+// waits for it to exit; and `exit` ends the process. What agy said before a `hook` reaches sigma only after the hook
+// has run or sigma asked something, so sigma always reads a Stop before what agy said ahead of it, which it can on a
+// real agy. A request of sigma's own methods (`sigma/…`) is answered at once with -32601, as agy 1.5.13 answers a
+// method it does not know; recordings leave those out. `mcp_inbound` writes what agy sent sigma's MCP server, which it
+// starts from the session's `mcpServers` as agy does, and `mcp_outbound` waits for that server's answer of the same id
+// and logs it. The ids sigma chose are mapped to the ones it sends now; `<workspace>` is the session's folder. An account probe, a process whose folder is a `sigma-agy-probe-` one, plays FAKE_AGY_PROBE instead, by
 // default `models.ndjson`.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
@@ -40,6 +43,7 @@ log({
   pid: process.pid,
 })
 process.on("SIGTERM", () => {
+  hook?.kill()
   log({ exited: "SIGTERM" })
   process.exit(143)
 })
@@ -63,6 +67,17 @@ const substitute = (frame: any) => {
   return out
 }
 
+/** What agy said and sigma has not been given yet: it reaches sigma before anything agy says next. */
+let held: Array<unknown> = []
+const flush = () => {
+  for (const frame of held) process.stdout.write(`${JSON.stringify(frame)}\n`)
+  held = []
+}
+const write = (frame: unknown) => held.push(frame)
+
+/** The Stop hook running now, which ends with the process, as agy's does. */
+let hook: Bun.Subprocess | undefined
+
 const inbound: Array<any> = []
 let wake: (() => void) | undefined
 let ended = false
@@ -74,7 +89,15 @@ void (async () => {
     while ((newline = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, newline)
       buffer = buffer.slice(newline + 1)
-      if (line.trim() !== "") inbound.push(JSON.parse(line))
+      if (line.trim() === "") continue
+      const frame = JSON.parse(line)
+      if (frame.method?.startsWith("sigma/") && frame.id !== undefined) {
+        log({ received: frame })
+        write({ jsonrpc: "2.0", id: frame.id, error: { code: -32601, message: `Method not found: ${frame.method}` } })
+        flush()
+        continue
+      }
+      inbound.push(frame)
       wake?.()
     }
   }
@@ -82,14 +105,14 @@ void (async () => {
   wake?.()
 })()
 
-const write = (frame: unknown) => process.stdout.write(`${JSON.stringify(frame)}\n`)
-
 /** The next frame sigma sent that `wanted` takes; what it sends that the journey does not expect waits unanswered. */
 const receive = async (wanted: (frame: any) => boolean) => {
+  flush()
   while (true) {
     const index = inbound.findIndex(wanted)
     if (index >= 0) return inbound.splice(index, 1)[0]
     if (ended) {
+      hook?.kill()
       log({ exited: "stdin closed" })
       process.exit(0)
     }
@@ -146,12 +169,13 @@ const stop = async (session: string) => {
         hookEventName: "Stop",
         terminationReason: "NO_TOOL_CALL",
       })
-      const child = Bun.spawn(["/bin/sh", "-c", handler.command], {
+      hook = Bun.spawn(["/bin/sh", "-c", handler.command], {
         cwd: join(hooks, ".agents"),
         stdin: new Blob([payload]),
         stdout: "pipe",
       })
-      await child.exited
+      await hook.exited
+      hook = undefined
     }
   }
 }
@@ -173,10 +197,18 @@ for (const step of segments[probe ? 0 : spawn] ?? []) {
     } else received = await receive((frame) => frame.method === undefined && frame.id === expected.id)
     log({ received })
   } else if (step.type === "emit_inbound") write(substitute(step.frame))
-  else if (step.type === "mcp_inbound") (mcp ??= startMcp()).write(substitute(step.frame))
-  else if (step.type === "mcp_outbound") log({ mcp: await mcp!.receive((frame) => frame.id === step.frame.id) })
-  else if (step.type === "hook") await stop(step.session)
-  else if (step.type === "exit") {
+  else if (step.type === "mcp_inbound") {
+    // What agy announced on ACP comes before its MCP call, as recorded.
+    flush()
+    ;(mcp ??= startMcp()).write(substitute(step.frame))
+  } else if (step.type === "mcp_outbound") {
+    flush()
+    log({ mcp: await mcp!.receive((frame) => frame.id === step.frame.id) })
+  } else if (step.type === "hook") {
+    await stop(step.session)
+    flush()
+  } else if (step.type === "exit") {
+    flush()
     log({ exited: `exit ${step.code}` })
     await new Promise<void>((resolve) => process.stdout.write("", () => resolve()))
     process.exit(step.code)
