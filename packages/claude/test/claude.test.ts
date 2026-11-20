@@ -201,7 +201,13 @@ test("claude-read: parallel calls of one response are each committed with the re
     }),
   )
   // Each call is committed with the arguments Claude Code ran it with, which it made absolute, not as the model wrote it.
-  expect(said(all.entries).filter((line) => line.startsWith("call"))).toEqual([
+  // Each is committed by its own PreToolUse hook, and Claude Code runs the hooks of parallel calls at once, so the two
+  // can commit in either order.
+  expect(
+    said(all.entries)
+      .filter((line) => line.startsWith("call"))
+      .sort(),
+  ).toEqual([
     `call Read ${JSON.stringify({ file_path: join(all.cwd, "a.txt") })}`,
     `call Read ${JSON.stringify({ file_path: join(all.cwd, "b.txt") })}`,
   ])
