@@ -380,11 +380,30 @@ export const Watch = Rpc.make("conversation/watch", {
   stream: true,
 })
 
+/** A person's input an interrupt withdrew while it waited. */
+export const WithdrawnPrompt = Schema.Struct({
+  submission: Schema.Int.annotate({ description: "Its id in the view's pi.inbox `items`, as it waited there." }),
+  requestId: Schema.String.annotate({
+    description: `The id it was submitted with; its ${WITHDRAWN_KIND} entry names it.`,
+  }),
+  author: Author.annotate({ description: "Who wrote it." }),
+  text: Schema.String.annotate({
+    description: "What it said, as written; its images and the skills it named are not here.",
+  }),
+})
+export type WithdrawnPrompt = typeof WithdrawnPrompt.Type
+
 export const Interrupt = Rpc.make("conversation/interrupt", {
   payload: {
     conversation: ConversationId.annotate({ description: "Stops its run; what was said stays." }),
     author: Author.annotate({ description: `Who interrupted it; a ${INTERRUPTED_KIND} entry names them.` }),
   },
+  success: Schema.Struct({
+    withdrawn: Schema.Array(WithdrawnPrompt).annotate({
+      description:
+        "The people's inputs waiting in the conversation's queue that this interrupt withdrew, oldest first, from the same commit that withdrew them: an input a run took in before it is not here. Inputs it withdrew from other conversations, and any that arrive while the run stops, are not listed.",
+    }),
+  }),
   error: Schema.Union([ReadOnlyServer, NoSuchConversation]),
 })
 

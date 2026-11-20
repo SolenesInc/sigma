@@ -982,7 +982,62 @@
         "additionalProperties": true
       },
       "result": {
-        "type": "null"
+        "type": "object",
+        "properties": {
+          "withdrawn": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "submission": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Its id in the view's pi.inbox `items`, as it waited there."
+                },
+                "requestId": {
+                  "type": "string",
+                  "description": "The id it was submitted with; its sigma.withdrawn entry names it."
+                },
+                "author": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Who it is to the program that runs sigma; sigma never reads it."
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "What people see."
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true,
+                  "description": "Who wrote it."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "What it said, as written; its images and the skills it named are not here."
+                }
+              },
+              "required": [
+                "submission",
+                "requestId",
+                "author",
+                "text"
+              ],
+              "additionalProperties": true
+            },
+            "description": "The people's inputs waiting in the conversation's queue that this interrupt withdrew, oldest first, from the same commit that withdrew them: an input a run took in before it is not here. Inputs it withdrew from other conversations, and any that arrive while the run stops, are not listed."
+          }
+        },
+        "required": [
+          "withdrawn"
+        ],
+        "additionalProperties": true
       },
       "error": {
         "anyOf": [

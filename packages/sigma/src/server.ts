@@ -32,6 +32,7 @@ import {
   type EndedRun,
   type WithdrawnInput,
   InboxDoc,
+  withdrawQueuedInputs,
   type Agent,
   openHarness,
   UsageDoc,
@@ -308,18 +309,6 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           if (stops === undefined || run.answered || run.end.status === "done") return writeRunEnd(tx, run)
           return endRun(tx, run.conversationId, { outcome: "restart_limit", message: restartLimitMessage(stops) })
         }
-        // A person's input withdrawn while it waited says so in the transcript, under the requestId it was submitted
-        // with, so a client that lost its watch learns the input's fate from entries alone.
-        // Withdrawn by submission/withdraw, it names who withdrew it.
-        const inputWithdrawn = (tx: Tx, { conversationId, entry, data }: WithdrawnInput) =>
-          entry?.kind === USER_KIND
-            ? Effect.asVoid(
-                tx.appendEntry(conversationId, {
-                  kind: WITHDRAWN_KIND,
-                  data: { requestId: (entry.data as { requestId: string }).requestId, ...data },
-                }),
-              )
-            : Effect.void
         const harness: Harness = yield* Effect.acquireRelease(
           Effect.flatMap(openSqliteStorage(home.database), (storage) =>
             openHarness(storage, {
@@ -969,10 +958,22 @@ const Handlers = SigmaRpcs.toLayer(
       "conversation/interrupt": writing(({ conversation: id, author }) =>
         Effect.gen(function* () {
           const conversation = yield* find(id)
-          yield* Effect.orDie(
-            conversation.commit((tx) => tx.appendEntry(conversation.id, { kind: INTERRUPTED_KIND, data: { author } })),
+          // The inputs that wait are withdrawn in this commit, so what it lists is exactly what it withdrew.
+          const taken = yield* Effect.orDie(
+            conversation.commit((tx) =>
+              Effect.gen(function* () {
+                yield* tx.appendEntry(conversation.id, { kind: INTERRUPTED_KIND, data: { author } })
+                return yield* withdrawQueuedInputs(tx, conversation.id, "aborted", inputWithdrawn)
+              }),
+            ),
           )
+          const withdrawn = taken.flatMap((item) => {
+            if (item.entry?.kind !== USER_KIND) return []
+            const { requestId, author } = item.entry.data as { requestId: string; author: Author }
+            return [{ submission: Number(item.id), requestId, author, text: typedText(item.content) }]
+          })
           yield* Effect.orDie(interrupt(harness, conversation.id))
+          return { withdrawn }
         }),
       ),
       "approval/resolve": writing(({ conversation: id, approval, author, allow }) =>
@@ -1001,6 +1002,25 @@ const Handlers = SigmaRpcs.toLayer(
     })
   }),
 )
+
+// A person's input withdrawn while it waited says so in the transcript, under the requestId it was submitted
+// with, so a client that lost its watch learns the input's fate from entries alone.
+// Withdrawn by submission/withdraw, it names who withdrew it.
+const inputWithdrawn = (tx: Tx, { conversationId, entry, data }: WithdrawnInput) =>
+  entry?.kind === USER_KIND
+    ? Effect.asVoid(
+        tx.appendEntry(conversationId, {
+          kind: WITHDRAWN_KIND,
+          data: { requestId: (entry.data as { requestId: string }).requestId, ...data },
+        }),
+      )
+    : Effect.void
+
+/** What a person wrote: the first text of their input, before the skills it named. */
+const typedText = (content: unknown): string =>
+  typeof content === "string"
+    ? content
+    : ((content as ReadonlyArray<{ type: string; text?: string }>).find((block) => block.type === "text")?.text ?? "")
 
 /** The view as the wire carries it: kernel ids are plain numbers already. */
 const toView = (view: ConversationView): View => view as unknown as View

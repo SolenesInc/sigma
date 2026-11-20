@@ -225,19 +225,26 @@ export const withdrawQueued = (
 
 /**
  * Withdraws every queued input of a conversation, as `Conversation.abort()` and abort cascades do: each settles
- * `unanswered` with `reason` and leaves the inbox; queued writes stay for later placement.
+ * `unanswered` with `reason` and leaves the inbox; queued writes stay for later placement. Returns the inputs it
+ * withdrew, in queue order, as plain copies.
  */
 export const withdrawQueuedInputs = (
   tx: Tx,
   conversationId: ConversationId,
   reason: string,
   withdrawn: InputWithdrawnHook | undefined,
-): Effect.Effect<void, DocError | StorageError> =>
+): Effect.Effect<Array<Exclude<InboxItem, { mode: "write" }>>, DocError | StorageError> =>
   Effect.gen(function* () {
     const items = (yield* tx.doc(InboxDoc, conversationId)).items as InboxItem[]
+    const taken: Array<Exclude<InboxItem, { mode: "write" }>> = []
     // In queue order; a withdrawn item leaves `items`, so the next one takes its index.
     for (let index = 0; index < items.length; ) {
-      if (items[index]!.mode === "write") index++
-      else yield* withdraw(tx, conversationId, items, index, reason, withdrawn)
+      const item = items[index]!
+      if (item.mode === "write") index++
+      else {
+        taken.push(copyJson(item) as typeof item)
+        yield* withdraw(tx, conversationId, items, index, reason, withdrawn)
+      }
     }
+    return taken
   })

@@ -130,7 +130,7 @@ test("interrupt-wire: interrupting keeps what sigma already said and marks the r
   await submit(client, conversation, "count")
   await view.until(speaking)
   expect(await client.call("conversation/interrupt", { author: person("ada"), conversation })).toMatchObject({
-    result: null,
+    result: { withdrawn: [] },
   })
   await view.until(settled(1))
   const said = transcript(view.view().entries)
@@ -160,6 +160,32 @@ test("interrupt-withdraw: interrupting withdraws the prompts that wait, and the 
     "withdrawn: waiting-2",
     "run_end: interrupted (aborted)",
   ])
+  client.close()
+})
+
+test("interrupt-withdraw: the interrupt answers which prompts it withdrew, each with its id, requestId, author and text, oldest first", async () => {
+  await using server = await runningServer([{ text: "one two three four five six seven eight", delayMs: 100 }])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = await start(client)
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "count")
+  await view.until(speaking)
+  const first = await submit(client, conversation, "then this", "waiting-1")
+  const second = await submit(client, conversation, "and this", "waiting-2", person("bo"), true)
+  const stopped = await client.call("conversation/interrupt", { author: person("ada"), conversation })
+  expect(stopped).toMatchObject({
+    result: {
+      withdrawn: [
+        { submission: first.result.submission, requestId: "waiting-1", author: person("ada"), text: "then this" },
+        { submission: second.result.submission, requestId: "waiting-2", author: person("bo"), text: "and this" },
+      ],
+    },
+  })
+  // Interrupting again finds nothing waiting.
+  await view.until(settled(1))
+  expect(await client.call("conversation/interrupt", { author: person("ada"), conversation })).toMatchObject({
+    result: { withdrawn: [] },
+  })
   client.close()
 })
 

@@ -22,12 +22,16 @@ can interrupt any conversation's run.
   the queue without running, and the transcript gets a `sigma.withdrawn` entry
   naming its `requestId`, so a client that lost its watch learns the prompt's
   fate from entries alone. A prompt sent after the interrupt, while the run
-  still stops, waits and runs once it stopped.
+  still stops, waits and runs once it stopped. `conversation/interrupt`
+  answers `{"withdrawn": [...]}`: each person's prompt it withdrew from this
+  conversation's queue, oldest first, as `{submission, requestId, author, text}`,
+  taken in the commit that withdrew them, so a steer a run took in at a boundary
+  is never listed.
 - `interrupt-restore` puts the text of your own withdrawn prompts back in the
   TUI's prompt when `Esc` stops the run, oldest first, a blank line between
   each, before whatever you had typed, so Enter sends them again as one. Only
-  prompts you wrote come back; the client does this from what was pending,
-  with no change on the server.
+  prompts you wrote come back: the TUI gives back the ones of yours that
+  `conversation/interrupt` says it withdrew, so none comes back that also ran.
 
 ## How to get to it
 
@@ -38,7 +42,8 @@ can interrupt any conversation's run.
 
 ### Agents
 
-- Call `conversation/interrupt` with the conversation's id and `author`.
+- Call `conversation/interrupt` with the conversation's id and `author`; it
+  answers the prompts it withdrew (`interrupt-withdraw`).
 
 ## Driving it with drive.ts
 
@@ -90,7 +95,8 @@ Preconditions:
   then `conversation/interrupt`. The watch shows `pi.inbox` holding the
   prompt, then one change that empties it and adds
   `sigma.withdrawn` with `{"requestId": "waiting-1"}`, before
-  `sigma.run_end` `interrupted`.
+  `sigma.run_end` `interrupted`. The `conversation/interrupt` reply lists
+  `{"submission": <id>, "requestId": "waiting-1", "author": {"id": "ada", "name": "ada"}, "text": "then this"}`.
 
 ## Contexts
 
@@ -105,6 +111,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 
 - interrupt-wire: interrupting keeps what sigma already said and marks the run interrupted
 - interrupt-withdraw: interrupting withdraws the prompts that wait, and the transcript names each by its requestId
+- interrupt-withdraw: the interrupt answers which prompts it withdrew, each with its id, requestId, author and text, oldest first
 - worker-interrupt, interrupt-idle: interrupting a conversation's run leaves its workers working, and interrupting it again, idle, stops them, so the tree goes idle
 
 Screen, `packages/sigma/test/screen.test.ts`:

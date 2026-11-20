@@ -1258,9 +1258,7 @@ const conversationScreen = Effect.fnUntraced(function* (
       // A notice that throws while it is drawn fails the promise; nothing waits on most, and a rejection nothing
       // handles would end the TUI.
     ).catch(() => undefined)
-  /** The prompts an interrupt gave back to the composer already. */
-  const givenBack = new Set<number>()
-  /** Your own prompts waiting in the queue, oldest first: the ones you may edit, and the ones Esc gives back. */
+  /** Your own prompts waiting in the queue, oldest first: the ones you may edit. */
   const yours = (): ReadonlyArray<Pending> =>
     (root.docs()["pi.inbox"]?.items ?? []).flatMap((item) =>
       (item.mode === "steer" || item.mode === "followUp") &&
@@ -1417,18 +1415,16 @@ const conversationScreen = Effect.fnUntraced(function* (
       )
       return updated === undefined ? "failed" : updated.result === "updated" ? "saved" : "went"
     },
-    // A second Esc before the first's withdrawals show would give the same prompts back again.
-    interrupt: async () => {
-      const withdrawing = untrack(yours).filter((pending) => !givenBack.has(pending.id))
-      for (const pending of withdrawing) givenBack.add(pending.id)
-      const stopped = await Effect.runPromise(
+    // The server says which prompts the interrupt withdrew; yours are the ones to give back.
+    interrupt: () =>
+      Effect.runPromise(
         client["conversation/interrupt"]({ conversation, author }).pipe(
-          Effect.as(true),
-          Effect.catchCause(() => Effect.succeed(false)),
+          Effect.map(({ withdrawn }) =>
+            withdrawn.filter((prompt) => prompt.author.id === author.id).map((prompt) => prompt.text),
+          ),
+          Effect.catchCause(() => Effect.succeed([])),
         ),
-      )
-      return stopped ? withdrawing.map((pending) => pending.text) : []
-    },
+      ),
     selectModel: (selection) =>
       Effect.runFork(client["conversation/select_model"]({ conversation, author, selection })),
     command: (name, argument) => {

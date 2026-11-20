@@ -83,7 +83,9 @@ Screen, `packages/sigma/test/screen.test.ts`:
 - An interrupt of an idle conversation is still recorded: it names who asked,
   and no `sigma.run_end` follows it.
 - A withdrawal an interrupt or a failed run made names no author; the
-  `sigma.interrupted` entry or the run's end says what happened.
+  `sigma.interrupted` entry or the run's end says what happened. The interrupt's
+  reply lists each prompt it withdrew with the `author` who wrote it, which is how
+  a client gives back only the prompts of its own person.
 - A compaction that found nothing to summarize commits nothing, so it names
   no one.
 - `submission/update` is the one call that writes no entry of its own: its
