@@ -1,0 +1,24 @@
+// The environment a harness plays a tape in: it reaches the model server and no account. This is the only place that
+// environment is built.
+import { mkdtempSync, rmSync } from "node:fs"
+
+/**
+ * Claude Code on the model server at `url`: a fresh configuration folder holding no sign-in, a fake API key, the
+ * sign-in tokens blanked over any the server's own environment has, and the base URL on the model server. Its
+ * telemetry, error reports and update checks are off: they reach the internet, and the live test's journey took 4 to
+ * 7 s without them against 8 to 9 s with them.
+ */
+export const claudePlayEnv = (url: string) => {
+  const config = mkdtempSync("/tmp/sigma-tape-claude-")
+  return {
+    env: {
+      ANTHROPIC_BASE_URL: url,
+      ANTHROPIC_API_KEY: "sk-ant-tape",
+      ANTHROPIC_AUTH_TOKEN: "",
+      CLAUDE_CODE_OAUTH_TOKEN: "",
+      CLAUDE_CONFIG_DIR: config,
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    } as Readonly<Record<string, string>>,
+    [Symbol.dispose]: () => rmSync(config, { recursive: true, force: true }),
+  }
+}

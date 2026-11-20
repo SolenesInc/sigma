@@ -1,0 +1,30 @@
+{"type":"transcript_start","provider":"claude","dialect":"anthropic","scenario":"subagent_command_outlives","metadata":{"source":"authored","model":"claude-haiku-5-5","harness":"Claude Code 2.1.312"}}
+{"type":"lane","name":"parent","when":"Use the Agent tool to start a general-purpose subagent"}
+{"type":"lane","name":"sub","when":"Start this command with the Bash tool"}
+{"type":"bind","name":"task","from":"tool_result","pattern":"Command running in background with ID: ([a-z0-9]+)"}
+{"type":"emit_inbound","lane":"parent","turn":1,"frame":{"type":"message_start","message":{"id":"msg_01Outlives0001","type":"message","role":"assistant","model":"claude-haiku-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":1}}}}
+{"type":"emit_inbound","lane":"parent","turn":1,"frame":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01OutlivesAgentCall0001","name":"Agent","input":{}}}}
+{"type":"emit_inbound","lane":"parent","turn":1,"frame":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"description\":\"Start a long background command\",\"prompt\":\"Start this command with the Bash tool, with run_in_background set to true, and do not wait for it: `until [ -e go ]; do sleep 0.1; done; echo outlived > outlived.txt; echo outlived`. Reply with exactly: started\",\"subagent_type\":\"general-purpose\",\"run_in_background\":false}"}}}
+{"type":"emit_inbound","lane":"parent","turn":1,"frame":{"type":"content_block_stop","index":0}}
+{"type":"emit_inbound","lane":"parent","turn":1,"frame":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":24}}}
+{"type":"emit_inbound","lane":"parent","turn":1,"frame":{"type":"message_stop"}}
+{"type":"emit_inbound","lane":"sub","turn":1,"frame":{"type":"message_start","message":{"id":"msg_01Outlives0002","type":"message","role":"assistant","model":"claude-haiku-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":1}}}}
+{"type":"emit_inbound","lane":"sub","turn":1,"frame":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01OutlivesBashCall00001","name":"Bash","input":{}}}}
+{"type":"emit_inbound","lane":"sub","turn":1,"frame":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"until [ -e go ]; do sleep 0.1; done; echo outlived > outlived.txt; echo outlived\",\"description\":\"Wait for go, then echo outlived\",\"run_in_background\":true}"}}}
+{"type":"emit_inbound","lane":"sub","turn":1,"frame":{"type":"content_block_stop","index":0}}
+{"type":"emit_inbound","lane":"sub","turn":1,"frame":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":24}}}
+{"type":"emit_inbound","lane":"sub","turn":1,"frame":{"type":"message_stop"}}
+{"type":"expect_outbound","lane":"sub","turn":2,"frame":{"newest":[{"type":"tool_result","tool_use_id":"toolu_01OutlivesBashCall00001","content":"Command running in background with ID: <task:1>.<any>"}]}}
+{"type":"emit_inbound","lane":"sub","turn":2,"frame":{"type":"message_start","message":{"id":"msg_01Outlives0003","type":"message","role":"assistant","model":"claude-haiku-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":1}}}}
+{"type":"emit_inbound","lane":"sub","turn":2,"frame":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}
+{"type":"emit_inbound","lane":"sub","turn":2,"frame":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"started"}}}
+{"type":"emit_inbound","lane":"sub","turn":2,"frame":{"type":"content_block_stop","index":0}}
+{"type":"emit_inbound","lane":"sub","turn":2,"frame":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":24}}}
+{"type":"emit_inbound","lane":"sub","turn":2,"frame":{"type":"message_stop"}}
+{"type":"expect_outbound","lane":"parent","turn":2,"frame":{"newest":[{"type":"tool_result","tool_use_id":"toolu_01OutlivesAgentCall0001","content":"<any>"}]}}
+{"type":"emit_inbound","lane":"parent","turn":2,"frame":{"type":"message_start","message":{"id":"msg_01Outlives0004","type":"message","role":"assistant","model":"claude-haiku-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":1}}}}
+{"type":"emit_inbound","lane":"parent","turn":2,"frame":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}
+{"type":"emit_inbound","lane":"parent","turn":2,"frame":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"started"}}}
+{"type":"emit_inbound","lane":"parent","turn":2,"frame":{"type":"content_block_stop","index":0}}
+{"type":"emit_inbound","lane":"parent","turn":2,"frame":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":24}}}
+{"type":"emit_inbound","lane":"parent","turn":2,"frame":{"type":"message_stop"}}

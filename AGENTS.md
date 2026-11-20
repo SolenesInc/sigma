@@ -173,11 +173,12 @@ enter where those consumers enter:
 | Screen   | the real TUI in a PTY on an `@xterm/headless` screen, typed into, against a real server                                                 | `packages/sigma/test/screen.test.ts`                                  |
 | Stack    | the `sigma` binary over its socket: kill, restart, reconnect                                                                            | `packages/sigma/test/stack.test.ts`                                   |
 | Provider | a wire test whose provider is a fake server replaying a recorded exchange from `fixtures/`                                              | `packages/sigma/test/openai.test.ts`, `claude.test.ts`, `agy.test.ts` |
+| Live     | a journey played on the real Claude Code, whose model is the model server playing the journey's tape                                    | `packages/sigma/test/live.test.ts`                                    |
 | Package  | a package's public API, only for specified logic with a large input space (as tables or properties) or a promise no wire test can reach | `packages/<name>/test`                                                |
 
 - The model is the seam. Tests script it (the `script` provider,
-  `SIGMA_MODEL_SCRIPT`) or replay a provider's recorded exchange; nothing else
-  is faked.
+  `SIGMA_MODEL_SCRIPT`), replay a provider's recorded exchange, or play a tape
+  to the real harness; nothing else is faked.
 - Judge the TUI by its screen.
 - A test's title starts with the feature-map use case it covers:
   `test("queue-show: ...")`. `bun run coverage` fails on a test that names no
@@ -206,6 +207,15 @@ Provider tests replay recorded exchanges from `fixtures/`:
   did, and gives sigma what agy said before it only once the hook has run or
   sigma asks something, so every test meets a Stop read ahead of what agy said
   before it. It logs what sigma sent it.
+- A tape, `fixtures/tapes/<harness>/<journey>.ndjson`, is the model wire of
+  one journey in `packages/sigma/test/support/journeys.ts`: each lane's reply
+  at each turn, what the lane's newest message must match, bindings for ids
+  the harness chooses, and gates the journey releases. The model server
+  answers each request by its lane and turn, a request the tape does not
+  expect gets a 400 naming them, and a play fails when an exchange went
+  unasked. `bun packages/sigma/test/support/tapes.ts generate <journey>` plays
+  a tape to the real Claude Code with no account and writes the journey's
+  process fixture; regenerate a generated fixture, never edit it.
 - Screen and stack tests point `SIGMA_CLAUDE` and `SIGMA_AGY` at the fakes, so
   no test reaches a real Claude or agy. A stack test that needs ChatGPT points
   `SIGMA_OPENAI_URL` at the fake OpenAI server.

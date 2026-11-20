@@ -33,6 +33,7 @@ import {
   type ServerOptions,
 } from "./support/server.ts"
 import type { ScriptStep } from "@sigma/models"
+import { BACKGROUND_OUTLIVES_PROMPT, OUTLIVES_PROMPT } from "./support/journeys.ts"
 
 type Approvals = { requests: Record<string, { tool: string }> }
 const approvalsOf = (watch: ViewWatch) => watch.view().docs["sigma.approvals"] as Approvals | undefined
@@ -1019,6 +1020,50 @@ test("subagent-claude, claude-job-report: stopping a Claude run stops the backgr
     'report: The background agent "Create made.txt via touch" was stopped: Create made.txt via touch',
   ])
   expect(runEnds(session.view.seen())).toHaveLength(1)
+})
+
+test("claude-subagent-command, subagent-claude: a background command a foreground Claude subagent starts ends with the subagent, and is a job of neither conversation", async () => {
+  using claude = new FakeClaude("subagent_command_outlives")
+  await using session = await conversationWith(claude, { approvals: "auto" })
+  await session.submit(OUTLIVES_PROMPT)
+  await session.view.until(settled(1))
+  const child = await subagentOf(session)
+  await child.view.until(childEnded)
+
+  expect(transcript(session.view.seen())).toEqual([
+    `user: ${OUTLIVES_PROMPT}`,
+    "assistant: ",
+    "assistant: started",
+    "run_end: answered",
+  ])
+  expect(results(child.view.seen())).toEqual([
+    expect.objectContaining({
+      call: "toolu_01OutlivesBashCall00001",
+      text: expect.stringMatching(/^Command running in background with ID: /),
+    }),
+  ])
+  expect(transcript(child.view.seen()).slice(-2)).toEqual(["assistant: started", "run_end: answered"])
+  // Claude Code stopped the command as the subagent ended: nothing is left working to report.
+  expect(jobsOf(session.view)).toEqual([])
+  expect(jobsOf(child.view)).toEqual([])
+})
+
+test("claude-subagent-command, claude-wake, claude-job-report: a background Claude subagent's command outlives the subagent, and its end wakes the subagent, whose second report wakes the parent", async () => {
+  using claude = new FakeClaude("background_subagent_command_outlives")
+  await using session = await conversationWith(claude, { approvals: "auto" })
+  await session.submit(BACKGROUND_OUTLIVES_PROMPT)
+  await session.view.until(settled(2))
+
+  expect(transcript(session.view.seen()).slice(2)).toEqual([
+    "assistant: started",
+    'report: The background agent "Start a long background command" completed: started',
+    "assistant: The subagent reported: started",
+    "run_end: answered",
+    'report: The background agent "Start a long background command" completed: The command finished: outlived',
+    "assistant: The subagent reported: The command finished: outlived",
+    "run_end: answered",
+  ])
+  expect(jobsOf(session.view)).toEqual([expect.objectContaining({ kind: "agent", state: "done" })])
 })
 
 const stopTasks = (claude: FakeClaude) =>

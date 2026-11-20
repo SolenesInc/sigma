@@ -66,6 +66,13 @@ it into a run that serves Claude Code's own follow-up.
   them at its next step instead.
 - `claude-command-job` makes each background command Claude starts a job of
   the conversation, as each background subagent is, so its end is reported.
+- `claude-subagent-command` leaves a background command a Claude subagent
+  starts out of both conversations' jobs. Claude Code stops it when a
+  foreground subagent ends, so nothing outlives the subagent's card. A
+  background subagent's command outlives the subagent; when it ends, Claude
+  Code wakes the subagent, whose second end the parent reports as
+  `The background agent "<title>" completed: <summary>` in a run nobody
+  prompted.
 - `claude-job-cut-off` ends a job `cut off` when its process ends first: a
   server stop, a crash, or a run that needs a new process. The parent gets
   one report, `The background <agent|command> "<title>" was cut off: Claude Code ended before it did.`,
@@ -475,6 +482,8 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - claude-wake, claude-command-job: a background command that ends after its run wakes the conversation, which shows its report and Claude's follow-up in a run nobody prompted
 - claude-job-report, subagent-claude: a background subagent's approval waits in its own conversation after its parent's turn ended, and once answered its report and Claude's follow-up end the parent's run
 - interrupt-idle, claude-job-report: stopping a Claude run leaves its background command working, and stopping the idle conversation stops the command through Claude Code
+- claude-subagent-command, subagent-claude: a background command a foreground Claude subagent starts ends with the subagent, and is a job of neither conversation
+- claude-subagent-command, claude-wake, claude-job-report: a background Claude subagent's command outlives the subagent, and its end wakes the subagent, whose second report wakes the parent
 - claude-sign-in: signing in to Claude runs Claude Code's own sign-in in a terminal with the provider's environment, then names the account
 - compact-rpc, claude-compact: conversation/compact compacts a Claude conversation by sending Claude Code /compact with the instructions, and answers once it has
 - claude-compact, claude-session-gone: a resume at a position Claude Code compacted away starts a fresh session told the conversation
@@ -486,6 +495,10 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - claude-environment: a server started inside a Claude Code session hands none of that session's variables to the Claude Code it starts, and the provider's own environment still arrives
 - claude-title: a fresh Claude Code session is named after the conversation's first prompt, so Claude Code asks no model for a name
 - claude-tool-search: tool search set to auto in the person's Claude Code settings is turned on for sigma's sessions, and any other value is left alone
+
+Live, `packages/sigma/test/live.test.ts`, the real Claude Code on a tape:
+
+- claude-subagent-command, subagent-claude: the real Claude Code ends a foreground subagent's background command with the subagent, so neither conversation has a job
 
 Package, `packages/claude/test/claude.test.ts`:
 
