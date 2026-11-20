@@ -81,6 +81,7 @@ Screen, `packages/sigma/test/screen.test.ts`:
 Stack, `packages/sigma/test/stack.test.ts`:
 
 - image-attach: sigma exec sends an image file its prompt names, resized to fit, and refuses one it cannot decode
+- image-attach: sigma exec with --cwd reads an image its prompt names from that folder, as the TUI does
 
 Provider, `packages/sigma/test/openai.test.ts`:
 

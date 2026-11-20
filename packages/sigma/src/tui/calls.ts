@@ -21,3 +21,13 @@ export const describeCall = (tool: string, input: unknown) => {
     field(input, "target")
   return subject === undefined ? tool : `${tool}(${firstLine(subject)})`
 }
+
+/** A `sigma.target_changed` entry in one line, as the TUI draws it and `sigma exec` prints it. */
+export const describeTargetChange = (data: {
+  readonly target: string
+  readonly to: { readonly instance: string }
+  readonly filesKept: boolean
+}) =>
+  data.filesKept
+    ? `◆ ${data.target} restarted as ${data.to.instance}: files kept, processes gone`
+    : `◆ ${data.target} was replaced by ${data.to.instance}: files, processes and changes from before are gone`

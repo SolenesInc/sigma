@@ -264,7 +264,10 @@ export class UnknownEffort extends Schema.TaggedError<UnknownEffort>()("UnknownE
   }
 }
 
-/** The target could not be reached at start: nothing was created. `reason` is what its connector said. */
+/**
+ * The target could not be reached: at start, nothing was created; at submit, of input that names a skill, nothing was
+ * placed. `reason` is what its connector said.
+ */
 export class TargetUnavailable extends Schema.TaggedError<TargetUnavailable>()("TargetUnavailable", {
   target: Schema.String,
   reason: Schema.String,
@@ -361,7 +364,7 @@ export const Submit = Rpc.make("conversation/submit", {
     ),
   },
   success: Schema.Struct({ submission: Schema.Int }),
-  error: Schema.Union([ReadOnlyServer, NoSuchConversation, TakesNoInput, UnreadableImage]),
+  error: Schema.Union([ReadOnlyServer, NoSuchConversation, TakesNoInput, UnreadableImage, TargetUnavailable]),
 })
 
 export const Watch = Rpc.make("conversation/watch", {

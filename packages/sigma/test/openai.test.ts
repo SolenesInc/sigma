@@ -8,7 +8,7 @@ import type { HomeConfig } from "../src/config.ts"
 import type { Home } from "../src/home.ts"
 import { TestTargets } from "./support/targets.ts"
 import { accessToken, ACCOUNT, FakeOpenAi, matches, signIn } from "./support/openai.ts"
-import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, errorTag, RawClient } from "./support/raw.ts"
 import {
   person,
   runEnds,
@@ -662,6 +662,54 @@ test("target-start, agents-md, skills-found: a remote conversation is told the A
   )
   const skills = (await session.client.call("skills/list", { conversation: session.conversation })).result
   expect(skills.map((skill: { name: string }) => skill.name)).toEqual(["deploy"])
+})
+
+test("target-lost, skills-attach: input that names a skill on a target that cannot be reached is refused with the connector's reason, and nothing is placed", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box")
+  write(join(work, ".agents", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy it\n---\nShip it.\n")
+  await using fake = new FakeOpenAi()
+  fake.play("text_answer")
+  const home = tempHome()
+  try {
+    const serve = () =>
+      runningServer([], { home, openai: fake.options(), config: { target_connector: targets.connector } })
+    let conversation: string
+    {
+      await using server = await serve()
+      await signIn(home)
+      const client = await RawClient.connect(server.home.socket)
+      const started = await client.call("conversation/start", {
+        author: person("ada"),
+        cwd: work,
+        target: "box",
+        provider: "openai",
+        approvals: "auto",
+        model: RECORDED_MODEL,
+      })
+      conversation = started.result.conversation as string
+      const view = watchView(client, conversation)
+      await submit(client, conversation, "/deploy now")
+      await view.until(settled(1))
+      client.close()
+    }
+    // The target is gone by the time the next server reaches for it: the connector no longer knows it.
+    rmSync(join(targets.root, "box", "instance"))
+    await using server = await serve()
+    const client = await RawClient.connect(server.home.socket)
+    const refused = await submit(client, conversation, "/deploy again")
+    expect(errorTag(refused)).toBe("TargetUnavailable")
+    expect(JSON.stringify(refused.error)).toContain("target box unavailable: connector exited 3: no target named box")
+    const view = watchView(client, conversation)
+    await view.until(() => true)
+    const users = view.seen().filter((entry) => entry.kind === "sigma.user")
+    expect(
+      users.map((entry) => (entry.data as { skills?: Array<{ name: string }> }).skills?.map((skill) => skill.name)),
+    ).toEqual([["deploy"]])
+    client.close()
+  } finally {
+    rmSync(home.dir, { recursive: true, force: true })
+  }
 })
 
 test("openai-instructions: every tool ChatGPT's instructions name is one its request offers, by the same name", async () => {

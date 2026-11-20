@@ -200,6 +200,15 @@ const skillsInstructions = (skills: ReadonlyArray<Skill>, read: string) =>
 
 const skillName = (text: string) => (text.match(/^[\p{L}\p{N}\-_.:]*/u)?.[0] ?? "").replace(/[.:]+$/, "")
 
+/** The names `text` gives as skills: `/name` at its start, and `$name` anywhere. */
+export const skillNames = (text: string): Array<string> => {
+  const trimmed = text.trimStart()
+  return [
+    ...(trimmed.startsWith("/") ? [skillName(trimmed.slice(1))] : []),
+    ...[...trimmed.matchAll(/\$/g)].map((match) => skillName(trimmed.slice(match.index + 1))),
+  ]
+}
+
 /** The skills `text` names, each with its `SKILL.md` read through `env` now; `skills` is read only when it names one. */
 export const attachedSkills = (
   env: ExecutionEnv,
@@ -207,11 +216,7 @@ export const attachedSkills = (
   skills: Effect.Effect<ReadonlyArray<Skill>>,
 ): Effect.Effect<Array<AttachedSkill>> =>
   Effect.gen(function* () {
-    const trimmed = text.trimStart()
-    const names = [
-      ...(trimmed.startsWith("/") ? [skillName(trimmed.slice(1))] : []),
-      ...[...trimmed.matchAll(/\$/g)].map((match) => skillName(trimmed.slice(match.index + 1))),
-    ]
+    const names = skillNames(text)
     // Text that names no skill reads nothing, so most input is taken without a look at the workspace.
     if (names.length === 0) return []
     const known = yield* skills

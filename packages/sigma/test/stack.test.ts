@@ -399,6 +399,18 @@ test("target-cli, target-unavailable: sigma exec refuses --target without --cwd,
   expect(unreachable.stderr.trimEnd().split("\n")).toHaveLength(1)
 }, 30_000)
 
+test("target-restarted, target-cli: sigma exec prints that its target restarted, as the TUI draws it", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box", "box-1", "vol-1")
+  const sigmaHome = home()
+  writeFileSync(join(sigmaHome.dir, "config.toml"), targets.configToml)
+  const restart = `echo box-2 > ../instance; ${targets.killCommand("box")}`
+  const env = await scriptEnv(sigmaHome, [{ tool: { name: "bash", input: { command: restart } } }, { text: "noted" }])
+  const result = await finished(sigma(["exec", "--auto", "--target", "box", "--cwd", work, "go"], env))
+  expect(result).toMatchObject({ code: 0, stdout: "noted\n" })
+  expect(result.stderr).toContain("◆ box restarted as box-2: files kept, processes gone\n")
+}, 30_000)
+
 test("mode-print, answer-exec-fail: sigma exec exits 1 and says why when the run fails", async () => {
   const env = await scriptEnv(home(), [{ text: "half an ", fail: "provider went away" }])
   const result = await finished(sigma(["exec", "go"], env))
@@ -498,6 +510,24 @@ test("image-attach: sigma exec sends an image file its prompt names, resized to 
   const refused = await finished(sigma(["exec", `describe ${join(sigmaHome.dir, "cut.png")}`], env))
   expect(refused).toMatchObject({ code: 1, stdout: "" })
   expect(refused.stderr).toContain("cut.png (image/png) cannot be decoded")
+}, 30_000)
+
+test("image-attach: sigma exec with --cwd reads an image its prompt names from that folder, as the TUI does", async () => {
+  const sigmaHome = home()
+  const env = await scriptEnv(sigmaHome)
+  const folder = join(sigmaHome.dir, "project")
+  mkdirSync(folder)
+  writeFileSync(join(folder, "pic.png"), png(4, 4))
+  // Run from the home, not the folder: the image is found only where the conversation works.
+  const sent = await finished(sigma(["exec", "--json", "--cwd", folder, "describe pic.png"], env))
+  expect(sent.code).toBe(0)
+  let view: View | undefined
+  for (const line of sent.stdout.trimEnd().split("\n")) {
+    const item = JSON.parse(line) as ViewItem
+    view = item._tag === "view" ? item.view : applyImmutable(view, item.ops as Array<Op>)
+  }
+  const user = view!.entries.find((entry) => entry.kind === "sigma.user")!
+  expect((user.data as { images?: Array<string> }).images).toEqual(["pic.png"])
 }, 30_000)
 
 test("approval-exec-deny: sigma exec shows its calls and, without --auto, denies the ones that would change things", async () => {

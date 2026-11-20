@@ -103,7 +103,15 @@ import { codeModeTools, sigmaTools } from "./tools/index.ts"
 import { attachedImages } from "./images.ts"
 import { agentTools, type AgentTypes, interruptTree } from "./agents.ts"
 import { followTreeStatus, type TreeStatuses } from "./status.ts"
-import { attachedSkills, skillsOf, userInput, type Workspace, workspaceInstructions } from "./workspace.ts"
+import {
+  attachedSkills,
+  skillNames,
+  skillsOf,
+  toldOfWorkspace,
+  userInput,
+  type Workspace,
+  workspaceInstructions,
+} from "./workspace.ts"
 import { projectDefaultModel } from "./config.ts"
 import {
   envOn,
@@ -626,6 +634,9 @@ const Handlers = SigmaRpcs.toLayer(
           const conversation = yield* takingInput(id)
           const agent = yield* agentOf(conversation)
           const env = envOf(agent)
+          // A skill named while its target is unreachable could not be read, and the input would go without it, as if
+          // it named none: it is refused instead, so the person knows.
+          if (skillNames(text).length > 0 && toldOfWorkspace(providers.instances, agent)) yield* reach(agent.target)
           const skills = skillsOf(providers.instances, agent, workspaceOf(agent, env))
           const { content, attached } = userInput(
             text,

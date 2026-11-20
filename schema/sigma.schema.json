@@ -440,6 +440,9 @@
           },
           {
             "$ref": "#/$defs/UnreadableImageEncoded"
+          },
+          {
+            "$ref": "#/$defs/TargetUnavailableEncoded"
           }
         ]
       },

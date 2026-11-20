@@ -53,7 +53,7 @@ import { VERSION } from "../version.ts"
 import { mailPayload } from "../agents.ts"
 import { Client, serverRefusal, type StartOptions } from "../client.ts"
 import { attachmentsIn, imagesIn } from "../attach.ts"
-import { describeCall } from "./calls.ts"
+import { describeCall, describeTargetChange } from "./calls.ts"
 import {
   clip,
   COMMANDS,
@@ -655,12 +655,9 @@ const EntryView = (props: {
       return <RunEndView outcome={end.outcome} message={end.message} />
     }
     case TARGET_CHANGED_KIND: {
-      const data = dataOf<{ target: string; to: { instance: string }; filesKept: boolean }>(entry)
       return (
         <text fg={color.yellow} marginTop={1} marginLeft={2}>
-          {data.filesKept
-            ? `◆ ${data.target} restarted as ${data.to.instance}: files kept, processes gone`
-            : `◆ ${data.target} was replaced by ${data.to.instance}: files, processes and changes from before are gone`}
+          {describeTargetChange(dataOf<Parameters<typeof describeTargetChange>[0]>(entry))}
         </text>
       )
     }
@@ -1169,7 +1166,7 @@ const conversationScreen = Effect.fnUntraced(function* (
       Effect.runFork(
         client["conversation/submit"](payload).pipe(
           Effect.retry({ while: (error) => error._tag === "RpcClientError", schedule: Schedule.spaced(REWATCH_DELAY) }),
-          Effect.catchTag("UnreadableImage", (error) =>
+          Effect.catchTag(["UnreadableImage", "TargetUnavailable"], (error) =>
             Effect.sync(() => setNotice({ text: error.message, warning: true })),
           ),
           // The server that answered is another, read-only one, which a restart put in place after the prompt was typed.

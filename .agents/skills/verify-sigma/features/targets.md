@@ -23,12 +23,18 @@ on. attn will use targets to run a member's work in a sandbox.
 - `target-restarted` commits `sigma.target_changed` with `filesKept: true`
   when the target's instance changed and its files did not, and tells the
   model before its next request that its files are kept and its processes
-  gone.
+  gone. The TUI draws it, and `sigma exec` prints it on stderr, as
+  `◆ <t> restarted as <instance>: files kept, processes gone`.
 - `target-replaced` commits `sigma.target_changed` with `filesKept: false`
   when the instance and its files changed, and tells the model what is gone.
 - `target-lost` fails a call on a target that is gone with
   `target <t> unavailable: <reason>` from the connector, and the run goes on
-  to the model's next step.
+  to the model's next step. A connector that brings no hello within 60 s
+  fails every call at once for the next 60 s, saying how long ago it hung,
+  so a hung target costs one wait, not one per section and call. Input that
+  names a skill (`/name`, `$name`) while the target cannot be reached is
+  refused with `TargetUnavailable` and placed nowhere; the TUI shows the
+  reason as a notice.
 - `target-member-mode` runs a Claude conversation on a target in member
   mode, at start or after a model switch: Claude Code's own tools, the
   person's settings, connectors and other MCP servers are off, and it acts
@@ -148,8 +154,13 @@ Preconditions:
   `packages/sigma/test/claude.test.ts`, on the fake `claude`'s
   `member_bash`, `member_restart` and `member_sleep`, which
   `derive-claude-fixtures.ts` derives from `bash_allowed`.
-- Stack: `target-server-restart: ...` and `target-cli, target-unavailable: ...`
-  in `packages/sigma/test/stack.test.ts`.
+- Provider: `target-lost, skills-attach: ...` in
+  `packages/sigma/test/openai.test.ts`.
+- Package: `env-remote: a target whose connector brings no hello ...` in
+  `packages/env/test/remote.test.ts`.
+- Stack: `target-server-restart: ...`, `target-cli, target-unavailable: ...`
+  and `target-restarted, target-cli: ...` in
+  `packages/sigma/test/stack.test.ts`.
 - Screen: `target-cli: ...` and `target-restarted, target-replaced: ...` in
   `packages/sigma/test/screen.test.ts`.
 
@@ -161,7 +172,7 @@ Preconditions:
 - A remote conversation gets the home's `AGENTS.md`, but not the home's
   skills or the Claude Code agent types: its tools cannot read a file on the
   home, and it takes nothing of the person's `~/.claude`.
-- Images a person attaches are read on their own machine, from the TUI's
+- Images a person attaches are read on their own machine, from the TUI's or `sigma exec`'s
   folder when the conversation is on a target.
 - The instance is announced through a `target` prompt section, rendered
   before each request, on ChatGPT. Claude Code runs its own loop, so member

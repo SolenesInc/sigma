@@ -46,7 +46,8 @@ import {
 const PING_MS = 5_000
 /**
  * How long a connector may take to bring the agent's hello: a start through ssh and `docker exec`, with the sweep and
- * reading `AGENTS.md`, took 723 ms (F11). Past 60 s it is hung, as an ssh that never connects is (F14).
+ * reading `AGENTS.md`, took 723 ms (F11). Past 60 s it is hung, as an ssh that never connects is (F14). A target whose
+ * connector hung is failed at once for as long again, rather than waited on by every call in that time.
  */
 const HELLO_MS = 60_000
 /** The connector's stderr kept for a reason (D4); the rest is counted. */
@@ -140,6 +141,8 @@ class Session {
   #ping: ReturnType<typeof setInterval> | undefined
   #silence: ReturnType<typeof setTimeout> | undefined
   readonly #silenceMs: number
+  /** Set when the connector brought no hello in time: the next calls fail at once with this reason for a while. */
+  hung = false
   readonly #lost: (reason: string) => void
   readonly closed: Promise<void>
 
@@ -148,6 +151,7 @@ class Session {
     readonly channel: Channel,
     owner: string,
     silenceMs: number,
+    helloMs: number,
   ) {
     this.#silenceMs = silenceMs
     let greet!: (hello: AgentHello) => void
@@ -160,7 +164,10 @@ class Session {
       this.#lost(reason)
       channel.kill()
     }
-    const late = setTimeout(() => fail(`no hello from sigma-env within ${HELLO_MS / 1000} s`), HELLO_MS)
+    const late = setTimeout(() => {
+      this.hung = true
+      fail(`no hello from sigma-env within ${helloMs / 1000} s`)
+    }, helloMs)
     channel.onLine((line) => {
       if (line.trim() === "" || this.#reason !== undefined) return
       let frame: AgentFrame
@@ -290,12 +297,18 @@ export interface TargetPoolOptions {
   readonly connect: (target: string) => Channel
   /** How long a call in flight waits for any frame from the agent; default `SILENCE_MS`. */
   readonly silenceMs?: number
+  /** How long a connector may take to bring the agent's hello; default 60 s. */
+  readonly helloMs?: number
+  /** The time now in ms, for how long a hung target is failed at once; default `Date.now`. */
+  readonly now?: () => number
 }
 
 /** The channel to each target, opened on first use and opened again on the first call after it is lost. */
 export class TargetPool {
   readonly #options: TargetPoolOptions
   readonly #sessions = new Map<string, Session>()
+  /** Each target whose connector last hung: when, and why its calls fail meanwhile. */
+  readonly #hung = new Map<string, { readonly at: number; readonly reason: string }>()
 
   constructor(options: TargetPoolOptions) {
     this.#options = options
@@ -304,6 +317,17 @@ export class TargetPool {
   /** The live session of `target`, connecting when it has none. */
   session(target: string): Effect.Effect<Session, TargetUnreachable> {
     return Effect.callback<Session, TargetUnreachable>((resume) => {
+      const helloMs = this.#options.helloMs ?? HELLO_MS
+      const now = this.#options.now ?? Date.now
+      const hung = this.#hung.get(target)
+      if (hung !== undefined && now() - hung.at < helloMs) {
+        const ago = Math.round((now() - hung.at) / 1000)
+        return resume(
+          Effect.fail(
+            new TargetUnreachable(target, `${hung.reason} (${ago} s ago; tried again after ${helloMs / 1000} s)`),
+          ),
+        )
+      }
       let session = this.#sessions.get(target)
       if (session === undefined || session.reason !== undefined) {
         const opened = new Session(
@@ -311,10 +335,13 @@ export class TargetPool {
           this.#options.connect(target),
           this.#options.owner,
           this.#options.silenceMs ?? SILENCE_MS,
+          helloMs,
         )
         this.#sessions.set(target, opened)
         void opened.closed.then(() => {
           if (this.#sessions.get(target) === opened) this.#sessions.delete(target)
+          if (opened.hung) this.#hung.set(target, { at: now(), reason: opened.reason! })
+          else this.#hung.delete(target)
         })
         session = opened
       }

@@ -5,7 +5,9 @@ import { applyImmutable, type Op } from "@sigma/delta"
 import {
   type EntryRecord,
   type FellBehind,
+  LOCAL_TARGET,
   RUN_END_KIND,
+  TARGET_CHANGED_KIND,
   type RunEnd,
   USER_KIND,
   type View,
@@ -17,7 +19,7 @@ import { imagesIn } from "./attach.ts"
 import type { RpcClientError } from "effect/rpc/RpcClientError"
 import { launchAuthor } from "./author.ts"
 import { Client, serverRefusal, type StartOptions } from "./client.ts"
-import { describeCall } from "./tui/calls.ts"
+import { describeCall, describeTargetChange } from "./tui/calls.ts"
 
 type Block = { readonly type: string; readonly text?: string; readonly name?: string; readonly arguments?: unknown }
 type Message = { readonly content?: ReadonlyArray<Block> | string }
@@ -242,7 +244,9 @@ export const exec = Effect.fnUntraced(function* (
   )
 
   const printer = new Printer()
-  const images = imagesIn(prompt, process.cwd())
+  // Images are read on this machine: from the conversation's folder when it is here, else from this shell's folder.
+  const info = listed.find((each) => each.id === conversation)
+  const images = imagesIn(prompt, info?.target === LOCAL_TARGET ? info.cwd : process.cwd())
   const requestId = crypto.randomUUID()
   let submitted = false
   // The prompt's fate is read from the entries committed under its requestId, which every watch, reopened or not, is
@@ -267,6 +271,11 @@ export const exec = Effect.fnUntraced(function* (
       }
       for (const block of blocks(message)) {
         if (block.type === "toolCall") note(`› ${describeCall(block.name ?? "", block.arguments)}`)
+      }
+    } else if (entry.kind === TARGET_CHANGED_KIND) {
+      if (!json) {
+        printer.end()
+        note(describeTargetChange(entry.data as Parameters<typeof describeTargetChange>[0]))
       }
     } else if (entry.kind === RUN_END_KIND) {
       printer.end()

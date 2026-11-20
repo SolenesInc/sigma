@@ -230,3 +230,26 @@ test("env-remote: a connector that prints a banner before sigma-env fails the ca
   expect(first.message).toContain("not a frame: Welcome to here")
   expect(await Effect.runPromise(env.exists("/"))).toBe(true)
 })
+
+test("env-remote: a target whose connector brings no hello fails each call at once until the hello limit passes again", async () => {
+  let clock = 0
+  let connects = 0
+  const pool = new TargetPool({
+    owner: "test-owner",
+    helloMs: 200,
+    now: () => clock,
+    // A connector that hangs, as an ssh that never connects does.
+    connect: () => (connects++, spawnChannel(["sleep", "3600"])),
+  })
+  pools.push(pool)
+  const env = pool.env("here", "/")
+  const failure = async () => (await Effect.runPromise(Effect.flip(env.exists("/")))).message
+  expect(await failure()).toBe("target here unavailable: no hello from sigma-env within 0.2 s")
+  clock += 150
+  expect([await failure(), connects]).toEqual([
+    "target here unavailable: no hello from sigma-env within 0.2 s (0 s ago; tried again after 0.2 s)",
+    1,
+  ])
+  clock += 50
+  expect([await failure(), connects]).toEqual(["target here unavailable: no hello from sigma-env within 0.2 s", 2])
+})
