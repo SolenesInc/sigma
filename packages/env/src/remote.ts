@@ -153,6 +153,8 @@ class Session {
     owner: string,
     silenceMs: number,
     helloMs: number,
+    /** When the connect began, in ms. */
+    readonly since: number,
   ) {
     this.#silenceMs = silenceMs
     let greet!: (hello: AgentHello) => void
@@ -310,6 +312,12 @@ export interface TargetPoolOptions {
   readonly now?: () => number
 }
 
+/**
+ * Wraps a caller's wait for a target's hello, a connect that began at `since` (ms), so the caller can tell someone of
+ * the wait while it lasts. Only a wait is wrapped: a target already reached, or failed at once, is not.
+ */
+export type Reaching = <A, E>(target: string, since: number, wait: Effect.Effect<A, E>) => Effect.Effect<A, E>
+
 /** The channel to each target, opened on first use and opened again on the first call after it is lost. */
 export class TargetPool {
   readonly #options: TargetPoolOptions
@@ -323,18 +331,16 @@ export class TargetPool {
     this.#options = options
   }
 
-  /** The live session of `target`, connecting when it has none. */
-  session(target: string): Effect.Effect<Session, TargetUnreachable> {
-    return Effect.callback<Session, TargetUnreachable>((resume) => {
+  /** The live session of `target`, connecting when it has none; a wait for its hello goes through `reaching`. */
+  session(target: string, reaching?: Reaching): Effect.Effect<Session, TargetUnreachable> {
+    return Effect.suspend(() => {
       const helloMs = this.#options.helloMs ?? HELLO_MS
       const now = this.#options.now ?? Date.now
       const hung = this.#hung.get(target)
       if (hung !== undefined && now() - hung.at < helloMs) {
         const ago = Math.round((now() - hung.at) / 1000)
-        return resume(
-          Effect.fail(
-            new TargetUnreachable(target, `${hung.reason} (${ago} s ago; tried again after ${helloMs / 1000} s)`),
-          ),
+        return Effect.fail(
+          new TargetUnreachable(target, `${hung.reason} (${ago} s ago; tried again after ${helloMs / 1000} s)`),
         )
       }
       let session = this.#sessions.get(target)
@@ -345,6 +351,7 @@ export class TargetPool {
           this.#options.owner,
           this.#options.silenceMs ?? SILENCE_MS,
           helloMs,
+          now(),
         )
         this.#sessions.set(target, opened)
         this.#refused.delete(target)
@@ -358,29 +365,33 @@ export class TargetPool {
         session = opened
       }
       const current = session
-      current.hello.then(
-        () => resume(Effect.succeed(current)),
-        (error: TargetUnreachable) => resume(Effect.fail(error)),
+      const greeted = Effect.as(
+        Effect.tryPromise({ try: () => current.hello, catch: (error) => error as TargetUnreachable }),
+        current,
       )
+      const waits = reaching !== undefined && current.greeting === undefined && current.reason === undefined
+      return waits ? reaching(target, current.since, greeted) : greeted
     })
   }
 
   /** Connects to `target` when no channel is open, and returns its agent's hello. */
-  connect(target: string): Effect.Effect<AgentHello, TargetUnreachable> {
-    return Effect.flatMap(this.session(target), (session) => Effect.promise(() => session.hello))
+  connect(target: string, reaching?: Reaching): Effect.Effect<AgentHello, TargetUnreachable> {
+    return Effect.flatMap(this.session(target, reaching), (session) => Effect.promise(() => session.hello))
   }
 
   /**
    * The hello of `target`'s channel, connecting when none is open, or `undefined` when the last channel was gone before
    * its hello: a target a call just found unreachable is not reached again until the next call asks (D5).
    */
-  reached(target: string): Effect.Effect<AgentHello | undefined, TargetUnreachable> {
-    return this.#refused.has(target) && !this.#sessions.has(target) ? Effect.succeed(undefined) : this.connect(target)
+  reached(target: string, reaching?: Reaching): Effect.Effect<AgentHello | undefined, TargetUnreachable> {
+    return this.#refused.has(target) && !this.#sessions.has(target)
+      ? Effect.succeed(undefined)
+      : this.connect(target, reaching)
   }
 
-  /** The environment at `cwd`, a path on `target`. It connects on its first call. */
-  env(target: string, cwd: string): RemoteExecutionEnv {
-    return new RemoteExecutionEnv(this, target, cwd)
+  /** The environment at `cwd`, a path on `target`. It connects on its first call, telling `reaching` of a wait. */
+  env(target: string, cwd: string, reaching?: Reaching): RemoteExecutionEnv {
+    return new RemoteExecutionEnv(this, target, cwd, reaching)
   }
 
   /** Ends every channel, which stops their commands, and completes once each is gone. */
@@ -446,18 +457,20 @@ export class RemoteExecutionEnv implements ExecutionEnv {
   readonly cwd: string
   readonly #pool: TargetPool
   readonly #target: string
+  readonly #reaching: Reaching | undefined
   /** Calls of this view's running execs, for `cleanup`. */
   readonly #execs = new Set<{ session: Session; id: number }>()
 
-  constructor(pool: TargetPool, target: string, cwd: string) {
+  constructor(pool: TargetPool, target: string, cwd: string, reaching?: Reaching) {
     this.#pool = pool
     this.#target = target
+    this.#reaching = reaching
     this.cwd = cwd
     this.id = `target:${target}`
   }
 
   #session<E extends Failure>(lost: (message: string) => E): Effect.Effect<Session, E> {
-    return Effect.mapError(this.#pool.session(this.#target), (error) => lost(error.message))
+    return Effect.mapError(this.#pool.session(this.#target, this.#reaching), (error) => lost(error.message))
   }
 
   #call<A>(method: string, ...args: unknown[]): Effect.Effect<A, FileError> {

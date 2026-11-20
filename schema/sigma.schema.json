@@ -611,7 +611,7 @@
                   },
                   "docs": {
                     "type": "object",
-                    "description": "pi.agent, pi.live, pi.inbox, pi.provider, pi.usage and sigma.approvals, by kind; pi.live holds the run in flight, sigma.approvals the calls waiting for a person."
+                    "description": "pi.agent, pi.live, pi.inbox, pi.provider, pi.usage, sigma.approvals and sigma.reaching, by kind; pi.live holds the run in flight, sigma.approvals the calls waiting for a person, sigma.reaching the target the run waits to reach."
                   }
                 },
                 "required": [

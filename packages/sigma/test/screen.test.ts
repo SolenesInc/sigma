@@ -137,6 +137,24 @@ test("target-restarted, target-replaced: the TUI shows when the computer behind 
   await quit(session)
 })
 
+test("target-reaching: while a target's connector holds its hello the TUI shows it reaching the target, and the notice goes at the hello", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box", "box-1")
+  const sigmaHome = home()
+  writeFileSync(join(sigmaHome.dir, "config.toml"), targets.configToml)
+  // The call holds the target's next connects and stops its sigma-env, so the next request waits to reach it again.
+  const hold = `touch ${join(targets.root, "box", "hold")}; ${targets.killCommand("box")}`
+  const script = [{ tool: { name: "bash", input: { command: hold } } }, { text: "reached again" }]
+  const session = await open(script, ["--target", "box", "--cwd", work, "--auto"], sigmaHome)
+  await session.waitFor((screen) => screen.includes("READY"))
+  session.type("go\r")
+  await session.waitFor((screen) => screen.includes("reaching box") && screen.includes("WORKING"))
+  targets.release("box")
+  const screen = await session.waitFor((screen) => screen.includes("reached again") && screen.includes("READY"))
+  expect(screen).not.toContain("reaching box")
+  await quit(session)
+})
+
 test("answer-author: without USER the TUI names a person's message after the system's user name", async () => {
   const session = await open([{ text: "hello" }], [], home(), { USER: undefined })
   await session.waitFor((screen) => screen.includes("READY"))

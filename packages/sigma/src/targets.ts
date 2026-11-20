@@ -8,10 +8,10 @@ import { hostname } from "node:os"
 import { join } from "node:path"
 import type { ExecutionEnv } from "@sigma/env"
 import type { AgentHello } from "@sigma/env/protocol"
-import { type Channel, spawnChannel, TargetPool } from "@sigma/env/remote"
-import { defineExtension, type Harness } from "@sigma/harness"
+import { type Channel, type Reaching, spawnChannel, TargetPool } from "@sigma/env/remote"
+import { defineExtension, type Harness, isRunTask } from "@sigma/harness"
 import { type ConversationId, defineDoc, type EntryRecord, type Tx } from "@sigma/kernel"
-import { LOCAL_TARGET, TARGET_CHANGED_KIND } from "@sigma/protocol"
+import { LOCAL_TARGET, REACHING_KIND, TARGET_CHANGED_KIND } from "@sigma/protocol"
 import { Effect } from "effect"
 import type { Home } from "./home.ts"
 
@@ -47,6 +47,56 @@ export const openTargets = (home: Home, connector: ReadonlyArray<string> | undef
             `this home has no target_connector in ${join(home.dir, "config.toml")}; whatever runs sigma sets it to the command that reaches a target`,
           )
         : spawnChannel([...connector, target, "--", ...SIGMA_ENV]),
+  })
+
+/**
+ * The target a conversation's run waits on for its hello, and since when, so its clients can say it is being reached:
+ * a connector can take up to 60 s to bring it, or never does (F14). Set while the run waits, and gone at the hello or
+ * the failure.
+ */
+export const ReachingDoc = defineDoc<{ wait?: { target: string; since: number } }>({
+  kind: REACHING_KIND,
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  // A fork waits on nothing yet.
+  fork: "initial",
+  initial: () => ({}),
+  checkpointWhen: () => true,
+})
+
+/** Commits the wait for a target's hello in the conversation's `sigma.reaching` while it lasts. */
+export const reachingIn =
+  (harness: () => Harness, conversation: ConversationId): Reaching =>
+  (target, since, wait) => {
+    const set = (to: { target: string; since: number } | undefined) =>
+      harness().session.commit((tx) =>
+        Effect.map(tx.doc(ReachingDoc, conversation), (doc) => {
+          if (to !== undefined && doc.wait?.since !== since) doc.wait = to
+          if (to === undefined && doc.wait !== undefined) delete doc.wait
+        }),
+      )
+    return Effect.acquireUseRelease(
+      Effect.orDie(set({ target, since })),
+      () => wait,
+      () => Effect.orDie(set(undefined)),
+    )
+  }
+
+/**
+ * At server start, before scheduling resumes: no hello is awaited yet, so the wait a stopped server left in a run's
+ * `sigma.reaching` is cleared; the run that resumes and reaches its target sets it again.
+ */
+export const forgetReaching = (harness: Harness) =>
+  Effect.gen(function* () {
+    const { tasks } = yield* harness.inspect
+    const conversations = new Set(
+      tasks.filter((task) => isRunTask(harness.runTasks, task.record.kind)).map((task) => task.record.conversationId),
+    )
+    for (const id of conversations) {
+      if ((yield* harness.session.snapshot(ReachingDoc, id))?.wait === undefined) continue
+      yield* harness.session.commit((tx) => Effect.map(tx.doc(ReachingDoc, id), (doc) => void delete doc.wait))
+    }
   })
 
 /** The instance and files a conversation's target had when sigma last reached it (D6). */
@@ -122,7 +172,7 @@ export const targetSection = (targets: TargetPool, harness: () => Harness, ownLo
           Effect.gen(function* () {
             const target = agent.target
             if (isLocal(target) || ownLoop(agent.model?.provider ?? "")) return undefined
-            const hello = yield* targets.connect(target)
+            const hello = yield* targets.connect(target, reachingIn(harness, conversationId))
             const conversation = (yield* harness().conversation(conversationId))!
             yield* conversation.commit((tx) => recordTarget(tx, conversationId, target, hello))
             const doc = yield* harness().session.snapshot(TargetDoc, conversationId)
@@ -135,11 +185,11 @@ export const targetSection = (targets: TargetPool, harness: () => Harness, ownLo
         // tools act on, and says which of the two the model works on.
         key: "machine",
         tag: false,
-        render: ({ agent, shown }) =>
+        render: ({ conversationId, agent, shown }) =>
           Effect.gen(function* () {
             const target = agent.target
             if (isLocal(target) || !ownLoop(agent.model?.provider ?? "")) return undefined
-            const hello = yield* targets.connect(target)
+            const hello = yield* targets.connect(target, reachingIn(harness, conversationId))
             return machineText(target, hello)
           }).pipe(Effect.catch(() => Effect.succeed(shown.machine))),
       },
@@ -161,7 +211,9 @@ export const targetNotice =
   (targets: TargetPool, harness: () => Harness) =>
   (conversationId: ConversationId, target: string, after: "run" | "call") =>
     Effect.gen(function* () {
-      const hello = after === "run" ? yield* targets.connect(target) : yield* targets.reached(target)
+      const reaching = reachingIn(harness, conversationId)
+      const hello =
+        after === "run" ? yield* targets.connect(target, reaching) : yield* targets.reached(target, reaching)
       if (hello === undefined) return undefined
       const conversation = (yield* harness().conversation(conversationId))!
       let changed: TargetChange | undefined
@@ -185,10 +237,12 @@ export const targetFolder = (home: Home, target: string) =>
     return folder
   })
 
-/** The environment of a conversation with this agent state, on its target. */
+/** The environment of a conversation with this agent state, on its target; a wait for the target goes through `reaching`. */
 export const envOn = (
   targets: TargetPool,
   local: (cwd: string) => ExecutionEnv,
   home: Home,
   agent: { readonly cwd?: string; readonly target?: string },
-): ExecutionEnv => (isLocal(agent.target) ? local(agent.cwd ?? home.dir) : targets.env(agent.target, agent.cwd ?? "/"))
+  reaching?: Reaching,
+): ExecutionEnv =>
+  isLocal(agent.target) ? local(agent.cwd ?? home.dir) : targets.env(agent.target, agent.cwd ?? "/", reaching)

@@ -78,6 +78,12 @@ export const LOCAL_TARGET = "local"
  */
 export const TARGET_CHANGED_KIND = "sigma.target_changed"
 
+/**
+ * A view's document `{ wait?: { target, since } }`: the conversation's run waits for its target's hello, a connect that
+ * began at `since` (ms since the epoch); `wait` is gone at the hello or the failure.
+ */
+export const REACHING_KIND = "sigma.reaching"
+
 export const RunEnd = Schema.Struct({
   outcome: Outcome,
   message: Schema.optionalKey(Schema.String.annotate({ description: "Why the run ended without an answer." })),
@@ -109,7 +115,7 @@ export const View = Schema.Struct({
   ),
   docs: Schema.Record(Schema.String, Json).annotate({
     description:
-      "pi.agent, pi.live, pi.inbox, pi.provider, pi.usage and sigma.approvals, by kind; pi.live holds the run in flight, sigma.approvals the calls waiting for a person.",
+      "pi.agent, pi.live, pi.inbox, pi.provider, pi.usage, sigma.approvals and sigma.reaching, by kind; pi.live holds the run in flight, sigma.approvals the calls waiting for a person, sigma.reaching the target the run waits to reach.",
   }),
 })
 export type View = typeof View.Type

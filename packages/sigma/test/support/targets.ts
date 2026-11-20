@@ -54,6 +54,16 @@ export class TestTargets {
     return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").map(Number) : []
   }
 
+  /** Holds the target's next connects: none brings its hello until `release`. */
+  hold(name: string) {
+    writeFileSync(join(this.root, name, "hold"), "")
+  }
+
+  /** Lets the held connects bring their hello. */
+  release(name: string) {
+    rmSync(join(this.root, name, "hold"))
+  }
+
   /** Loses the target: the connector reaches no instance of it. */
   lose(name: string) {
     rmSync(join(this.root, name, "instance"))

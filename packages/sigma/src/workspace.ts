@@ -11,6 +11,7 @@
 import { defineExtension } from "@sigma/harness"
 import type { ExecutionEnv } from "@sigma/env"
 import type { ImageContent, ProviderInstance, TextContent } from "@sigma/models"
+import type { ConversationId } from "@sigma/kernel"
 import { Effect } from "effect"
 import type { AgentTypes } from "./agents.ts"
 import type { AttachedSkill, Skill } from "@sigma/protocol"
@@ -310,10 +311,14 @@ const agentTypesInstructions = (types: ReadonlyArray<AgentType>, spawn: string) 
     ? ""
     : `\n# Agent types\n\nThe agent types \`${spawn}\` takes as \`agent_type\`:\n${types.map((type) => `- ${type.name}: ${type.description}\n`).join("")}`
 
-/** Where a conversation with this agent state works; `undefined` for one with no environment. */
+/**
+ * Where a conversation with this agent state works; `undefined` for one with no environment. `conversation` is the one
+ * whose run reads it, which is told while the target is being reached.
+ */
 export type WorkspaceOf = (
   agent: { readonly cwd?: string; readonly target?: string },
   env: ExecutionEnv | undefined,
+  conversation?: ConversationId,
 ) => Workspace | undefined
 
 export const workspaceInstructions = (
@@ -327,10 +332,10 @@ export const workspaceInstructions = (
       {
         key: "workspace",
         tag: false,
-        render: ({ agent, env, shown }) =>
+        render: ({ conversationId, agent, env, shown }) =>
           Effect.gen(function* () {
             if (!toldOfWorkspace(instances, agent)) return undefined
-            const workspace = workspaceOf(agent, env)
+            const workspace = workspaceOf(agent, env, conversationId)
             if (workspace === undefined) return undefined
             // With max_threads = 0 no conversation has spawn_agent, so none has use for the types. A code-mode model is
             // offered only codemode, whose scripts call spawn_agent, so the callable tools decide, not the offered ones.

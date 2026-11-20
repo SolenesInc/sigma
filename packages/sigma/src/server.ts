@@ -115,8 +115,11 @@ import {
 import { projectDefaultModel } from "./config.ts"
 import {
   envOn,
+  forgetReaching,
   isLocal,
   openTargets,
+  ReachingDoc,
+  reachingIn,
   recordTarget,
   retellTarget,
   targetFolder,
@@ -155,7 +158,11 @@ export type KernelHarnessService = {
   /** The environment of a conversation with this agent state, on its target. */
   readonly envOf: (agent: { readonly cwd?: string; readonly target?: string }) => ExecutionEnv
   /** Where a conversation with this agent state works, read through `env`. */
-  readonly workspaceOf: (agent: { readonly cwd?: string; readonly target?: string }, env: ExecutionEnv) => Workspace
+  readonly workspaceOf: (
+    agent: { readonly cwd?: string; readonly target?: string },
+    env: ExecutionEnv,
+    conversation?: ConversationId,
+  ) => Workspace
 }
 
 export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessService>()("sigma/KernelHarness") {
@@ -212,14 +219,16 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         const workspaceOf = (
           agent: { readonly cwd?: string; readonly target?: string },
           env: ExecutionEnv,
+          conversation?: ConversationId,
         ): Workspace => {
           const target = agent.target
+          const reaching = conversation === undefined ? undefined : reachingIn(() => harness, conversation)
           return {
             env,
             cwd: agent.cwd ?? home.dir,
             home: { dir: home.dir, env: homeEnv },
             local: isLocal(target),
-            reachable: isLocal(target) ? Effect.void : Effect.asVoid(targets.connect(target)),
+            reachable: isLocal(target) ? Effect.void : Effect.asVoid(targets.connect(target, reaching)),
           }
         }
         const typesOf: AgentTypes = (agent, env) =>
@@ -229,7 +238,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         registry.install(
           workspaceInstructions(
             instances,
-            (agent, env) => (env === undefined ? undefined : workspaceOf(agent, env)),
+            (agent, env, conversation) => (env === undefined ? undefined : workspaceOf(agent, env, conversation)),
             typesOf,
           ),
         )
@@ -278,7 +287,18 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
             openHarness(storage, {
               registry,
               models,
-              env: (agent) => Effect.succeed(envOf(agent)),
+              // A run's tool calls tell its clients while they wait for the target's hello.
+              env: (agent) =>
+                Effect.succeed(
+                  envOn(
+                    targets,
+                    local,
+                    home,
+                    agent,
+                    reachingIn(() => harness, agent.conversationId),
+                  ),
+                ),
+              viewDocs: [ReachingDoc],
               runEnded,
               inputWithdrawn,
               runTasks: claudeRuns.runTasks,
@@ -296,6 +316,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           })
         // Read-only, nothing runs, so no run counts a stop.
         if (!readOnly) for (const [id, stops] of yield* countStops(harness)) stoppedTooOften.set(id, stops)
+        if (!readOnly) yield* forgetReaching(harness)
         const status = yield* followTreeStatus(harness)
         return { home, harness, stoppedTooOften, status, images, models, readOnly, targets, envOf, workspaceOf }
       }).pipe(Effect.orDie),

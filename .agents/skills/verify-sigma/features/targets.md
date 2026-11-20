@@ -37,6 +37,12 @@ on. attn will use targets to run a member's work in a sandbox.
   reason as a notice. A call reaches for the target once: in member mode,
   what the model is told after the call does not connect again to a target
   the call found unreachable.
+- `target-reaching` commits `sigma.reaching` `{ wait: { target, since } }`
+  in a conversation whose run waits for its target's hello, from a section,
+  a tool call or member mode's notice, and clears it at the hello or the
+  failure; a server start clears what a stopped server left. The TUI's
+  status bar shows `◆ reaching <t> <elapsed>` meanwhile, and `sigma exec`
+  prints `reaching <t>…` on stderr once per connect.
 - `target-member-mode` runs a Claude conversation on a target in member
   mode, at start or after a model switch: Claude Code's own tools, the
   person's settings, connectors and other MCP servers are off, and it acts
@@ -169,7 +175,8 @@ Preconditions:
 - Stack: `target-server-restart: ...`, `target-cli, target-unavailable: ...`
   and `target-restarted, target-cli: ...` in
   `packages/sigma/test/stack.test.ts`.
-- Screen: `target-cli: ...` and `target-restarted, target-replaced: ...` in
+- Screen: `target-cli: ...`, `target-restarted, target-replaced: ...` and
+  `target-reaching: ...` in
   `packages/sigma/test/screen.test.ts`.
 
 ## Gotchas

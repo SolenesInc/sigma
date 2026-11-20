@@ -125,6 +125,7 @@ type Docs = {
   readonly "pi.agent"?: Agent & { readonly thinkingLevel?: string }
   readonly "sigma.approvals"?: Approvals
   readonly "pi.usage"?: UsageLedger
+  readonly "sigma.reaching"?: { readonly wait?: { readonly target: string; readonly since: number } }
 }
 
 const messageOf = (entry: EntryRecord): Message | undefined => entry.model?.[0] as Message | undefined
@@ -1132,6 +1133,7 @@ const conversationScreen = Effect.fnUntraced(function* (
         compacting: !readOnly() && (live?.compactions?.length ?? 0) > 0,
         compactionFailure: live?.compactionFailure?.error,
         retry: readOnly() ? undefined : live?.generation?.retry,
+        reaching: readOnly() ? undefined : root.docs()["sigma.reaching"]?.wait,
       }
     },
     get usage() {

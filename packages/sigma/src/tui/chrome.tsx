@@ -86,6 +86,8 @@ export type LiveStatus = {
   readonly compactionFailure?: string | undefined
   /** The model failed and is asked again at `at`. */
   readonly retry?: { readonly at: number; readonly error: string } | undefined
+  /** The run waits for its target's hello, a connect that began at `since`. */
+  readonly reaching?: { readonly target: string; readonly since: number } | undefined
 }
 
 export type UsageStatus = {
@@ -223,6 +225,11 @@ const StatusBar = (props: { screen: Screen }) => {
       </Show>
       <Show when={props.screen.live.compacting}>
         <text fg={color.cyan}> ◆ compacting</text>
+      </Show>
+      <Show when={props.screen.live.reaching}>
+        {(reaching) => (
+          <text fg={color.yellow}>{` ◆ reaching ${reaching().target} ${elapsed(reaching().since, now())}`}</text>
+        )}
       </Show>
       <Show when={props.screen.live.retry}>
         {(retry) => (

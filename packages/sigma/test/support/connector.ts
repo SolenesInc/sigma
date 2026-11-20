@@ -7,8 +7,9 @@
 // A `map` file `{ "from": <path>, "to": <path> }` makes the target another machine at one path: the server's `from`
 // is the agent's `to`, rewritten in every frame both ways, so a file at `from` on the home is not the one the target
 // has there. A `platform` file makes the target another kind of computer: its sigma-env's hello reports that platform.
+// A `hold` file holds the connect: sigma-env starts, and its hello comes, once the file is gone.
 import { spawn } from "node:child_process"
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 
@@ -26,6 +27,18 @@ if (!existsSync(join(dir, "instance"))) {
   console.error(`no target named ${target}`)
   process.exit(3)
 }
+const hold = join(dir, "hold")
+if (existsSync(hold))
+  await new Promise<void>((resolve) => {
+    const released = () => {
+      if (existsSync(hold)) return
+      watcher.close()
+      resolve()
+    }
+    const watcher = watch(dir, released)
+    // Released between the check and the watch.
+    released()
+  })
 const text = (name: string) => readFileSync(join(dir, name), "utf8").trim()
 const map = existsSync(join(dir, "map"))
   ? (JSON.parse(text("map")) as { readonly from: string; readonly to: string })

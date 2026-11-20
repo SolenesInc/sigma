@@ -39,6 +39,9 @@ const textOf = (message: Message | undefined) =>
 
 const liveOf = (view: View) => view.docs["pi.live"] as Live | undefined
 
+const reachingOf = (view: View) =>
+  (view.docs["sigma.reaching"] as { wait?: { target: string; since: number } } | undefined)?.wait
+
 const requestsOf = (view: View) =>
   Object.entries((view.docs["sigma.approvals"] as { requests?: Record<string, Request> } | undefined)?.requests ?? {})
 
@@ -255,6 +258,8 @@ export const exec = Effect.fnUntraced(function* (
   let placed = false
   let withdrawn = false
   let ended: RunEnd | undefined
+  /** The connect whose wait was last noted, by when it began. */
+  let reached: number | undefined
   const ours = (entry: EntryRecord) => (entry.data as { requestId?: string } | undefined)?.requestId === requestId
   const onEntry = (entry: EntryRecord) => {
     if (!placed) {
@@ -306,6 +311,12 @@ export const exec = Effect.fnUntraced(function* (
         if (json) write(`${JSON.stringify(item)}\n`)
         for (const entry of added) if (ended === undefined && !withdrawn) onEntry(entry)
         if (placed && ended === undefined && !json) {
+          const wait = reachingOf(view)
+          if (wait !== undefined && wait.since !== reached) {
+            reached = wait.since
+            printer.end()
+            note(`reaching ${wait.target}…`)
+          }
           const live = liveOf(view)?.generation?.message
           if (live !== undefined) printer.show(textOf(live))
         }
