@@ -1,10 +1,9 @@
-// Agent limits (D13): how many subagents work at once in one tree of conversations. Sigma's own
-// subagent tools and Claude Code's hosted subagents both check them, so they live here.
+// Agent limits (D13): how many workers work at once in one tree of conversations.
 import { type ConversationId, defineDoc, type Tx } from "@sigma/kernel"
 import { Effect } from "effect"
 
 export type AgentLimits = {
-  /** Subagents of one tree with a run in flight at once; 0 turns subagents off. */
+  /** Workers of one tree with a run in flight at once; 0 turns workers off. */
   readonly maxThreads: number
 }
 
@@ -13,10 +12,10 @@ export const DEFAULT_AGENT_LIMITS: AgentLimits = { maxThreads: 6 }
 /** The canonical task path of the conversation people started. */
 export const ROOT_TASK = "/root"
 
-/** Why a subagent may not start, or an idle one take a task, while `working` subagents of its tree work, or `undefined`. */
+/** Why a worker may not start, or an idle one take a task, while `working` workers of its tree work, or `undefined`. */
 export const refusedWork = (limits: AgentLimits, working: number): string | undefined =>
   working >= limits.maxThreads
-    ? `at most ${limits.maxThreads} subagents work at once (max_threads); ${working} are working, so wait for one to finish`
+    ? `at most ${limits.maxThreads} workers work at once (max_threads); ${working} are working, so wait for one to finish`
     : undefined
 
 /**

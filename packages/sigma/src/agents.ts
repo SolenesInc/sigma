@@ -3,6 +3,7 @@
 // task given to it goes through a background reporter task in the parent, which delivers it, waits for the answer and
 // mails the answer back. Both are durable tasks, so a restart resumes them (spec 7.3, example 22).
 import {
+  type Agent,
   type AgentLimits,
   type Harness,
   ApprovalsDoc,
@@ -32,13 +33,13 @@ import {
   type NextTaskState,
   type TaskId,
 } from "@sigma/kernel"
-import { JobsDoc } from "@sigma/hosted"
+import { isMember, type JobReport, JobsDoc, REPORT_KIND } from "@sigma/hosted"
 import { type AssistantMessage, defaultModelOf, type ProviderInstance } from "@sigma/models"
 import { int, obj, oneOf, opt, str } from "@sigma/schema"
 import { rootConversation } from "@sigma/tools"
 import { Clock, Duration, Effect, Option, Stream } from "effect"
 import type { ExecutionEnv } from "@sigma/env"
-import type { AgentType } from "./workspace.ts"
+import { type AgentType, toolNamer } from "./workspace.ts"
 
 /** The agent types a conversation's agent can spawn, from its provider and its working directory through `env`. */
 export type AgentTypes = (
@@ -136,12 +137,28 @@ const Anchor = defineTask<null, { readonly phase: "done" }, null, TaskServices>(
     runtime.commit(() => Effect.succeed({ status: "terminal", outcome: { status: "aborted" } })),
 })
 
-type ReporterInput = { name: string; task: string; sender: string; conversationId: number; message: string }
+type ReporterInput = {
+  name: string
+  task: string
+  sender: string
+  conversationId: number
+  message: string
+  /**
+   * The reports of the jobs whose end woke the worker, which it is given in place of `message`: the answer of the wake
+   * run they start is mailed as a `message`, not a final answer (D8 of s-7bmc8w).
+   */
+  wake?: ReadonlyArray<JobReport>
+}
 type ReporterState = { phase: "deliver" } | { phase: "report"; report?: string }
 
+/** What a mailed answer adds when the worker's jobs still work, such as a dev server it started: it never waits for them. */
+const stillWorking = (titles: ReadonlyArray<string>) =>
+  titles.length === 0 ? "" : `\n\nStill working: ${titles.map((title) => JSON.stringify(title)).join(", ")}.`
+
 /**
- * Gives one task to a subagent, waits for its answer, records how it ended, and mails the answer to the parent. Request
- * IDs from its own task ID make a rerun find its submissions, so each arrives once.
+ * Gives one task to a worker, or the reports that woke it, waits for its answer, records how it ended, and mails the
+ * answer to the parent, naming the worker's jobs still working. Request IDs from its own task ID make a rerun find its
+ * submissions, so each arrives once.
  */
 const Reporter = defineTask<ReporterInput, ReporterState, null, TaskServices>({
   name: "sigma.agent-reporter",
@@ -151,25 +168,43 @@ const Reporter = defineTask<ReporterInput, ReporterState, null, TaskServices>({
     deliver: (reporter, runtime) =>
       Effect.gen(function* () {
         const services = yield* TaskServices
-        const { name, task, sender, message } = reporter.input
-        const child = (yield* services.conversation(idFromNumber<ConversationId>(reporter.input.conversationId)))!
-        const submission = yield* child.submit({
-          type: "input",
-          content: mailText("new_task", task, sender, message),
-          // A working subagent takes it at its next step, as other mail.
-          whenBusy: "steer",
-          entry: mailEntry("new_task", task, sender),
-          requestId: `agent:${reporter.id}`,
-        })
-        const settled = yield* submission.wait
+        const { name, task, sender, message, wake } = reporter.input
+        const childId = idFromNumber<ConversationId>(reporter.input.conversationId)
+        const child = (yield* services.conversation(childId))!
+        // A wake run's input is its reports, which start one run together; each settles with its answer.
+        const submissions =
+          wake === undefined
+            ? [
+                yield* child.submit({
+                  type: "input",
+                  content: mailText("new_task", task, sender, message),
+                  // A working worker takes it at its next step, as other mail.
+                  whenBusy: "steer",
+                  entry: mailEntry("new_task", task, sender),
+                  requestId: `agent:${reporter.id}`,
+                }),
+              ]
+            : yield* Effect.forEach(wake, (report, at) =>
+                child.submit({
+                  type: "input",
+                  content: report.text,
+                  whenBusy: "steer",
+                  entry: { kind: REPORT_KIND, ...(report.data === undefined ? {} : { data: report.data }) },
+                  requestId: `agent-wake:${reporter.id}:${at}`,
+                }),
+              )
+        const settled = (yield* Effect.forEach(submissions, (submission) => submission.wait)).at(-1)!
         yield* runtime.commit((tx) =>
           Effect.gen(function* () {
             const agent = (yield* tx.doc(AgentsDoc, runtime.conversationId)).agents[name]!
-            delete agent.assigned
+            // A wake gave the worker no task, so another reporter's task may still be waiting.
+            if (wake === undefined) delete agent.assigned
             const next = (report?: string): NextTaskState<ReporterState, null> => ({
               status: "running",
               checkpoint: report === undefined ? { phase: "report" } : { phase: "report", report },
             })
+            // A task given while the wake ran steered into the same run: its reporter reports the run as the task's.
+            if (wake !== undefined && agent.assigned === true) return next()
             if (settled.status === "unanswered") {
               // Interrupted, or withdrawn while queued: nothing to report.
               if (settled.reason === "aborted") {
@@ -187,7 +222,8 @@ const Reporter = defineTask<ReporterInput, ReporterState, null, TaskServices>({
             agent.reported.push(answer)
             const said = textOf((yield* tx.entry(AssistantEntry, answer))?.model?.[0] as AssistantMessage | undefined)
             agent.status = { completed: said }
-            return next(said)
+            const jobs = Object.values((yield* tx.doc(JobsDoc, childId)).jobs)
+            return next(said + stillWorking(jobs.filter((job) => job.state === "working").map((job) => job.title)))
           }),
         )
       }),
@@ -195,10 +231,11 @@ const Reporter = defineTask<ReporterInput, ReporterState, null, TaskServices>({
       Effect.gen(function* () {
         const report = reporter.state.checkpoint.report
         if (report !== undefined) {
-          const { task, sender } = reporter.input
+          const { task, sender, wake } = reporter.input
           const parent = (yield* (yield* TaskServices).conversation(runtime.conversationId))!
-          const content = mailText("final_answer", sender, task, report)
-          const entry = mailEntry("final_answer", sender, task)
+          const kind = wake === undefined ? "final_answer" : "message"
+          const content = mailText(kind, sender, task, report)
+          const entry = mailEntry(kind, sender, task)
           const submission = yield* parent.submit({
             type: "input",
             content,
@@ -230,7 +267,7 @@ const Reporter = defineTask<ReporterInput, ReporterState, null, TaskServices>({
     runtime.commit((tx) =>
       Effect.gen(function* () {
         const agent = (yield* tx.doc(AgentsDoc, runtime.conversationId)).agents[reporter.input.name]
-        if (agent !== undefined) delete agent.assigned
+        if (agent !== undefined && reporter.input.wake === undefined) delete agent.assigned
         return { status: "terminal", outcome: { status: "aborted" } } as const
       }),
     ),
@@ -328,6 +365,12 @@ const KIND_NAMES: Readonly<Record<string, string>> = {
 const providerList = (providers: WorkerProviders) =>
   [...providers.values()].map((each) => `${each.id} (${KIND_NAMES[each.kind] ?? each.kind})`).join(", ")
 
+/** Whether `provider` runs its own loop, as Claude Code does: a harness, which sigma does not run the model of. */
+const isHarness = (providers: WorkerProviders, provider: string | undefined) => {
+  const instance = providers.get(provider ?? "")
+  return instance !== undefined && instance.provider === undefined
+}
+
 /** The providers a worker can start on now, by id, in the home's order. */
 const readyList = (providers: WorkerProviders) =>
   Effect.map(
@@ -406,6 +449,8 @@ const startWorker = (limits: AgentLimits, agentTypes: AgentTypes, providers: Wor
         const named = input.provider?.trim() || undefined
         // On another provider the worker starts from its brief alone: a provider cannot take another's history (D5).
         const other = named !== undefined && named !== parentModel?.provider
+        // A harness holds its own session, which a worker cannot start from: only a worker on sigma's own loop forks.
+        const fresh = other || isHarness(providers, parentModel?.provider)
         if (other) {
           const asked = providers.get(named)
           const ready = asked === undefined ? false : (yield* asked.health(false)).status === "ready"
@@ -424,8 +469,7 @@ const startWorker = (limits: AgentLimits, agentTypes: AgentTypes, providers: Wor
         // knows, so the name passes to it unchanged.
         const listed = (model: string | undefined) =>
           model !== undefined &&
-          ((instance !== undefined && instance.provider === undefined) ||
-            api.models().getModel(provider!, model) !== undefined)
+          (isHarness(providers, provider) || api.models().getModel(provider!, model) !== undefined)
         if (input.model !== undefined && !listed(input.model))
           return failed(
             `no model ${input.model} on ${provider}; leave model out to use ${other ? "its default" : "yours"}`,
@@ -472,7 +516,7 @@ const startWorker = (limits: AgentLimits, agentTypes: AgentTypes, providers: Wor
             const refused = refusedWork(limits, working(registry))
             if (refused !== undefined) return refused
             const forkAt =
-              other || input.fork_turns === "none" ? undefined : yield* tx.latestEntryId(api.conversationId)
+              fresh || input.fork_turns === "none" ? undefined : yield* tx.latestEntryId(api.conversationId)
             const anchor = yield* tx.createTask(Anchor, null, background)
             const ownership = { kind: "task", taskId: anchor } as const
             const child =
@@ -758,14 +802,74 @@ const stopWorker = defineTool({
 })
 
 /**
- * What a model on sigma's own loop is told of the worker tools, when it can call them. It names no reason to prefer
- * one provider over another: which model a worker runs on is the person's choice, passed exactly (D11). It does not
- * change during a conversation, whose instructions are fixed at its start (#132).
+ * A harness's subagent, such as Claude Code's Agent, is a conversation under its parent that is no agent of the tree:
+ * it has no task name, and no registry lists it. It reaches the worker tools over sigma's MCP server as its harness
+ * does, and is refused, so it neither starts workers the tree cannot see nor answers as `/root`.
  */
-export const WORKERS_SECTION =
-  "Workers. This session can start workers with the start_worker tool. A worker is an agent in a conversation of its own, which the user can open, watch and talk to. Start a worker when the user asks for one, or names a model or a provider for part of the work. Pass the provider and model they named, unchanged, in `provider` and `model`. When they name several, start one worker for each. With none named, leave `provider` out and the worker runs on your own models. For a quick helper inside your own turn, use your own subagent tool if you have one, or do the work yourself."
+const SUBAGENT_REFUSED = "a subagent cannot start or reach workers; leave that to the agent that started you"
+
+const inTree = <T extends { readonly execute: (input: any, api: ToolExecutionApi) => Effect.Effect<any, any, any> }>(
+  tool: T,
+): T => ({
+  ...tool,
+  execute: (input: unknown, api: ToolExecutionApi) =>
+    Effect.gen(function* () {
+      const own = yield* taskOf(api, api.conversationId)
+      if (own === ROOT_TASK && (yield* rootConversation(api)) !== api.conversationId) return failed(SUBAGENT_REFUSED)
+      return yield* tool.execute(input, api)
+    }),
+})
+
+/**
+ * What a model is told of the worker tools, when it can call them, by the name it calls `start_worker` by. A harness
+ * in member mode has no subagent tool of its own to point to. It names no reason to prefer one provider over another:
+ * which model a worker runs on is the person's choice, passed exactly (D11). It does not change during a conversation,
+ * whose instructions are fixed at its start (#132), and a harness's live process keeps its system prompt.
+ */
+const workersSection = (start: string, subagents: boolean, fresh: boolean) =>
+  `Workers. This session can start workers with the ${start} tool. A worker is an agent in a conversation of its own, which the user can open, watch and talk to.${fresh ? " Every worker you start, on your provider too, starts from your message alone, with none of your history, so write a complete brief." : ""} Start a worker when the user asks for one, or names a model or a provider for part of the work. Pass the provider and model they named, unchanged, in \`provider\` and \`model\`. When they name several, start one worker for each. With none named, leave \`provider\` out and the worker runs on your own models. For a quick helper inside your own turn, ${subagents ? "use your own subagent tool if you have one, or do the work yourself" : "do the work yourself"}.`
 
 const AGENTS_EXTENSION = "sigma-agents"
+
+/**
+ * The selected extensions a local conversation's harness is offered as its own, beside its own tools: the worker
+ * tools, and their section (D17).
+ */
+export const offeredToHarness = (agent: Agent) =>
+  agent.extensions.filter((extension) => extension.name === AGENTS_EXTENSION)
+
+/**
+ * Gives the reports of the jobs whose end woke a hosted worker to a reporter in its parent, which mails the wake run's
+ * answer to the parent as a message (D8 of s-7bmc8w); `false` for a conversation that is not a worker, whose reports
+ * go in as any wake's. A run the worker is busy with takes them at its next step: its answer is mailed once, by the
+ * reporter of the task it answers when there is one, else by this one.
+ */
+export const wakeWorker = (harness: Harness, child: ConversationId, reports: ReadonlyArray<JobReport>) =>
+  Effect.gen(function* () {
+    const handle = yield* harness.conversation(child)
+    if (handle === undefined) return false
+    const parent = yield* handle.commit((tx) =>
+      Effect.map(tx.conversation(child), (found) => found?.owner?.conversationId),
+    )
+    if (parent === undefined) return false
+    const registry = yield* harness.session.snapshot(AgentsDoc, parent)
+    const name = Object.keys(registry?.agents ?? {}).find(
+      (key) => registry!.agents[key]!.conversationId === Number(child),
+    )
+    if (name === undefined) return false
+    const sender = (yield* harness.session.snapshot(TaskPathDoc, parent))?.task ?? ROOT_TASK
+    const owner = (yield* harness.conversation(parent))!
+    const reporter: ReporterInput = {
+      name,
+      task: registry!.agents[name]!.task,
+      sender,
+      conversationId: Number(child),
+      message: "",
+      wake: reports,
+    }
+    yield* owner.commit((tx) => tx.createTask(Reporter, reporter, { ...background, conversationId: parent }))
+    return true
+  })
 
 /**
  * What `conversation/interrupt` stops (D7 of s-cjk9k6). A conversation with a run stops that run only: its subagents
@@ -830,18 +934,22 @@ export const agentTools = (
       waitWorker,
       listWorkers,
       stopWorker,
-    ],
+    ].map(inTree),
     sections: [
       {
         key: "workers",
         tag: false,
-        // A code-mode model is offered only codemode, whose scripts call start_worker, so the callable tools decide.
-        // Only a model on sigma's own loop: a harness, as Claude Code in member mode, names the tools its own way.
+        // A code-mode model is offered only codemode, whose scripts call start_worker, so the callable tools decide. A
+        // harness, as Claude Code, reaches the tools by its own names for them.
         render: ({ agent }) =>
           Effect.succeed(
-            agent.callable.some((tool) => tool.name === "start_worker") &&
-              providers.get(agent.model?.provider ?? "")?.provider !== undefined
-              ? WORKERS_SECTION
+            agent.callable.some((tool) => tool.name === "start_worker")
+              ? workersSection(
+                  toolNamer(providers, agent)("start_worker"),
+                  // Only a harness on a target runs in member mode, with no subagent tool of its own.
+                  !(isMember(agent) && isHarness(providers, agent.model?.provider)),
+                  isHarness(providers, agent.model?.provider),
+                )
               : undefined,
           ),
       },

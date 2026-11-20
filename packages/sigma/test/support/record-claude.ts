@@ -1,6 +1,7 @@
 // Records a real Claude Code as a `fixtures/claude` journey: a server given this as its Claude executable runs the
 // SDK's bundled Claude Code, and every frame sigma sends (`expect_outbound`) and Claude Code answers (`emit_inbound`) is
-// appended to RECORD_CLAUDE_TO, one segment per spawn. The fake `claude` replays it: the session id becomes
+// appended to RECORD_CLAUDE_TO, each line marked with the recorder's pid, so record-claude-fixtures.ts makes one
+// segment per spawn of processes that ran at once. The fake `claude` replays it: the session id becomes
 // `<session>`, the conversation's directory `<workspace>`, and the ids sigma chose `<sigma:N>`, numbered in the order
 // the fake binds them. What describes the recording machine's own setup, its skills, commands, plugins, MCP servers
 // and hooks, is left out, and its home directory becomes /home/person. Claude Code still loads the recording user's own
@@ -50,7 +51,7 @@ const scrub = (frame: any): unknown => {
   return frame
 }
 const record = (type: "expect_outbound" | "emit_inbound", frame: unknown) =>
-  appendFileSync(to, `${replace(JSON.stringify({ frame, type }))}\n`)
+  appendFileSync(to, `${replace(JSON.stringify({ frame, type, process: process.pid }))}\n`)
 
 record("expect_outbound", { argv })
 const child = Bun.spawn([real, ...argv], { stdin: "pipe", stdout: "pipe", stderr: "inherit" })

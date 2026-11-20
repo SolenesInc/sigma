@@ -9,6 +9,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, watch } from "node:fs"
 import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
+import type { ScriptStep } from "@sigma/models"
 import { deadline, RawClient } from "./raw.ts"
 import { sigmaEnv, stopServer } from "./terminal.ts"
 import {
@@ -73,6 +74,8 @@ interface Journey {
   readonly start?: Record<string, unknown>
   /** Run the `sigma` binary as the server, so it can be killed, rather than a server in process. */
   readonly binary?: true
+  /** The steps of the home's `script` provider, which a worker the journey's Claude starts there plays. */
+  readonly script?: ReadonlyArray<ScriptStep>
   readonly play: (session: Session) => Promise<void>
 }
 
@@ -242,6 +245,28 @@ const journeys: Record<string, Journey> = {
       await s.until(() => runEnds(s.seen()).length >= 1)
     },
   },
+  worker_parent: {
+    script: [{ agent: "/root/helper", text: "hello from the worker" }],
+    play: (s) =>
+      s.say(
+        "Use the mcp__sigma__start_worker tool with task_name helper, provider script and message: Say hello. Then call mcp__sigma__wait_worker with timeout_ms 60000, and reply with exactly the text the worker sent.",
+      ),
+  },
+  worker_claude: {
+    play: (s) =>
+      s.say(
+        "Use the mcp__sigma__start_worker tool with task_name echo and message: Reply with exactly: echo ok. Then call mcp__sigma__wait_worker with timeout_ms 120000, and reply with exactly the text the worker sent.",
+      ),
+  },
+  worker_subagent: {
+    play: async (s) => {
+      await s.submit(
+        "Use the Agent tool to start a general-purpose subagent with this task: call the mcp__sigma__list_workers tool and reply with exactly what it returned. Then reply with exactly the subagent's answer.",
+      )
+      await (await s.subagent()).until(settled(1), TURN)
+      await s.settle()
+    },
+  },
   bash_background_stopped: {
     ask: "auto",
     play: async (s) => {
@@ -301,7 +326,10 @@ const open = async (name: string, journey: Journey) => {
   const claude = executable(pids)
   const serve = async () => {
     if (!journey.binary) {
-      const server = await runningServer([], { home, claude: { executable: claude, env: { RECORD_CLAUDE_TO: to } } })
+      const server = await runningServer(journey.script ?? [], {
+        home,
+        claude: { executable: claude, env: { RECORD_CLAUDE_TO: to } },
+      })
       return { stop: server.stop, kill: () => Promise.reject(new Error("only a binary server can be killed")) }
     }
     const server = await serving(sigmaEnv(home, { SIGMA_CLAUDE: claude, RECORD_CLAUDE_TO: to }))
@@ -555,6 +583,13 @@ const fixture = (name: string, path: string) => {
   const version = lines.find((line) => line.frame?.subtype === "init")?.frame.claude_code_version
   for (const line of lines)
     if (line.frame?.argv) line.frame.argv = line.frame.argv.filter((arg: string) => arg !== "--setting-sources=project")
+  // Processes that ran at once, as a worker's beside its parent's, wrote between each other's lines: each spawn's
+  // lines become one segment, in the order the spawns started.
+  const segments = new Map<number, Array<Record<string, unknown>>>()
+  for (const { process: pid, ...line } of lines) {
+    if (!segments.has(pid)) segments.set(pid, [])
+    segments.get(pid)!.push(line)
+  }
   const header = {
     metadata: { model: MODEL, recorded: `Claude Code ${version} by record-claude-fixtures.ts` },
     provider: "claude",
@@ -563,7 +598,7 @@ const fixture = (name: string, path: string) => {
   }
   writeFileSync(
     join(FIXTURES, `${name}.ndjson`),
-    [header, ...lines].map((line) => `${JSON.stringify(line)}\n`).join(""),
+    [header, ...[...segments.values()].flat()].map((line) => `${JSON.stringify(line)}\n`).join(""),
   )
 }
 

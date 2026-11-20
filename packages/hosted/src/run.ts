@@ -25,6 +25,7 @@ import {
   type RunCtx,
   type RunTasks,
   startRun,
+  type ToolRegistration,
   salvageable,
   type TaskApi,
   TaskServices,
@@ -71,8 +72,8 @@ export interface HostedRunOptions {
   /** The live processes the runs lease, from `makeHostedProcesses`. */
   readonly processes: HostedProcesses
   /**
-   * The selected extensions whose tools the harness is offered as its own (F65): their prompt sections go to its
-   * system prompt, before the agent's instructions. Default none.
+   * The selected extensions whose tools a local conversation's harness is offered beside its own (D17), and whose
+   * prompt sections go to its system prompt, before the agent's instructions (F65). Default none.
    */
   readonly offered?: (agent: Agent) => ReadonlyArray<Extension>
   /** How a remote conversation's runs reach sigma in member mode (D9). */
@@ -373,10 +374,10 @@ type Shared = { readonly options: HostedRunOptions; readonly hosting: Hosting }
  * The system prompt's `append` of a member-mode process: the conversation's sections, rendered through its env as
  * sigma's own loop renders them for the tools it offers, so the model reads the target's instructions (D11).
  */
-const appendOf = (runtime: Runtime, api: TaskApi, served: Agent) =>
+const appendOf = (runtime: Runtime, api: TaskApi, served: Agent, own: ReadonlyArray<ToolRegistration>) =>
   Effect.gen(function* () {
     const conversationId = runtime.conversationId
-    const agent = { ...served, tools: ownTools(served) }
+    const agent = { ...served, tools: own }
     const env = yield* Effect.orElseSucceed(api.env, () => undefined)
     const input = { conversationId, agent, env, shown: {}, read: { snapshot: runtime.snapshot } }
     const rendered = yield* renderSections(agent.sections, input as never, new Map(), (error) =>
@@ -444,13 +445,16 @@ const makeRunTask = (
           const { member } = shared.options
           const target = isMember(agent) ? agent.target! : undefined
           const folder = target === undefined ? undefined : yield* member.folder(target)
-          const instructions = yield* instructionsOf(runtime, api, agent, shared.options.offered?.(agent) ?? [])
+          const offered = shared.options.offered?.(agent) ?? []
+          const instructions = yield* instructionsOf(runtime, api, agent, offered)
+          const own = ownTools(agent, offered)
           const config: ProcessConfig = {
             agent,
             settings,
             rootConversation: String(runtime.conversationId),
+            own,
             ...(instructions === undefined ? {} : { instructions }),
-            ...(folder === undefined ? {} : { member: { folder, append: appendOf(runtime, api, agent) } }),
+            ...(folder === undefined ? {} : { member: { folder, append: appendOf(runtime, api, agent, own) } }),
           }
           const notice = target === undefined ? undefined : member.notice(runtime.conversationId, target, "run")
           const run: RunContext = {

@@ -300,7 +300,7 @@ export const toldOfWorkspace = (
 }
 
 /** The name a conversation's model calls sigma's tool `name` by: Claude Code reaches it over sigma's MCP server. */
-const toolNamer =
+export const toolNamer =
   (instances: ReadonlyMap<string, ProviderInstance>, agent: { readonly model?: { readonly provider: string } }) =>
   (name: string) =>
     agent.model !== undefined && instances.get(agent.model.provider)?.kind === "claude" ? `mcp__sigma__${name}` : name

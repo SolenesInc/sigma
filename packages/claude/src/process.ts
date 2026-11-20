@@ -22,7 +22,6 @@ import {
   type Host,
   Inbox,
   type LastRequest,
-  ownTools,
   type OwnResult,
   type Part,
   type ProcessConfig,
@@ -58,11 +57,8 @@ const NAME = "Claude Code"
  */
 const MEMBER_TOOL_TIMEOUT_MS = 2_147_483_647
 
-/** The prefix Claude Code gives the tools of sigma's MCP server, which a process in member mode reaches alone. */
+/** The prefix Claude Code gives the tools of sigma's MCP server. */
 const OWN_TOOL = "mcp__sigma__"
-
-/** Sigma's name of a tool a member-mode Claude Code calls: one of sigma's own loses its MCP prefix. */
-const ownName = (name: string) => (name.startsWith(OWN_TOOL) ? name.slice(OWN_TOOL.length) : name)
 
 /** What Claude Code 2.1.312 ends a signed-out run with: `Not logged in · Please run /login`, or an API key's refusal. */
 const SIGNED_OUT = /Please run \/login/
@@ -107,13 +103,17 @@ type ModelUsage = Record<
 /** How a job's `task_notification` statuses end it. */
 const endings = { completed: "completed", failed: "failed", stopped: "stopped", killed: "stopped" } as const
 
+/** Sigma's name of a tool Claude Code calls: one of sigma's own loses its MCP prefix. */
+type Naming = (name: string) => string
+
 /** The texts and calls of a message's content; its other blocks, such as thinking, are Claude Code's own. */
-const partsOf = (content: ReadonlyArray<any>, member: boolean): Part[] =>
+const partsOf = (content: ReadonlyArray<any>, named: Naming): Part[] =>
   content.flatMap((block): Part[] => {
     if (block.type === "text") return [{ type: "text", text: block.text }]
     if (block.type !== "tool_use") return []
-    const name = member ? ownName(block.name) : block.name
-    return [{ type: "toolCall", id: block.id, name, arguments: block.input as ToolCall["arguments"] }]
+    return [
+      { type: "toolCall", id: block.id, name: named(block.name), arguments: block.input as ToolCall["arguments"] },
+    ]
   })
 
 /** How a job's `task_notification` ends it, with a subagent's final answer or a command's summary. */
@@ -128,10 +128,10 @@ const endOf = (message: Extract<SDKMessage, { type: "system"; subtype: "task_not
 
 /**
  * The frames of a message of Claude Code's main loop (`main`) or of a subagent's, as the hosted run reads them. What
- * the process's state decides, a turn's end and a job's start and end, is the caller's. A `member` process names
- * sigma's own tools with their MCP prefix.
+ * the process's state decides, a turn's end and a job's start and end, is the caller's. Claude Code names sigma's own
+ * tools with their MCP prefix, which `named` takes off.
  */
-const framesOf = (message: SDKMessage, main: boolean, member = false): Frame[] => {
+const framesOf = (message: SDKMessage, main: boolean, named: Naming): Frame[] => {
   const own = !("parent_tool_use_id" in message) || (message.parent_tool_use_id === null) === main
   switch (message.type) {
     case "stream_event": {
@@ -147,7 +147,7 @@ const framesOf = (message: SDKMessage, main: boolean, member = false): Frame[] =
         const text = content.map((block) => (block.type === "text" ? block.text : "")).join("")
         return [{ type: "failed", message: text || `Claude Code failed: ${message.error}` }]
       }
-      return [{ type: "said", response: message.message.id, at: message.uuid, content: partsOf(content, member) }]
+      return [{ type: "said", response: message.message.id, at: message.uuid, content: partsOf(content, named) }]
     }
     case "user": {
       if (!own) return []
@@ -228,8 +228,15 @@ const userMessage = (parts: ReadonlyArray<Said>, priority?: "next"): SDKUserMess
 export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, start: Start, host: Host) =>
   Effect.gen(function* () {
     const { agent, settings, member } = config
-    /** Whether Claude Code's `tool` is one of sigma's own, which a process in member mode calls over sigma's MCP server. */
-    const isOwn = (tool: string) => member !== undefined && tool.startsWith(OWN_TOOL)
+    const own = new Set(config.own.map((tool) => tool.name))
+    /** Whether Claude Code's `tool` is one of sigma's own, which it calls over sigma's MCP server. */
+    const isOwn = (tool: string) => tool.startsWith(OWN_TOOL) && own.has(tool.slice(OWN_TOOL.length))
+    const named: Naming = (tool) => (isOwn(tool) ? tool.slice(OWN_TOOL.length) : tool)
+    /**
+     * The subagent that made each call of sigma's own tools, by call, from its `PreToolUse`, which comes before the
+     * call reaches sigma's MCP server; a main-loop call has none.
+     */
+    const ownCallers = new Map<string, string | undefined>()
     const { modelId, effort } = selectionOf(agent)
     const clock = yield* Clock.Clock
     let lastRequest: LastRequest | undefined
@@ -263,8 +270,11 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
           hooks: [
             async (input, _id, { signal }) => {
               if (input.hook_event_name !== "PreToolUse") return {}
-              // An own tool's call is committed as it runs, by `runOwn`.
-              if (isOwn(input.tool_name)) return {}
+              // An own tool's call is committed as it runs, by `runOwn` of the conversation that made it.
+              if (isOwn(input.tool_name)) {
+                ownCallers.set(input.tool_use_id, input.agent_id)
+                return {}
+              }
               const call: ToolCall = {
                 type: "toolCall",
                 id: input.tool_use_id,
@@ -291,7 +301,7 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
       ],
     }
     const canUseTool: NonNullable<Options["canUseTool"]> = async (tool, input, { agentID, signal, toolUseID }) => {
-      // An own tool's call asks a person through its tool task, as in sigma's own loop.
+      // An own tool's call asks a person through its tool task, as in sigma's own loop, so Claude Code's ask is allowed (F18).
       if (isOwn(tool)) return { behavior: "allow", updatedInput: input, toolUseID }
       const call: ToolCall = { type: "toolCall", id: toolUseID, name: tool, arguments: input as ToolCall["arguments"] }
       if (await (await host.callbacks(agentID, signal)).approve(call, signal)) {
@@ -330,17 +340,17 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
         canUseTool,
         hooks,
         settingSources,
-        ...(member === undefined
+        // In member mode Claude Code has sigma's tools alone; ToolSearch stays so it can load a deferred tool.
+        ...(member === undefined ? {} : { tools: ["ToolSearch"], strictMcpConfig: true }),
+        ...(config.own.length === 0
           ? {}
           : {
-              // ToolSearch stays so Claude Code can load a deferred tool; alwaysLoad keeps sigma's out of its search.
-              tools: ["ToolSearch"],
-              strictMcpConfig: true,
               mcpServers: {
                 sigma: createSdkMcpServer({
                   name: "sigma",
+                  // Kept out of Claude Code's tool search, which would hide them until it searched (F55).
                   alwaysLoad: true,
-                  tools: ownTools(agent).map((tool) => ({
+                  tools: config.own.map((tool) => ({
                     name: tool.name,
                     description: tool.description,
                     inputSchema: z.fromJSONSchema(tool.parameters as z.core.JSONSchema.JSONSchema),
@@ -351,7 +361,10 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
                         return { content: [{ type: "text" as const, text }], isError: true }
                       }
                       const signal = (extra as { signal?: AbortSignal } | undefined)?.signal
-                      const callbacks = await host.callbacks(undefined, signal)
+                      // A subagent's call is its job's, which writes the subagent's conversation.
+                      const job = ownCallers.get(call)
+                      ownCallers.delete(call)
+                      const callbacks = await host.callbacks(job, signal)
                       return mcpResult(await callbacks.runOwn(call, tool.name, input, signal))
                     },
                   })),
@@ -536,11 +549,11 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
         }
       }
       if (!("parent_tool_use_id" in message) || message.parent_tool_use_id === null) {
-        return framesOf(message, true, member !== undefined)
+        return framesOf(message, true, named)
       }
       // A subagent's message is its job's.
       const job = jobs.get(message.parent_tool_use_id)
-      return job === undefined ? [] : framesOf(message, false).map((frame) => ({ ...frame, job }))
+      return job === undefined ? [] : framesOf(message, false, named).map((frame) => ({ ...frame, job }))
     }
 
     async function* frames(): AsyncGenerator<Frame> {

@@ -839,7 +839,7 @@ const spawnSeven = {
     input: { task_name: name, message: "hold", fork_turns: "none" },
   })),
 }
-const MAX_THREADS = "at most 6 subagents work at once (max_threads); 6 are working, so wait for one to finish"
+const MAX_THREADS = "at most 6 workers work at once (max_threads); 6 are working, so wait for one to finish"
 
 test("worker-limits, child-tools: start_worker calls in one response start at most maxThreads workers", async () => {
   await using server = await runningServer([spawnSeven, { text: "spawned them" }, ...holding])
@@ -1173,7 +1173,7 @@ test("worker-limits: a tree runs at most as many workers at once as config.toml 
   const results = toolResults(view)
   expect(results.filter((result) => !result.isError)).toHaveLength(2)
   expect(results.filter((result) => result.isError)).toHaveLength(5)
-  expect(results.find((result) => result.isError)?.text).toContain("at most 2 subagents work at once (max_threads)")
+  expect(results.find((result) => result.isError)?.text).toContain("at most 2 workers work at once (max_threads)")
   client.close()
 }, 30_000)
 

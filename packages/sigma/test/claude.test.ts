@@ -59,8 +59,13 @@ const calls = (entries: ReadonlyArray<EntryRecord>) =>
       : [],
   )
 
-const conversationWith = async (claude: FakeClaude, ask: Record<string, string> = {}, options: ServerOptions = {}) => {
-  const server = await runningServer([], { ...options, claude: claude.options })
+const conversationWith = async (
+  claude: FakeClaude,
+  ask: Record<string, string> = {},
+  options: ServerOptions = {},
+  script: ReadonlyArray<ScriptStep> = [],
+) => {
+  const server = await runningServer(script, { ...options, claude: claude.options })
   const client = await RawClient.connect(server.home.socket)
   const conversation = (
     await client.call("conversation/start", {
@@ -104,14 +109,23 @@ test("claude-answer, provider-claude: Claude's answer through Claude Code is com
   expect(claude.userTexts()).toEqual([["Reply with exactly: fixture text ok"]])
 })
 
-test("claude-system-prompt: Claude Code keeps its own system prompt, adds the conversation's instructions, and its commands know the conversation", async () => {
+/** The start of what a local Claude Code is told of sigma's workers, by the MCP name it calls start_worker by. */
+const CLAUDE_WORKERS = "Workers. This session can start workers with the mcp__sigma__start_worker tool."
+
+test("claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation", async () => {
   using claude = new FakeClaude("text")
   await using session = await conversationWith(claude, { instructions: "Report with attn when done." })
   await session.submit("Reply with exactly: fixture text ok")
   await session.view.until(settled(1))
   const initialize = claude.log().find((entry) => entry.initialize)?.initialize
   expect(initialize.systemPrompt).toBeUndefined()
-  expect(initialize.appendSystemPrompt).toBe("Report with attn when done.")
+  const append: string = initialize.appendSystemPrompt
+  expect(append.startsWith(CLAUDE_WORKERS)).toBe(true)
+  // A worker of Claude Code's, on Claude Code too, starts from its brief, since Claude Code holds its own session.
+  expect(append).toContain("Every worker you start, on your provider too, starts from your message alone")
+  // Its own Agent tool stays the one for a quick helper.
+  expect(append).toContain("For a quick helper inside your own turn, use your own subagent tool if you have one")
+  expect(append.endsWith("\n\nReport with attn when done.")).toBe(true)
   expect(claude.log().find((entry) => entry.argv)?.rootConversation).toBe(session.conversation)
 })
 
@@ -1169,7 +1183,8 @@ const cacheFront = (claude: FakeClaude, spawn: number) =>
 
 const expectSameFront = (claude: FakeClaude, spawns: readonly [number, number]) => {
   const [first, second] = spawns.map((spawn) => cacheFront(claude, spawn))
-  expect(first).toBe("Report with attn when done.")
+  expect(first?.startsWith(CLAUDE_WORKERS)).toBe(true)
+  expect(first?.endsWith("Report with attn when done.")).toBe(true)
   expect(second).toBe(first)
 }
 
@@ -1333,7 +1348,7 @@ const boxFolder = (home: string) => {
 const spawnLine = (claude: FakeClaude, spawn: number) =>
   claude.log().find((entry) => entry.spawn === spawn && entry.argv !== undefined)
 
-test("target-member-mode: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types", async () => {
+test("target-member-mode, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("member_bash")
   // The conversation's folder is a repository on the target, and another at the same path on the home.
@@ -1386,6 +1401,10 @@ test("target-member-mode: a remote conversation's Claude Code has only sigma's t
   expect(initialize.appendSystemPrompt).toContain(
     "The environment Claude Code describes (its working directory, platform, shell and OS version) is the computer Claude Code runs on",
   )
+  // What a worker is, by the tool's MCP name, with no subagent tool to point to: member mode turns Agent off.
+  expect(initialize.appendSystemPrompt).toContain(CLAUDE_WORKERS)
+  expect(initialize.appendSystemPrompt).toContain("For a quick helper inside your own turn, do the work yourself.")
+  expect(initialize.appendSystemPrompt).not.toContain("subagent tool")
   // Nor of code mode, which Claude Code is not offered.
   expect(initialize.appendSystemPrompt).not.toContain("<codemode>")
   // Its skills, read with sigma's read, which Claude Code knows by its MCP name.
@@ -1421,7 +1440,7 @@ test("target-member-mode, claude-sign-in-error: a signed-out Claude Code on a ta
   ])
 })
 
-test("target-member-mode: a local conversation's Claude Code keeps its own tools, settings and folder", async () => {
+test("target-member-mode, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them", async () => {
   using claude = new FakeClaude("text")
   await using session = await conversationWith(claude)
   await session.submit("Reply with exactly: fixture text ok")
@@ -1429,8 +1448,20 @@ test("target-member-mode: a local conversation's Claude Code keeps its own tools
   const spawn = claude.spawns()[0]!
   expect(spawn["--setting-sources"]).toBe("user,project,local")
   for (const flag of ["--tools", "--strict-mcp-config"]) expect(spawn[flag]).toBeUndefined()
-  // No MCP server: sigma's tools are not offered, Claude Code's own act on the home.
-  expect(claude.log().find((entry) => entry.initialize)!.initialize.sdkMcpServers).toBeUndefined()
+  // Sigma's MCP server offers the worker tools alone, each kept out of Claude Code's tool search; Claude Code's own act
+  // on the home.
+  const initialize = claude.log().find((entry) => entry.initialize)!.initialize
+  expect(initialize.sdkMcpServers).toEqual(["sigma"])
+  const offered = initialize.sdkMcpServerManifests.sigma.toolsListResult.tools as Array<{ name: string; _meta: object }>
+  expect(offered.map((tool) => tool.name).sort()).toEqual([
+    "assign_worker",
+    "list_workers",
+    "message_worker",
+    "start_worker",
+    "stop_worker",
+    "wait_worker",
+  ])
+  for (const tool of offered) expect(tool._meta).toEqual({ "anthropic/alwaysLoad": true })
   expect(spawnLine(claude, 0).cwd).toBe(session.server.home.dir)
   expect(spawnLine(claude, 0).env.CLAUDE_CONFIG_DIR).toBeUndefined()
 })
@@ -1830,10 +1861,13 @@ test("worker-provider, worker-model: a scripted agent starts a worker on Claude 
     effort: "high",
   })
   expect(claude.spawns()[0]!["--model"]).toBe("claude-opus-5-5")
-  // Claude Code is told the brief and its task, none of the parent's instructions or history.
-  expect(
-    claude.log().find((entry) => entry.initialize && entry.probe === undefined)?.initialize.appendSystemPrompt,
-  ).toBe("Your task name is /root/poet. You are a worker; your final answer goes to /root.")
+  // Claude Code is told the brief and its task, beside the workers section, none of the parent's instructions or history.
+  const append: string = claude.log().find((entry) => entry.initialize && entry.probe === undefined)
+    ?.initialize.appendSystemPrompt
+  expect(append.startsWith(CLAUDE_WORKERS)).toBe(true)
+  expect(append.endsWith("\n\nYour task name is /root/poet. You are a worker; your final answer goes to /root.")).toBe(
+    true,
+  )
   expect(claude.userTexts()).toEqual([[expect.stringMatching(/Payload:\nReply with exactly: fixture text ok$/)]])
 })
 
@@ -1860,4 +1894,168 @@ test("worker-interrupt, worker-approve: a Claude Code worker asks its own approv
   await maker.until((watch) => runEnds(watch.seen()).length > 0)
   expect(runEnds(maker.seen())).toEqual([expect.objectContaining({ outcome: "interrupted" })])
   expect(approvalsOf(maker)?.requests ?? {}).toEqual({})
+})
+
+/** The approvals a person answered in a conversation's transcript, one entry each. */
+const approvalsAnswered = (watch: ViewWatch) => watch.seen().filter((entry) => entry.kind === "sigma.approval")
+
+/** The text of each `sigma.mail` entry of `kind` in the view, as the parent's model reads its payload. */
+const mailOf = (watch: ViewWatch, kind: string) =>
+  watch
+    .seen()
+    .filter((entry) => entry.kind === "sigma.mail" && (entry.data as { kind?: string }).kind === kind)
+    .map((entry) => {
+      const content = (entry.model?.[0] as { content: unknown }).content
+      const text = typeof content === "string" ? content : (content as Array<{ text: string }>)[0]!.text
+      return text.slice(text.indexOf("Payload:\n") + "Payload:\n".length)
+    })
+
+test("worker-claude-parent, worker-answer: a Claude Code parent starts a scripted worker with sigma's worker tools and reads its answer from wait_worker", async () => {
+  using claude = new FakeClaude("worker_parent")
+  await using session = await conversationWith(claude, {}, {}, [
+    { agent: "/root/helper", text: "hello from the worker" },
+  ])
+  await session.submit(
+    "Use the mcp__sigma__start_worker tool with task_name helper, provider script and message: Say hello. Then call mcp__sigma__wait_worker with timeout_ms 60000, and reply with exactly the text the worker sent.",
+  )
+  await session.view.until(settled(1))
+  const asked = approvalsAnswered(session.view)
+
+  // The calls are sigma's tools, by their own names, each run by sigma and answered over MCP.
+  expect(calls(session.view.seen()).map((call) => call.name)).toEqual(["start_worker", "wait_worker"])
+  const [started, waited] = results(session.view.seen())
+  expect(JSON.parse(started!.text)).toEqual({ task_name: "/root/helper" })
+  const received = { from: "/root/helper", kind: "final_answer", text: "hello from the worker" }
+  expect(JSON.parse(waited!.text)).toEqual({ timed_out: false, received: [received] })
+  const read = claude
+    .log()
+    .filter((entry) => entry.received?.response?.response?.mcp_response)
+    .map((entry) => JSON.parse(entry.received.response.response.mcp_response.result.content[0].text))
+  expect(read).toEqual([{ task_name: "/root/helper" }, { timed_out: false, received: [received] }])
+  // Claude Code asked about each call and sigma allowed it at once: worker tools ask no person.
+  expect(claude.permissionAnswers().map((answer) => answer.behavior)).toEqual(["allow", "allow"])
+  expect(asked).toEqual([])
+  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: hello from the worker", "run_end: answered"])
+  // The worker is a conversation under its Claude parent, on the provider the call named.
+  const listed = (await session.client.call("conversation/list")).result as Array<{
+    model: { provider: string }
+    lineage?: { task?: string; parent?: string }
+  }>
+  expect(listed.find((each) => each.lineage?.task === "/root/helper")).toMatchObject({
+    model: { provider: "script" },
+    lineage: { parent: session.conversation },
+  })
+})
+
+test("worker-claude-parent, subagent-claude: a Claude subagent that calls sigma's worker tools is refused in its own conversation, so it neither starts workers its tree cannot see nor answers as /root", async () => {
+  using claude = new FakeClaude("worker_subagent")
+  await using session = await conversationWith(claude)
+  await session.submit(
+    "Use the Agent tool to start a general-purpose subagent with this task: call the mcp__sigma__list_workers tool and reply with exactly what it returned. Then reply with exactly the subagent's answer.",
+  )
+  await session.view.until(settled(1))
+  const entry = session.view.seen().find((each) => each.kind === "sigma.subagent")!
+  const subagent = watchView(session.client, String((entry.data as { conversation: number }).conversation))
+  await subagent.until((watch) => results(watch.seen()).length > 0)
+  expect(calls(subagent.seen()).map((call) => call.name)).toEqual(["list_workers"])
+  expect(results(subagent.seen())).toEqual([
+    expect.objectContaining({
+      text: "a subagent cannot start or reach workers; leave that to the agent that started you",
+      isError: true,
+    }),
+  ])
+  // The parent's transcript holds its Agent call, not the subagent's.
+  expect(calls(session.view.seen()).map((call) => call.name)).toEqual(["Agent"])
+  expect(transcript(session.view.seen()).at(-1)).toBe("run_end: answered")
+})
+
+test("target-member-mode, approval-wire: a sigma call of a remote Claude Code that asks reaches a person once: Claude Code's own ask is allowed for it, and its tool task asks", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("member_bash")
+  await using session = await memberSession(claude, targets, undefined, { ask: { approvals: "ask" } })
+  await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
+  await session.answer(true)
+  await session.view.until(settled(1))
+  const asked = approvalsAnswered(session.view)
+  expect(asked).toHaveLength(1)
+  expect(claude.permissionAnswers().map((answer) => answer.behavior)).toEqual(["allow"])
+  expect(readFileSync(join(session.work, "made"), "utf8")).toBe("box-1\n")
+})
+
+test("worker-wake-mail: a Claude Code worker whose run ends with a job working mails its answer naming the job, and the parent never waits for the job", async () => {
+  using claude = new FakeClaude("models", "bash_background_stopped")
+  await using session = await scriptedWith(
+    claude,
+    [
+      { tool: { name: "start_worker", input: { task_name: "runner", message: "start it", provider: "claude" } } },
+      { tool: { name: "wait_worker", input: { timeout_ms: 600_000 } } },
+      { text: "it answered" },
+    ],
+    { approvals: "auto" },
+  )
+  await submit(session.client, session.conversation, "start a runner")
+  await session.view.until(settled(1), 20_000)
+  const [, waited] = results(session.view.seen())
+  expect(JSON.parse(waited!.text)).toEqual({
+    timed_out: false,
+    received: [
+      {
+        from: "/root/runner",
+        kind: "final_answer",
+        text: 'started\n\nStill working: "Sleep 600 seconds in background".',
+      },
+    ],
+  })
+})
+
+test("worker-wake-mail: a Claude Code worker's wake run, after its job ends, mails its answer to the parent as a message naming no job left", async () => {
+  using claude = new FakeClaude("models", "bash_background_wake")
+  await using session = await scriptedWith(
+    claude,
+    [
+      { tool: { name: "start_worker", input: { task_name: "runner", message: "start it", provider: "claude" } } },
+      { text: "started it" },
+      { text: "read one" },
+      { text: "read two" },
+    ],
+    { approvals: "auto" },
+  )
+  await submit(session.client, session.conversation, "start a runner")
+  await session.view.until(
+    (watch) => mailOf(watch, "message").length > 0 && mailOf(watch, "final_answer").length > 0,
+    20_000,
+  )
+  expect(mailOf(session.view, "message")).toEqual([
+    "The background command finished with exit code 0. Its output was `done`.",
+  ])
+  expect(mailOf(session.view, "final_answer")).toHaveLength(1)
+  // The worker's own transcript holds the job's report and the wake run's answer, in a run no person prompted.
+  const runner = await session.worker("/root/runner")
+  await runner.until(settled(2))
+  expect(transcript(runner.seen()).slice(-3)).toEqual([
+    'report: Background command "Start background sleep-then-echo command" completed (exit code 0)',
+    "assistant: The background command finished with exit code 0. Its output was `done`.",
+    "run_end: answered",
+  ])
+})
+
+test("worker-claude-parent, worker-fork: a Claude Code parent's worker on Claude Code starts a session of its own from its brief, not a fork of the parent's", async () => {
+  using claude = new FakeClaude("worker_claude")
+  await using session = await conversationWith(claude)
+  await session.submit(
+    "Use the mcp__sigma__start_worker tool with task_name echo and message: Reply with exactly: echo ok. Then call mcp__sigma__wait_worker with timeout_ms 120000, and reply with exactly the text the worker sent.",
+  )
+  await session.view.until(settled(1))
+  const [parent, worker] = claude.spawns()
+  expect(worker!["--session-id"]).not.toBe(parent!["--session-id"])
+  expect(worker!["--resume"]).toBeUndefined()
+  expect(worker!["--fork-session"]).toBeUndefined()
+  // It is told its brief alone.
+  expect(claude.userTexts(1)).toEqual([[expect.stringMatching(/Payload:\nReply with exactly: echo ok$/)]])
+  const [, waited] = results(session.view.seen())
+  expect(JSON.parse(waited!.text)).toEqual({
+    timed_out: false,
+    received: [{ from: "/root/echo", kind: "final_answer", text: "echo ok" }],
+  })
+  expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: echo ok", "run_end: answered"])
 })

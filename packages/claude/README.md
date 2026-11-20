@@ -4,10 +4,12 @@ Claude Code as a harness of the hosted run (`@sigma/hosted`): the only package t
 `claudeAdapter(settings)` is the adapter, whose runs are `claude.run` tasks; `claudeAccount` is a Claude Code
 instance's account.
 
-A conversation on a target other than `local` runs in member mode: Claude Code's own tools, settings, connectors and
-MCP servers are off, and it acts only through sigma's tools, served on the in-process `sigma` MCP server with
-`alwaysLoad`. Each call, `mcp__sigma__<name>`, is framed under sigma's name and handed to the run's `runOwn`, which
-runs it as a `pi.tool` task of the run, on the target. Its processes use the target's own Claude Code folders, and
+Sigma's own tools (`ProcessConfig.own`) are served on the in-process `sigma` MCP server with `alwaysLoad`: a local
+conversation's Claude Code gets the worker tools there beside its own tools and the person's settings. Each call,
+`mcp__sigma__<name>`, is framed under sigma's name, its permission prompt allowed at once, and handed to `runOwn` of
+the conversation that made it, the run's or, by the `agent_id` its PreToolUse named, a subagent's job, which runs it
+as a `pi.tool` task. A conversation on a target other than `local` runs in member mode: Claude Code's own tools,
+settings, connectors and MCP servers are off, and it acts only through sigma's tools, on the target. Its processes use the target's own Claude Code folders, and
 their system prompt's `append` is the conversation's prompt sections, rendered through its env (`@sigma/hosted`'s
 member mode).
 
@@ -23,7 +25,7 @@ member mode).
   host: PreToolUse and `canUseTool` become `beforeRun` and `approve`, a subagent's by `agent_id` its job's, and
   PostCompact the host's `compacted`. The conversation's instructions, after the sections of the extensions Claude Code is
   offered, are appended to Claude Code's own system prompt. `processKey` (in
-  `@sigma/hosted`) names what a process is spawned with, in member mode the tools sigma serves it too. In member mode
+  `@sigma/hosted`) names what a process is spawned with, the tools sigma serves it among them. In member mode
   it starts with only `ToolSearch` of Claude Code's tools, `strictMcpConfig`, no setting sources,
   `ENABLE_CLAUDEAI_MCP_SERVERS=false`, and `MCP_TOOL_TIMEOUT` past sigma's longest bash timeout, so a tool's own limit
   is the one the model sees; a run it fails signed out is told how a target signs in.

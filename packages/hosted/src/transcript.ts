@@ -2,8 +2,8 @@
 // its `hosted.job` task writes (D1). Each commits through its own task: its texts, its calls and their results, the
 // questions it asks a person, and the jobs it starts. A call the harness runs itself is committed before its
 // `beforeRun` callback returns, so the intent is durable before the effect; a question for a person waits on
-// `sigma.approvals`, keyed `<task>/<call>`. In member mode a call of sigma's own tools, which the harness makes through
-// sigma (`runOwn`), runs as a `pi.tool` task of the run, as in sigma's own loop.
+// `sigma.approvals`, keyed `<task>/<call>`. A call of sigma's own tools, which the harness makes through sigma
+// (`runOwn`), runs as a `pi.tool` task of the run or job, as in sigma's own loop.
 import { copyJson } from "@sigma/delta/json"
 import type { Draft } from "@sigma/delta"
 import {

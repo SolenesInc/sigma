@@ -107,11 +107,13 @@ it into a run that serves Claude Code's own follow-up.
 - `claude-health` lists Claude as `ready` with its account and version, and
   its models, from Claude Code itself.
 - `claude-system-prompt` keeps Claude Code's own system prompt and appends the
-  conversation's start instructions to it; Claude Code's commands see
+  workers section (`worker-section` in [Workers](./workers.md)), then the
+  conversation's start instructions, to it; Claude Code's commands see
   `SIGMA_ROOT_CONVERSATION`.
 - `claude-offered-sections` [kernel] puts the prompt sections of the
   extensions Claude Code is offered as its own tools before the conversation's
-  instructions. Sigma offers it none yet, so nothing is added today.
+  instructions. Sigma offers it the worker tools (`worker-claude-parent`), so
+  their `worker-section` is added.
 - `claude-model` hands Claude Code the conversation's model and effort. After
   a switch to another Claude model or effort, the next run switches the live
   process (`set_model`, then `apply_flag_settings` with `effortLevel`) before
@@ -293,7 +295,8 @@ Preconditions:
   `one, two` is the recording's, not proof that Claude remembers.
 - **Instructions** (`text`). Run
   `drive.ts r sigma exec --provider claude --instructions 'Answer in Swedish.' 'Reply with exactly: fixture text ok'`:
-  the log's `initialize` holds `"appendSystemPrompt":"Answer in Swedish."` and
+  the log's `initialize` holds an `appendSystemPrompt` that is the workers
+  section, a blank line, then `Answer in Swedish.`, and
   no `systemPrompt`, and its argv line holds `"rootConversation"` set to the
   conversation's id.
 - **Switch to Claude** (`handoff`). Run `drive.ts r serve` and
@@ -370,7 +373,10 @@ Preconditions:
 
 - **Subagents.** A Claude subagent is listed by `conversation/list` with its
   `lineage` (no `task`), and `conversation/submit` or
-  `conversation/select_model` on it answers `TakesNoInput`.
+  `conversation/select_model` on it answers `TakesNoInput`. Claude Code
+  gives its subagents sigma's MCP tools too; a subagent's call runs in its
+  own conversation and asks there, and the worker tools refuse it, since a
+  subagent is no worker of the tree (`worker-claude-parent`).
 - **On a target.** A conversation on a target runs Claude Code in member
   mode, with only sigma's tools, in [Targets](./targets.md)
   (`target-member-mode`). Everything above is a local conversation's.
@@ -392,7 +398,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 Provider, `packages/sigma/test/claude.test.ts`:
 
 - claude-answer, provider-claude: Claude's answer through Claude Code is committed as sigma's message
-- claude-system-prompt: Claude Code keeps its own system prompt, adds the conversation's instructions, and its commands know the conversation
+- claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation
 - claude-approval: a command Claude wants to run waits for a person, and Claude Code hears the answer
 - claude-read: Claude reads files without asking and the read shows as a call and its result
 - claude-resume, claude-live: a Claude Code process that exits while it waits for the next run is replaced by one that resumes where sigma's transcript ends
@@ -456,6 +462,9 @@ Package, `packages/hosted/test/outside-a-run.test.ts`, over a scripted connectio
   with `result` then `idle`. It leaves out the machine's own skills, commands
   and hooks, but what Claude writes may quote your settings or CLAUDE.md:
   read the file before committing it.
+- Processes that run at once, as a worker's Claude Code beside its parent's,
+  write between each other's lines; the recorder marks each line with its
+  process and writes one segment per spawn, in the order they started.
 - `packages/sigma/test/support/record-claude-fixtures.ts <journey>` records
   the provider tests' journeys on claude-haiku-5-5 with your sign-in, and
   `derive-claude-fixtures.ts` then rebuilds `subagent_working` from them.

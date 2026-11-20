@@ -1,7 +1,7 @@
 // The seam between the hosted run and a harness: what an adapter is, the process it opens, the frames it hands the run
 // it serves and the callbacks it reaches the run through. The vocabulary is sigma's own, so an adapter is the only code
 // that knows its harness's protocol, and the hosted run the only code that commits.
-import type { Agent } from "@sigma/harness"
+import { type Agent, type Extension, type ToolRegistration, toolExtension } from "@sigma/harness"
 import type { ImageContent, TextContent, ToolCall, Usage } from "@sigma/models"
 import type { Duration, Effect, Scope } from "effect"
 import type { JobReport } from "./jobs.ts"
@@ -39,6 +39,12 @@ export type ProcessConfig<S = unknown> = {
   readonly rootConversation: string
   /** What the harness adds to its own system prompt: the sections of the extensions it is offered, then the agent's instructions. */
   readonly instructions?: string
+  /**
+   * Sigma's own tools the harness is offered beside or instead of its own, each call run through `Callbacks.runOwn`:
+   * in member mode every tool of the conversation but code mode, otherwise the tools of the extensions the hosted run
+   * offers it (D17). A live process keeps the tools it started with, so they are part of its key.
+   */
+  readonly own: ReadonlyArray<ToolRegistration>
   /** A remote conversation's process, in member mode (D9); absent for a local conversation's. */
   readonly member?: MemberProcess
 }
@@ -59,8 +65,16 @@ export type MemberProcess = {
  */
 export const isMember = (agent: Agent) => agent.target !== undefined && agent.target !== "local"
 
-/** The tools sigma offers a harness in member mode: the conversation's, but code mode, which a harness takes no part in. */
-export const ownTools = (agent: Agent) => agent.tools.filter((tool) => tool.codeMode !== true)
+/**
+ * The tools sigma offers a harness (`ProcessConfig.own`): in member mode the conversation's, but code mode, which a
+ * harness takes no part in; otherwise those of the extensions `offered`, beside the harness's own (D17).
+ */
+export const ownTools = (agent: Agent, offered: ReadonlyArray<Extension>) => {
+  const names = new Set(offered.map((extension) => extension.name))
+  return agent.tools.filter(
+    (tool) => tool.codeMode !== true && (isMember(agent) || names.has(toolExtension(agent, tool.name) ?? "")),
+  )
+}
 
 /** Where a process starts in its harness's session. */
 export type Start =
@@ -91,9 +105,7 @@ export const processKey = (config: ProcessConfig) => {
     target: agent.target,
     maxTurns: agent.maxTurns,
     rootConversation: config.rootConversation,
-    ...(isMember(agent)
-      ? { own: ownTools(agent).map(({ name, description, parameters }) => ({ name, description, parameters })) }
-      : {}),
+    own: config.own.map(({ name, description, parameters }) => ({ name, description, parameters })),
   })
 }
 
@@ -260,9 +272,11 @@ export interface Callbacks {
   /** Whether the call may run: at once in a conversation that runs without asking, otherwise once a person answers. */
   readonly approve: (call: ToolCall, signal?: AbortSignal) => Promise<boolean>
   /**
-   * Runs the call `call` of one of sigma's own tools, `name`, which a harness in member mode made through sigma: it is
-   * committed with its tool task, as in sigma's own loop, and answered with the result that task committed, followed by
-   * what the model must read now (`Member.notice`). An own tool's call takes neither `beforeRun` nor `approve`.
+   * Runs the call `call` of one of sigma's own tools, `name` (`ProcessConfig.own`), which the harness made through
+   * sigma: it is committed with its tool task, as in sigma's own loop, which asks a person when the tool asks, and
+   * answered with the result that task committed, followed in member mode by what the model must read now
+   * (`Member.notice`). An own tool's call takes neither `beforeRun` nor `approve`: the adapter allows the harness's own
+   * permission request for it at once, so a person is asked once (F18).
    */
   readonly runOwn: (call: string, name: string, input: unknown, signal?: AbortSignal) => Promise<OwnResult>
 }

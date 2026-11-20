@@ -1,7 +1,8 @@
 # Workers
 
-A model on sigma's own loop (ChatGPT, or the script) can start workers with
-the worker tools: `start_worker`, `wait_worker`, `message_worker`,
+A model on sigma's own loop (ChatGPT, or the script), and Claude Code, which
+reaches them over sigma's MCP server as `mcp__sigma__<tool>`, can start
+workers with the worker tools: `start_worker`, `wait_worker`, `message_worker`,
 `assign_worker`, `list_workers` and `stop_worker`. A worker is a conversation
 of its own, under its parent in a tree, on any ready provider of the home:
 its parent's, by default, or the `provider` and `model` its `start_worker`
@@ -12,11 +13,13 @@ transcript shows a card per worker with what it last did and whether it
 works, waits on a person or ended; a call the worker asks about shows on its
 card and `^Y` or `^N` answers it from the parent. A worker's last message of
 each run reaches its parent: through `wait_worker` when the parent waits,
-otherwise as mail. `Esc` stops the run and every worker's under it. Claude
+otherwise as mail; a worker whose job outlives its run mails what it says
+when the job wakes it. `Esc` stops the run and every worker's under it. Claude
 Code's own subagents are not workers: Claude Code runs them, and sigma
 commits each into a conversation of its own the same way (`subagent-claude`).
-On a target, Claude Code's Agent tool is off and it calls sigma's
-`start_worker` (`target-member-mode`). What a worker's requests keep of the
+A local Claude Code keeps its Agent tool beside the worker tools; on a
+target, its Agent tool is off and it has only sigma's tools
+(`target-member-mode`). What a worker's requests keep of the
 prompt cache is in [Prompt cache](./prompt-cache.md).
 
 ## Sub-features
@@ -33,12 +36,31 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
   `no provider <p>; the ready providers are ...` or
   `provider <p> is not ready; the ready providers are ...`. The tool's
   description lists the home's providers.
-- `worker-section` tells a model on sigma's own loop that can call
-  `start_worker`, directly or from a code mode script, what a worker is and to
-  pass a named provider and model unchanged, in a `Workers.` paragraph of its
-  instructions. It names no reason to prefer one provider over another.
+- `worker-section` tells a model that can call `start_worker`, directly or
+  from a code mode script, what a worker is and to pass a named provider and
+  model unchanged, in a `Workers.` paragraph of its instructions. It names no
+  reason to prefer one provider over another. Claude Code gets it in its
+  appended system prompt, before the conversation's instructions, naming
+  `mcp__sigma__start_worker`; on a target, where Claude Code has no Agent
+  tool, it says `For a quick helper inside your own turn, do the work yourself.`
+- `worker-claude-parent` offers a local Claude Code the six worker tools on
+  sigma's MCP server `sigma`, beside its own tools and the person's settings,
+  each always loaded rather than behind its tool search. Each call is committed
+  under sigma's name for the tool (`start_worker`, not
+  `mcp__sigma__start_worker`) and run by sigma; Claude Code's own permission
+  prompt for it is allowed at once (`"behavior":"allow"` in the fake's log),
+  and a tool that asks a person asks once, through sigma, as on a target. A
+  call a Claude subagent makes is committed in the subagent's conversation.
+- `worker-wake-mail` mails a worker's answer naming its jobs still working,
+  as `Still working: "<job title>".` after the answer, and never waits for
+  them. When a job's end wakes an idle Claude Code worker, the wake run's
+  answer reaches the parent as mail of kind `message`, which `wait_worker`
+  returns with `"kind": "message"`.
 - `worker-fork` gives a worker on its parent's provider its parent's history up to the start
-  (its view's `conversation.parent`), or none with `"fork_turns": "none"`.
+  (its view's `conversation.parent`), or none with `"fork_turns": "none"`. Only a
+  parent on sigma's own loop forks: a Claude Code parent's worker, on Claude
+  Code too, starts a session of its own from its brief, its workers section
+  says so; it does not fork with `"fork_turns": "all"` either.
 - `worker-model` runs a worker on its parent's model, or on the `model` and
   `effort` its `start_worker` names, unchanged. A provider whose loop sigma
   runs must list the model, or the call fails; Claude Code takes any name.
@@ -117,7 +139,8 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
 ### People
 
 - Ask an OpenAI conversation for work it hands to subagents, in the TUI.
-- Ask a Claude conversation to use its Task tool.
+- Ask a Claude conversation to use its Task tool for a subagent, or to start a
+  worker, naming `mcp__sigma__start_worker` or a provider.
 - Open a subagent with `sigma --conversation <id>`.
 - Set `[agents] max_threads` in `SIGMA_HOME/config.toml` before the server starts.
 
@@ -158,6 +181,49 @@ Preconditions:
   then `SIGMA` says `the scribe is done`, `■ READY`.
   `drive.ts r rpc conversation/list` lists the subagent with
   `"lineage": {"parent": <the TUI's conversation>, "task": "/root/scribe", "title": "scribe", ...}`.
+
+- **Claude Code as the parent** (`--fake-claude worker_parent`, with this
+  script for the worker):
+
+  ```json
+  [{ "agent": "/root/helper", "text": "hello from the worker" }]
+  ```
+
+  `drive.ts r up --fake-claude worker_parent --script <file>`,
+  `drive.ts r tui start --provider claude`, wait for `READY`, type
+  `Use the mcp__sigma__start_worker tool with task_name helper, provider script and message: Say hello. Then call mcp__sigma__wait_worker with timeout_ms 60000, and reply with exactly the text the worker sent.`
+  and `Enter`, then wait for `READY` again and save the screen: a
+  `⧉ helper done` card, `▸ wait_worker` with `/root/helper` saying
+  `hello from the worker`, and `SIGMA` saying `hello from the worker`; no
+  `allow this call?` was shown. `evidence/fake-claude/log.ndjson`'s
+  `initialize` lists `"sdkMcpServers":["sigma"]` with the six tools, and
+  `appendSystemPrompt` starts
+  `Workers. This session can start workers with the mcp__sigma__start_worker tool.`;
+  both `can_use_tool` answers are `"behavior":"allow"`. `conversation/list`
+  holds `/root/helper` on `script` with the Claude conversation as `parent`.
+
+- **Wake mail** (`--fake-claude bash_background_wake`). With this script:
+
+  ```json
+  [
+    {
+      "tool": {
+        "name": "start_worker",
+        "input": { "task_name": "runner", "message": "start it", "provider": "claude" }
+      }
+    },
+    { "text": "started it" },
+    { "text": "read one" },
+    { "text": "read two" }
+  ]
+  ```
+
+  `drive.ts r up --fake-claude bash_background_wake --script <file> --auto`,
+  `drive.ts r sigma exec --auto delegate`, then
+  `drive.ts r watch <parent id> --until sigma.mail --save mail` until it holds two
+  `sigma.mail` entries: one `final_answer`, and one `message` whose payload is
+  `The background command finished with exit code 0. Its output was \`done\`.`and names no job. The runner's own`watch`holds a`hosted.report` and that
+  answer in a second run nobody prompted.
 
 - **Message, list and interrupt.** With this script:
 
@@ -398,7 +464,7 @@ Preconditions:
   `drive.ts r sigma exec spread`: stdout `one at a time`, and
   `drive.ts r watch <parent id> --save threads` shows the second
   `start_worker`'s result starting
-  `at most 1 subagents work at once (max_threads)`.
+  `at most 1 workers work at once (max_threads)`.
   Subagents off: in a fresh run, `drive.ts r up --fake-openai subagent`, write
   `[agents]` and `max_threads = 0` to the same file, and run
   `drive.ts r sigma exec --provider openai 'Send a scout to find the gnome.'`:
@@ -550,6 +616,14 @@ Provider, `packages/sigma/test/claude.test.ts`:
 
 - worker-provider, worker-model: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone, and the agent's wait returns the worker's answer
 - worker-interrupt, worker-approve: a Claude Code worker asks its own approval, and stopping its idle parent ends the worker's run and clears the approval
+- worker-claude-parent, worker-answer: a Claude Code parent starts a scripted worker with sigma's worker tools and reads its answer from wait_worker
+- worker-claude-parent, subagent-claude: a Claude subagent that calls sigma's worker tools is refused in its own conversation, so it neither starts workers its tree cannot see nor answers as /root
+- target-member-mode, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them
+- target-member-mode, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types
+- claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation
+- worker-claude-parent, worker-fork: a Claude Code parent's worker on Claude Code starts a session of its own from its brief, not a fork of the parent's
+- worker-wake-mail: a Claude Code worker whose run ends with a job working mails its answer naming the job, and the parent never waits for the job
+- worker-wake-mail: a Claude Code worker's wake run, after its job ends, mails its answer to the parent as a message naming no job left
 - subagent-claude: a Claude subagent works in a conversation of its own under the one that started it
 - subagent-claude: a call a Claude subagent wants to make waits for a person in the subagent's conversation
 - subagent-claude: stopping a Claude subagent stops only it, and its parent's run carries on
@@ -620,6 +694,13 @@ Claude, in a run made with `drive.ts r up --real-claude`:
   reports only a placeholder (`This agent's report was delivered to you as a
 message...`) as its summary; neither the card nor the subagent shows that
   placeholder.
+- **Workers from Claude Code.** In a run made with
+  `drive.ts r up --real-claude --openai-kept`, `drive.ts r tui start --provider claude --auto`, send
+  `Start a worker on provider openai with the message: reply with exactly: found it. Wait for it with wait_worker, then tell me what it said.`:
+  `▸ start_worker` with `"provider":"openai"`, a `⧉ ... done` card under the
+  Claude conversation, `▸ wait_worker` with the worker saying `found it`, and
+  Claude's answer naming it. `conversation/list` holds the worker on
+  `openai` with the Claude conversation as `parent`.
 - **A subagent asks.** Send
   `Use the Task tool to start a general-purpose subagent that runs exactly: touch /tmp/sigma-verify/r/sub-made with the Bash tool. Then reply with one word: done`,
   wait for `waiting on you`: the card shows `allow Bash(touch /tmp/sigma-verify/r/sub-made)?`.

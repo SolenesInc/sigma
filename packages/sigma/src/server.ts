@@ -110,7 +110,7 @@ import { endRun, LastRunEndDoc, switchModel, writeRunEnd } from "./run-end.ts"
 import { committedSignIns } from "./sign-ins.ts"
 import { codeModeTools, sigmaTools } from "./tools/index.ts"
 import { attachedImages } from "./images.ts"
-import { agentTools, type AgentTypes, interrupt } from "./agents.ts"
+import { agentTools, type AgentTypes, interrupt, offeredToHarness, wakeWorker } from "./agents.ts"
 import { followTreeStatus, type TreeStatuses } from "./status.ts"
 import {
   attachedSkills,
@@ -268,10 +268,11 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
             (provider) => claude.has(provider),
           ),
         )
-        // A local conversation's Claude Code has its own tools and subagents, so sigma's are not offered to it. A remote
-        // one's runs in member mode, with only sigma's (D9).
+        // A local conversation's Claude Code has its own tools and subagents, and is offered sigma's worker tools beside
+        // them (D17). A remote one's runs in member mode, with only sigma's (D9).
         const hosted = hostedRunTasks({
           adapters: [claudeAdapter((provider) => claude.get(provider))],
+          offered: offeredToHarness,
           title: (conversation) => titleOf(harness, conversation),
           processes,
           member: {
@@ -335,7 +336,12 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           })
         // A harness woke by itself: its reports reach the conversation as input, which an idle one runs (D3). A busy one
         // places them at its next step, and they are never sent to the harness, which read them itself (D4).
+        // A worker's wake goes through a reporter in its parent, which mails the wake run's answer (D8 of s-7bmc8w).
         wakeHosted = (conversation, reports) =>
+          Effect.flatMap(wakeWorker(harness, conversation, reports), (mailed) =>
+            mailed ? Effect.void : wakeOn(conversation, reports),
+          )
+        const wakeOn = (conversation: ConversationId, reports: ReadonlyArray<JobReport>) =>
           Effect.flatMap(harness.conversation(conversation), (handle) =>
             Effect.forEach(
               reports,
