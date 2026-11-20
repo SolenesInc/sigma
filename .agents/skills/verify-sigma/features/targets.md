@@ -49,11 +49,14 @@ on. attn will use targets to run a member's work in a sandbox.
   person's settings, connectors and other MCP servers are off, and it acts
   only through sigma's tools, served to it as `mcp__sigma__<name>` and kept
   out of tool search. Its calls are committed under sigma's names and run on
-  the target. Its Claude Code processes use the target's own folders,
-  `$SIGMA_HOME/targets/<16 hex of sha256(target)>/claude` as
-  `CLAUDE_CONFIG_DIR` and `.../loop` as their working folder, so its
-  resumes and forks find their session there and nothing lands in the
-  person's `~/.claude`. Its system prompt's `append` holds the
+  the target. Its Claude Code processes keep the server's own Claude folder
+  (the server's or the provider instance's `CLAUDE_CONFIG_DIR`, else
+  `~/.claude`) and run in the target's own working folder,
+  `$SIGMA_HOME/targets/<16 hex of sha256(target)>/loop`. Claude Code keeps
+  sessions by config folder and working folder, so its resumes and forks
+  find their session under `projects/` for that folder, apart from every
+  other target's. The person's settings, skills, hooks and MCP servers in
+  that config folder stay out: no setting sources, `--strict-mcp-config`. Its system prompt's `append` holds the
   conversation's instructions, then the target's `AGENTS.md` files and
   skills, then which computer its tools act on: the target, by name and the
   platform its sigma-env reports, over the computer Claude Code's own
@@ -140,11 +143,9 @@ Preconditions:
   remote hands (`target-remote-hands`): the same tools and workspace text, through
   sigma's MCP server and its system prompt's `append`.
 - **Sign-in.** A remote-hands Claude Code is signed in as the provider's
-  Claude Code is, except where Claude Code keeps the sign-in in its config
-  folder: on Linux, `.credentials.json`. There the target's fresh folder is
-  signed out, and the sign-in must come through the environment
-  (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`). macOS keeps it in
-  the keychain, which a fresh folder reaches.
+  Claude Code is, from the same config folder, on every platform. Signed
+  out, it fails the run with Claude Code's own words, as a local one does
+  (`claude-sign-in-error` in [Claude](./claude.md)).
 - **Read-only server.** It reaches no target: a hello would sweep what an
   earlier server left running there.
 
@@ -157,7 +158,6 @@ Preconditions:
   `packages/sigma/test/openai.test.ts`; `target-remote-hands: ...`,
   `target-remote-hands, claude-resume: ...`,
   `target-remote-hands, target-worker-fork: ...`,
-  `target-remote-hands, claude-sign-in-error: ...`,
   `target-remote-hands, target-server-restart: ...`,
   `target-remote-hands, skills-list, skills-attach: ...`,
   `target-remote-hands, approval-wire: ...`,
@@ -195,7 +195,7 @@ Preconditions:
   folder when the conversation is on a target.
 - The instance is announced through a `target` prompt section, rendered
   before each request, on ChatGPT. Claude Code runs its own loop, so remote
-  hands tells it at the start of a run and in a sigma call's result instead;
+  hands tell it at the start of a run and in a sigma call's result instead;
   a change found between those points waits for the next one.
 - A change a remote-hands run found but Claude Code never read is retold to
   the next run's session, except when that run is a compaction: its
@@ -209,7 +209,8 @@ Preconditions:
   refuses OAuth sign-in, so the `append` says that block is not where the
   tools run. The test connector's `platform` file makes a target report
   another platform, so the two differ on one machine.
-- `$SIGMA_HOME/targets/<key>` holds the target's Claude Code sessions for the
-  life of the home; sigma does not remove it. Deleting it while no conversation
-  on that target runs costs their Claude Code sessions: their next runs start
+- A target's Claude Code sessions sit in the server's Claude folder, under
+  `projects/` for `$SIGMA_HOME/targets/<key>/loop`, for as long as Claude Code
+  keeps them; sigma removes neither. Deleting them while no conversation on
+  that target runs costs their Claude Code sessions: their next runs start
   fresh sessions, told the conversation.

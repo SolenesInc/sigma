@@ -9,7 +9,7 @@ conversation's Claude Code gets the worker tools there beside its own tools and 
 `mcp__sigma__<name>`, is framed under sigma's name, its permission prompt allowed at once, and handed to `runOwn` of
 the conversation that made it, the run's or, by the `agent_id` its PreToolUse named, a subagent's job, which runs it
 as a `pi.tool` task. A conversation on a target other than `local` runs with remote hands: Claude Code's own tools,
-settings, connectors and MCP servers are off, and it acts only through sigma's tools, on the target. Its processes use the target's own Claude Code folders, and
+settings, connectors and MCP servers are off, and it acts only through sigma's tools, on the target. Its processes run in the target's own working folder, and
 their system prompt's `append` is the conversation's prompt sections, rendered through its env (`@sigma/hosted`'s
 remote hands).
 
@@ -28,7 +28,7 @@ remote hands).
   `@sigma/hosted`) names what a process is spawned with, the tools sigma serves it among them. With remote hands
   it starts with only `ToolSearch` of Claude Code's tools, `strictMcpConfig`, no setting sources,
   `ENABLE_CLAUDEAI_MCP_SERVERS=false`, and `MCP_TOOL_TIMEOUT` past sigma's longest bash timeout, so a tool's own limit
-  is the one the model sees; a run it fails signed out is told how a target signs in.
+  is the one the model sees. It keeps the server's own Claude folder, so it signs in as the machine's Claude Code does.
 - `src/environment.ts`: how every Claude Code process starts, a run's, the account probe's and `claude auth`'s: the
   server's environment without the variables a host Claude Code session sets, then the provider instance's `env`. A
   run's settings also turn tool search on where the person's Claude Code settings leave it at `auto`.

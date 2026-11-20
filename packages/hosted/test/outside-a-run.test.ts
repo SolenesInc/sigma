@@ -136,7 +136,7 @@ const open = () =>
       adapters: [scripted.adapter],
       processes,
       remoteHands: {
-        folder: () => Effect.die("no target"),
+        cwd: () => Effect.die("no target"),
         notice: () => Effect.succeed(undefined),
         retell: () => undefined,
       },

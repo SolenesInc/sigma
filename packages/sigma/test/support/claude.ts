@@ -29,6 +29,7 @@ export class FakeClaude {
 
   readonly #fixture: string
   #holdBefore: string | undefined
+  #env: Record<string, string> = {}
 
   /** Plays the fixtures' Claude Code processes one per spawn, in order: several chain one journey after another. */
   constructor(...fixtures: [string, ...string[]]) {
@@ -47,6 +48,7 @@ export class FakeClaude {
         FAKE_CLAUDE_FIXTURE: this.#fixture,
         FAKE_CLAUDE_DIR: this.dir,
         ...(this.#holdBefore === undefined ? {} : { FAKE_CLAUDE_HOLD_BEFORE: this.#holdBefore }),
+        ...this.#env,
       },
     }
   }
@@ -58,6 +60,19 @@ export class FakeClaude {
   holdBefore(subtype: string) {
     this.#holdBefore = subtype
     return this
+  }
+
+  /** Gives the provider these variables, as a provider instance's `env` or `config_dir` does. Set before the server starts. */
+  withEnv(env: Record<string, string>) {
+    this.#env = env
+    return this
+  }
+
+  /** Whether each resume and fork, in spawn order, found its session where Claude Code keeps it. */
+  resumesFound(): Array<boolean> {
+    return this.log()
+      .filter((entry) => entry.resumed !== undefined)
+      .map((entry) => entry.found)
   }
 
   /** Whether a process holds, waiting for `release`. */

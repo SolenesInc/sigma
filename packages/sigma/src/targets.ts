@@ -224,17 +224,16 @@ export const targetNotice =
     }).pipe(Effect.orElseSucceed(() => undefined))
 
 /**
- * The Claude Code folders of a target's remote-hands processes (D10): `claude` is their config folder and `loop` their
- * empty working folder, so their sessions, resumes and forks find each other there and nothing lands in the person's
- * `~/.claude`. Made on first use; the key is the first 16 hex digits of the target's SHA-256.
+ * The empty working folder of a target's remote-hands processes (D10). Claude Code keeps sessions by config folder and
+ * working folder, so with the server's own config folder this one keeps a target's sessions, resumes and forks
+ * together and apart from every other target's. Made on first use; the key is the first 16 hex digits of the target's
+ * SHA-256.
  */
-export const targetFolder = (home: Home, target: string) =>
+export const targetLoop = (home: Home, target: string) =>
   Effect.sync(() => {
-    const dir = join(home.dir, "targets", createHash("sha256").update(target).digest("hex").slice(0, 16))
-    const folder = { config: join(dir, "claude"), cwd: join(dir, "loop") }
-    mkdirSync(folder.config, { recursive: true })
-    mkdirSync(folder.cwd, { recursive: true })
-    return folder
+    const cwd = join(home.dir, "targets", createHash("sha256").update(target).digest("hex").slice(0, 16), "loop")
+    mkdirSync(cwd, { recursive: true })
+    return cwd
   })
 
 /** The environment of a conversation with this agent state, on its target; a wait for the target goes through `reaching`. */

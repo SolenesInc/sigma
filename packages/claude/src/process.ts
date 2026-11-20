@@ -60,13 +60,6 @@ const REMOTE_HANDS_TOOL_TIMEOUT_MS = 2_147_483_647
 /** The prefix Claude Code gives the tools of sigma's MCP server. */
 const OWN_TOOL = "mcp__sigma__"
 
-/** What Claude Code 2.1.312 ends a signed-out run with: `Not logged in · Please run /login`, or an API key's refusal. */
-const SIGNED_OUT = /Please run \/login/
-
-/** How a remote-hands process is signed in where its target's folder holds none. */
-export const REMOTE_HANDS_SIGN_IN =
-  "Claude Code on a target signs in from the server's environment: set CLAUDE_CODE_OAUTH_TOKEN, made with `claude setup-token`"
-
 type McpPart = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
 
 /** An own tool's result as MCP carries it: its texts and its images, whose shape MCP shares with sigma's. */
@@ -309,8 +302,9 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
       }
       return { behavior: "deny", message: DENIED, toolUseID }
     }
-    // With remote hands nothing comes from the person's Claude Code settings, and Claude Code's own tools, connectors and
-    // folders are off: it acts only through sigma's tools, on the target (D9, D10, Q3).
+    // With remote hands nothing comes from the person's Claude Code settings, and Claude Code's own tools and connectors
+    // are off: it acts only through sigma's tools, on the target (D9, Q3). It keeps the server's own Claude folder, so it
+    // signs in as the machine's Claude Code does; its working folder is its target's (D10).
     const settingSources: SettingSource[] = remoteHands === undefined ? ["user", "project", "local"] : []
     const env = {
       ...claudeEnvironment(settings.env),
@@ -322,14 +316,13 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
       ...(remoteHands === undefined
         ? {}
         : {
-            CLAUDE_CONFIG_DIR: remoteHands.folder.config,
             ENABLE_TOOL_SEARCH: "true",
             ENABLE_CLAUDEAI_MCP_SERVERS: "false",
             MCP_TOOL_TIMEOUT: String(REMOTE_HANDS_TOOL_TIMEOUT_MS),
           }),
     }
     const toolSearch = remoteHands === undefined ? yield* toolSearchSettings(agent.cwd, settingSources, env) : undefined
-    const cwd = remoteHands === undefined ? agent.cwd : remoteHands.folder.cwd
+    const cwd = remoteHands === undefined ? agent.cwd : remoteHands.cwd
     const append = remoteHands === undefined ? config.instructions : yield* remoteHands.append
     const messages = query({
       prompt: inbox,
@@ -591,5 +584,4 @@ export const claudeAdapter = (
   api: "claude-code",
   settings,
   open: openConnection,
-  signIn: (message) => (SIGNED_OUT.test(message) ? REMOTE_HANDS_SIGN_IN : undefined),
 })

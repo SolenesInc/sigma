@@ -78,7 +78,7 @@ const open = (
       ...(offered === undefined ? {} : { offered }),
       // These conversations are all local, so none runs with remote hands.
       remoteHands: {
-        folder: () => Effect.die("no target"),
+        cwd: () => Effect.die("no target"),
         notice: () => Effect.succeed(undefined),
         retell: () => undefined,
       },

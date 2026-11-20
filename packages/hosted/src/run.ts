@@ -89,8 +89,8 @@ export interface HostedRunOptions {
 }
 
 export interface RemoteHandsOptions {
-  /** The harness's config folder and working folder for a target's processes, made if missing (D10). */
-  readonly folder: (target: string) => Effect.Effect<{ readonly config: string; readonly cwd: string }>
+  /** The harness's working folder for a target's processes, made if missing (D10). */
+  readonly cwd: (target: string) => Effect.Effect<string>
   /**
    * What the model must read now of its target, such as an instance that changed since it was last told (D6), or
    * `undefined`. Asked before each run and after each of sigma's tool calls.
@@ -452,7 +452,7 @@ const makeRunTask = (
           }
           const { remoteHands } = shared.options
           const target = usesRemoteHands(agent) ? agent.target! : undefined
-          const folder = target === undefined ? undefined : yield* remoteHands.folder(target)
+          const cwd = target === undefined ? undefined : yield* remoteHands.cwd(target)
           const offered = shared.options.offered?.(agent) ?? []
           const instructions = yield* instructionsOf(runtime, api, agent, offered)
           const own = ownTools(agent, offered)
@@ -462,7 +462,7 @@ const makeRunTask = (
             rootConversation: String(runtime.conversationId),
             own,
             ...(instructions === undefined ? {} : { instructions }),
-            ...(folder === undefined ? {} : { remoteHands: { folder, append: appendOf(runtime, api, agent, own) } }),
+            ...(cwd === undefined ? {} : { remoteHands: { cwd, append: appendOf(runtime, api, agent, own) } }),
           }
           const notice = target === undefined ? undefined : remoteHands.notice(runtime.conversationId, target, "run")
           const run: RunContext = {
@@ -514,11 +514,6 @@ const makeRunTask = (
               { cold: () => fresh(runtime, api, adapter.name, title, remoteHands.retell, since) },
               told,
             )).ended
-          }
-          // A target's own folder may hold no sign-in, where the harness keeps it there, as Claude Code does on Linux (C45).
-          const signIn = folder !== undefined && ended._tag === "failed" ? adapter.signIn?.(ended.message) : undefined
-          if (ended._tag === "failed" && signIn !== undefined) {
-            ended = { ...ended, message: `${ended.message}. ${signIn}` }
           }
           return yield* finish(ctx, adapter.name, ended)
         }),

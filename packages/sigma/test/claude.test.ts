@@ -1340,17 +1340,15 @@ const remoteHandsSession = async (
   return { ...session, work }
 }
 
-/** The Claude Code folders of target `box`'s processes in `home` (D10). */
-const boxFolder = (home: string) => {
-  const dir = join(home, "targets", createHash("sha256").update("box").digest("hex").slice(0, 16))
-  return { config: join(dir, "claude"), cwd: join(dir, "loop") }
-}
+/** The working folder of target `box`'s Claude Code processes in `home` (D10). */
+const boxLoop = (home: string) =>
+  join(home, "targets", createHash("sha256").update("box").digest("hex").slice(0, 16), "loop")
 
 /** Spawn `spawn`'s log line: its argv, cwd and env. */
 const spawnLine = (claude: FakeClaude, spawn: number) =>
   claude.log().find((entry) => entry.spawn === spawn && entry.argv !== undefined)
 
-test("target-remote-hands, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types", async () => {
+test("target-remote-hands, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's working folder, told the target's platform, AGENTS.md, skills and agent types", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("remote_hands_bash")
   // The conversation's folder is a repository on the target, and another at the same path on the home.
@@ -1373,14 +1371,12 @@ test("target-remote-hands, worker-section: a remote conversation's Claude Code h
   await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await session.view.until(settled(1))
 
-  const folder = boxFolder(session.server.home.dir)
   const spawn = claude.spawns()[0]!
   // Claude Code's own tools, the person's settings and every MCP server but sigma's are off.
   expect(spawn).toMatchObject({ "--tools": "ToolSearch", "--strict-mcp-config": true, "--setting-sources": "" })
   const line = spawnLine(claude, 0)
-  expect(line.cwd).toBe(folder.cwd)
+  expect(line.cwd).toBe(boxLoop(session.server.home.dir))
   expect(line.env).toMatchObject({
-    CLAUDE_CONFIG_DIR: folder.config,
     ENABLE_TOOL_SEARCH: "true",
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",
     MCP_TOOL_TIMEOUT: "2147483647",
@@ -1430,18 +1426,6 @@ test("target-remote-hands, worker-section: a remote conversation's Claude Code h
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: made", "run_end: answered"])
 })
 
-test("target-remote-hands, claude-sign-in-error: a signed-out Claude Code on a target fails the run saying how a target's Claude Code signs in", async () => {
-  using targets = new TestTargets()
-  using claude = new FakeClaude("auth_failed")
-  await using session = await remoteHandsSession(claude, targets)
-  await session.submit("hello")
-  await session.view.until(settled(1))
-  expect(transcript(session.view.seen())).toEqual([
-    "user: hello",
-    "run_end: failed (Invalid API key · Please run /login. Claude Code on a target signs in from the server's environment: set CLAUDE_CODE_OAUTH_TOKEN, made with `claude setup-token`)",
-  ])
-})
-
 test("target-remote-hands, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them", async () => {
   using claude = new FakeClaude("text")
   await using session = await conversationWith(claude)
@@ -1468,24 +1452,26 @@ test("target-remote-hands, worker-claude-parent: a local conversation's Claude C
   expect(spawnLine(claude, 0).env.CLAUDE_CONFIG_DIR).toBeUndefined()
 })
 
-test("target-remote-hands, claude-resume: a remote conversation's Claude Code resumes its session in the target's folders", async () => {
+test("target-remote-hands, claude-resume: a remote conversation's Claude Code keeps the server's own Claude folder, and resumes its session from the target's working folder", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("died_while_idle")
+  const config = join(claude.dir, "config")
+  claude.withEnv({ CLAUDE_CONFIG_DIR: config })
   await using session = await remoteHandsSession(claude, targets)
   await session.submit("Remember the word PLUM. Reply with exactly: noted")
   await session.view.until(settled(1))
   process.kill(claude.pids()[0]!, "SIGKILL")
   await session.submit("Which word did I ask you to remember? Reply with that word only.")
   await session.view.until(settled(2))
-  const folder = boxFolder(session.server.home.dir)
   expect(claude.spawns()[1]).toMatchObject({ "--resume": claude.spawns()[0]!["--session-id"] })
+  expect(claude.resumesFound()).toEqual([true])
   for (const spawn of [0, 1]) {
-    expect(spawnLine(claude, spawn).cwd).toBe(folder.cwd)
-    expect(spawnLine(claude, spawn).env.CLAUDE_CONFIG_DIR).toBe(folder.config)
+    expect(spawnLine(claude, spawn).cwd).toBe(boxLoop(session.server.home.dir))
+    expect(spawnLine(claude, spawn).env.CLAUDE_CONFIG_DIR).toBe(config)
   }
 })
 
-test("target-remote-hands, target-worker-fork: a fork of a remote Claude conversation forks its session in the target's folders", async () => {
+test("target-remote-hands, target-worker-fork: a fork of a remote Claude conversation finds and forks its parent's session from the target's working folder", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("died_while_idle")
   await using session = await remoteHandsSession(claude, targets)
@@ -1499,10 +1485,9 @@ test("target-remote-hands, target-worker-fork: a fork of a remote Claude convers
   await fork.until(() => true)
   await submit(session.client, forked, "Which word did I ask you to remember? Reply with that word only.")
   await fork.until(settled(1))
-  const folder = boxFolder(session.server.home.dir)
   expect(claude.spawns()[1]).toMatchObject({ "--resume": claude.spawns()[0]!["--session-id"], "--fork-session": true })
-  expect(spawnLine(claude, 1).cwd).toBe(folder.cwd)
-  expect(spawnLine(claude, 1).env.CLAUDE_CONFIG_DIR).toBe(folder.config)
+  expect(claude.resumesFound()).toEqual([true])
+  expect(spawnLine(claude, 1).cwd).toBe(boxLoop(session.server.home.dir))
   expect(spawnLine(claude, 1).argv).toContain("--strict-mcp-config")
 })
 

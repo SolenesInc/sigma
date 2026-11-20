@@ -132,7 +132,7 @@ import {
   reachingIn,
   recordTarget,
   retellTarget,
-  targetFolder,
+  targetLoop,
   targetNotice,
   targetSection,
 } from "./targets.ts"
@@ -292,7 +292,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           title: (conversation) => titleOf(harness, conversation),
           processes,
           remoteHands: {
-            folder: (target) => targetFolder(home, target),
+            cwd: (target) => targetLoop(home, target),
             notice: targetNotice(targets, () => harness),
             retell: retellTarget,
           },

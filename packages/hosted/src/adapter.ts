@@ -25,11 +25,6 @@ export interface Adapter<S = any> {
    */
   readonly open: (config: ProcessConfig<S>, start: Start, host: Host) => Effect.Effect<Connection, never, Scope.Scope>
   /**
-   * What a remote-hands run's failure `message` adds when it says the harness is signed out, as a target's own folder
-   * holds no sign-in; `undefined` when it does not say so.
-   */
-  readonly signIn?: (message: string) => string | undefined
-  /**
    * The longest a call of sigma's own tools may take before the harness cuts it, so a tool that waits, as `wait_worker`
    * does, returns within it; `undefined` when the harness waits as long as the tool takes (D15).
    */
@@ -55,11 +50,11 @@ export type ProcessConfig<S = unknown> = {
 }
 
 /**
- * What a process with remote hands starts with: the target's folders for the harness's config and work (D10), and what
- * it adds to its system prompt in place of `instructions`: the conversation's sections as sigma renders them (D11).
+ * What a process with remote hands starts with: its target's working folder (D10), and what it adds to its system
+ * prompt in place of `instructions`: the conversation's sections as sigma renders them (D11).
  */
 export type RemoteHandsProcess = {
-  readonly folder: { readonly config: string; readonly cwd: string }
+  readonly cwd: string
   /** Rendered when a process starts, so a live process costs no render. */
   readonly append: Effect.Effect<string | undefined>
 }

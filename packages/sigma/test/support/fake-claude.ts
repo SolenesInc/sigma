@@ -1,4 +1,6 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 
 const fixture = process.env.FAKE_CLAUDE_FIXTURE!
@@ -88,6 +90,19 @@ const bound = new Map<string, string>([
   ["<session>", flag("--session-id") ?? flag("--resume") ?? crypto.randomUUID()],
   ["<workspace>", process.cwd()],
 ])
+
+// Claude Code keeps a session by its config folder and its working folder (`<config>/projects/<escaped cwd>`), so a
+// resume or a fork finds the session only where it was made. The fake keeps that record in its own folder, never the
+// person's, and logs whether a resumed session was there.
+if (!probe) {
+  const config = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
+  const sessions = join(dir, "sessions", createHash("sha256").update(`${config}\0${process.cwd()}`).digest("hex"))
+  mkdirSync(sessions, { recursive: true })
+  const resumed = flag("--resume")
+  if (resumed !== undefined) log({ resumed, found: existsSync(join(sessions, resumed)) })
+  writeFileSync(join(sessions, bound.get("<session>")!), "")
+}
+
 let nextPlaceholder = 1
 const bind = (value: string) => bound.set(`<sigma:${nextPlaceholder++}>`, value)
 const substitute = (frame: unknown) =>

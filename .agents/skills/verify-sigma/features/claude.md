@@ -425,8 +425,8 @@ Preconditions:
   gives its subagents sigma's MCP tools too; a subagent's call runs in its
   own conversation and asks there, and the worker tools refuse it, since a
   subagent is no worker of the tree (`worker-claude-parent`).
-- **On a target.** A conversation on a target runs Claude Code with remote
-  hands, with only sigma's tools, in [Targets](./targets.md)
+- **On a target.** A conversation on a target runs Claude Code with
+  remote hands, with only sigma's tools, in [Targets](./targets.md)
   (`target-remote-hands`). Everything above is a local conversation's.
 - **Inside an agent.** Sigma leaves out the variables a host Claude Code
   session sets (`claude-environment`). Its `ANTHROPIC` and `CCR` variables
