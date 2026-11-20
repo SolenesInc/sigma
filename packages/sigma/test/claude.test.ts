@@ -976,6 +976,7 @@ test("subagent-interrupt, claude-job-report: stopping a Claude run stops the bac
   await session.view.until((watch) => jobsOf(watch).every((job) => job.state !== "working"))
   expect(jobsOf(session.view)).toEqual([expect.objectContaining({ kind: "agent", state: "stopped" })])
   expect(runEnds(child.view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
+  expect(approvalsOf(child.view)?.requests ?? {}).toEqual({})
   // Claude Code tells of the end after the run stopped, so no run takes the report: the process commits it as it closes.
   const reports = (watch: ViewWatch) => transcript(watch.seen()).filter((line) => line.startsWith("report: "))
   await claude.logged((fake) => fake.exited(0))
