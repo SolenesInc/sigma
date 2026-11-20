@@ -115,6 +115,8 @@ test("gemini-answer, provider-agy: Gemini's answer through agy is committed as s
   const [opened] = agy.received("session/new")
   expect(opened.params.additionalDirectories).toHaveLength(1)
   expect(opened.params.mcpServers).toEqual([])
+  // agy is offered none of sigma's tools, so a conversation without instructions appends nothing to its prompt.
+  expect(opened.params._meta).toBeUndefined()
   expect(agy.received("session/set_config_option").map((frame) => [frame.params.configId, frame.params.value])).toEqual(
     [
       ["model", MODEL],
