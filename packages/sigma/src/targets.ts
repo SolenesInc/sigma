@@ -181,7 +181,7 @@ export const targetSection = (targets: TargetPool, harness: () => Harness, ownLo
       },
       {
         // Claude Code tells its model of the computer its own loop runs on, the home, and no option of 2.1.312 drops
-        // or replaces that but `--bare`, which refuses OAuth sign-in. So in member mode sigma names the computer its
+        // or replaces that but `--bare`, which refuses OAuth sign-in. So with remote hands sigma names the computer its
         // tools act on, and says which of the two the model works on.
         key: "machine",
         tag: false,
@@ -196,7 +196,7 @@ export const targetSection = (targets: TargetPool, harness: () => Harness, ownLo
     ],
   })
 
-/** What a member-mode model reads of the computer its tools act on. */
+/** What a remote-hands model reads of the computer its tools act on. */
 const machineText = (target: string, hello: AgentHello) =>
   `Your tools act on the computer ${target}, whose platform is ${hello.platform}; the working directory above is on it. The environment Claude Code describes (its working directory, platform, shell and OS version) is the computer Claude Code runs on, which none of your tools reach: work on ${target}, by its platform and paths.`
 
@@ -224,7 +224,7 @@ export const targetNotice =
     }).pipe(Effect.orElseSucceed(() => undefined))
 
 /**
- * The Claude Code folders of a target's member-mode processes (D10): `claude` is their config folder and `loop` their
+ * The Claude Code folders of a target's remote-hands processes (D10): `claude` is their config folder and `loop` their
  * empty working folder, so their sessions, resumes and forks find each other there and nothing lands in the person's
  * `~/.claude`. Made on first use; the key is the first 16 hex digits of the target's SHA-256.
  */

@@ -284,14 +284,14 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           ),
         )
         // A local conversation's harness, Claude Code or agy, has its own tools and subagents, and is offered sigma's
-        // worker tools beside them (D17), agy's over the bridge (D14). A remote one's Claude Code runs in member mode,
+        // worker tools beside them (D17), agy's over the bridge (D14). A remote one's Claude Code runs with remote hands,
         // with only sigma's (D9); agy runs only locally.
         const hosted = hostedRunTasks({
           adapters,
           offered: offeredToHarness,
           title: (conversation) => titleOf(harness, conversation),
           processes,
-          member: {
+          remoteHands: {
             folder: (target) => targetFolder(home, target),
             notice: targetNotice(targets, () => harness),
             retell: retellTarget,

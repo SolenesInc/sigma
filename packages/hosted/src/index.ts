@@ -4,9 +4,9 @@ export {
   type Connection,
   type Frame,
   type Host,
-  isMember,
+  usesRemoteHands,
   type LastRequest,
-  type MemberProcess,
+  type RemoteHandsProcess,
   type OwnResult,
   ownTools,
   type Part,
@@ -15,8 +15,8 @@ export {
   selectionOf,
   type Start,
 } from "./adapter.ts"
-export { hostedRunTasks, type HostedRunOptions, type MemberOptions } from "./run.ts"
-export { DENIED, type Member } from "./transcript.ts"
+export { hostedRunTasks, type HostedRunOptions, type RemoteHandsOptions } from "./run.ts"
+export { DENIED, type RemoteHands } from "./transcript.ts"
 export { type Retell, textOf, type Said } from "./retell.ts"
 export { JOB_KINDS } from "./job.ts"
 export { appendReport, type JobReport, JobsDoc, REPORT_KIND } from "./jobs.ts"

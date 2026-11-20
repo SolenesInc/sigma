@@ -200,7 +200,7 @@ export class Providers extends Context.Service<
     readonly agentTypes: (provider: string | undefined, workspace: Workspace) => Effect.Effect<ReadonlyArray<AgentType>>
     /**
      * The skills a conversation on `provider` in `workspace` is told of and can name: a ChatGPT instance's, from the
-     * project, the home and the person's own folder; a member-mode Claude Code's, from the project on its target; none
+     * project, the home and the person's own folder; a remote-hands Claude Code's, from the project on its target; none
      * for the rest, which find their own.
      */
     readonly skills: (provider: string | undefined, workspace: Workspace) => Effect.Effect<ReadonlyArray<Skill>>
@@ -231,7 +231,7 @@ export class Providers extends Context.Service<
           agentTypes: (provider, workspace) => {
             const kind = provider === undefined ? undefined : instances.get(provider)?.kind
             if (kind === "openai") return agentTypes(workspace, options.openai(provider!).claudeConfig)
-            // In member mode only the project's types, on the target, apply (D11); the home's are the person's.
+            // With remote hands only the project's types, on the target, apply (D11); the home's are the person's.
             if (kind === "claude" && !workspace.local) return agentTypes(workspace, "")
             return Effect.succeed([])
           },

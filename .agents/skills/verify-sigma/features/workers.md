@@ -20,7 +20,7 @@ Code's own subagents are not workers: Claude Code runs them, and sigma
 commits each into a conversation of its own the same way (`subagent-claude`).
 A local Claude Code keeps its Agent tool beside the worker tools; on a
 target, its Agent tool is off and it has only sigma's tools
-(`target-member-mode`). What a worker's requests keep of the
+(`target-remote-hands`). What a worker's requests keep of the
 prompt cache is in [Prompt cache](./prompt-cache.md).
 
 ## Sub-features
@@ -645,8 +645,8 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - worker-interrupt, worker-approve: a Claude Code worker asks its own approval, and stopping its idle parent ends the worker's run and clears the approval
 - worker-claude-parent, worker-answer: a Claude Code parent starts a scripted worker with sigma's worker tools and reads its answer from wait_worker
 - worker-claude-parent, subagent-claude: a Claude subagent that calls sigma's worker tools is refused in its own conversation, so it neither starts workers its tree cannot see nor answers as /root
-- target-member-mode, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them
-- target-member-mode, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types
+- target-remote-hands, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them
+- target-remote-hands, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types
 - claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation
 - worker-claude-parent, worker-fork: a Claude Code parent's worker on Claude Code starts a session of its own from its brief, not a fork of the parent's
 

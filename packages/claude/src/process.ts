@@ -48,14 +48,14 @@ export interface ClaudeProcessSettings {
 const NAME = "Claude Code"
 
 /**
- * How long Claude Code waits for a call of sigma's tools in member mode: as long as sigma's bash may run (its largest
+ * How long Claude Code waits for a call of sigma's tools with remote hands: as long as sigma's bash may run (its largest
  * `timeout`, `MAX_TIMEOUT_SECONDS` in packages/tools' bash.ts), so each tool's own limit, such as bash's 1800 s
  * default, is the one the model sees. Claude Code 2.1.312 waits `MCP_TOOL_TIMEOUT` ms when set, which a person's
  * environment may set lower, and otherwise 1e8 ms (read from its bundle). Measured against a fake Anthropic API: a
  * 1830 s call of an in-process MCP tool reached the model whole, unset and with this value; `MCP_TOOL_TIMEOUT=3000`
  * aborted an 8 s call and the model read `MCP server "sigma" tool "sleep" timed out after 3s`.
  */
-const MEMBER_TOOL_TIMEOUT_MS = 2_147_483_647
+const REMOTE_HANDS_TOOL_TIMEOUT_MS = 2_147_483_647
 
 /** The prefix Claude Code gives the tools of sigma's MCP server. */
 const OWN_TOOL = "mcp__sigma__"
@@ -63,8 +63,8 @@ const OWN_TOOL = "mcp__sigma__"
 /** What Claude Code 2.1.312 ends a signed-out run with: `Not logged in · Please run /login`, or an API key's refusal. */
 const SIGNED_OUT = /Please run \/login/
 
-/** How a member-mode process is signed in where its target's folder holds none. */
-export const MEMBER_SIGN_IN =
+/** How a remote-hands process is signed in where its target's folder holds none. */
+export const REMOTE_HANDS_SIGN_IN =
   "Claude Code on a target signs in from the server's environment: set CLAUDE_CODE_OAUTH_TOKEN, made with `claude setup-token`"
 
 type McpPart = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
@@ -227,7 +227,7 @@ const userMessage = (parts: ReadonlyArray<Said>, priority?: "next"): SDKUserMess
  */
 export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, start: Start, host: Host) =>
   Effect.gen(function* () {
-    const { agent, settings, member } = config
+    const { agent, settings, remoteHands } = config
     const own = new Set(config.own.map((tool) => tool.name))
     /** Whether Claude Code's `tool` is one of sigma's own, which it calls over sigma's MCP server. */
     const isOwn = (tool: string) => tool.startsWith(OWN_TOOL) && own.has(tool.slice(OWN_TOOL.length))
@@ -309,9 +309,9 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
       }
       return { behavior: "deny", message: DENIED, toolUseID }
     }
-    // In member mode nothing comes from the person's Claude Code settings, and Claude Code's own tools, connectors and
+    // With remote hands nothing comes from the person's Claude Code settings, and Claude Code's own tools, connectors and
     // folders are off: it acts only through sigma's tools, on the target (D9, D10, Q3).
-    const settingSources: SettingSource[] = member === undefined ? ["user", "project", "local"] : []
+    const settingSources: SettingSource[] = remoteHands === undefined ? ["user", "project", "local"] : []
     const env = {
       ...claudeEnvironment(settings.env),
       SIGMA_ROOT_CONVERSATION: config.rootConversation,
@@ -319,18 +319,18 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
       // Claude Code's turn-over signal reaches sigma: without it, Claude Code marks the signal for the SDK alone, and
       // the SDK keeps it to itself (F1).
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
-      ...(member === undefined
+      ...(remoteHands === undefined
         ? {}
         : {
-            CLAUDE_CONFIG_DIR: member.folder.config,
+            CLAUDE_CONFIG_DIR: remoteHands.folder.config,
             ENABLE_TOOL_SEARCH: "true",
             ENABLE_CLAUDEAI_MCP_SERVERS: "false",
-            MCP_TOOL_TIMEOUT: String(MEMBER_TOOL_TIMEOUT_MS),
+            MCP_TOOL_TIMEOUT: String(REMOTE_HANDS_TOOL_TIMEOUT_MS),
           }),
     }
-    const toolSearch = member === undefined ? yield* toolSearchSettings(agent.cwd, settingSources, env) : undefined
-    const cwd = member === undefined ? agent.cwd : member.folder.cwd
-    const append = member === undefined ? config.instructions : yield* member.append
+    const toolSearch = remoteHands === undefined ? yield* toolSearchSettings(agent.cwd, settingSources, env) : undefined
+    const cwd = remoteHands === undefined ? agent.cwd : remoteHands.folder.cwd
+    const append = remoteHands === undefined ? config.instructions : yield* remoteHands.append
     const messages = query({
       prompt: inbox,
       options: {
@@ -340,8 +340,8 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
         canUseTool,
         hooks,
         settingSources,
-        // In member mode Claude Code has sigma's tools alone; ToolSearch stays so it can load a deferred tool.
-        ...(member === undefined ? {} : { tools: ["ToolSearch"], strictMcpConfig: true }),
+        // With remote hands Claude Code has sigma's tools alone; ToolSearch stays so it can load a deferred tool.
+        ...(remoteHands === undefined ? {} : { tools: ["ToolSearch"], strictMcpConfig: true }),
         ...(config.own.length === 0
           ? {}
           : {
@@ -591,5 +591,5 @@ export const claudeAdapter = (
   api: "claude-code",
   settings,
   open: openConnection,
-  signIn: (message) => (SIGNED_OUT.test(message) ? MEMBER_SIGN_IN : undefined),
+  signIn: (message) => (SIGNED_OUT.test(message) ? REMOTE_HANDS_SIGN_IN : undefined),
 })

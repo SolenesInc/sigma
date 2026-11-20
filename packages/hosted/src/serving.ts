@@ -20,7 +20,7 @@ import { appendReport, type JobReport, REPORT_KIND } from "./jobs.ts"
 import type { Job } from "./links.ts"
 import { promptOf, type Said } from "./retell.ts"
 import { HostedSessionDoc } from "./session.ts"
-import { assistantMessage, type Hosting, makeTranscript, type Member, type Position } from "./transcript.ts"
+import { assistantMessage, type Hosting, makeTranscript, type RemoteHands, type Position } from "./transcript.ts"
 
 /** How a run ended: it answered, the session is gone, the harness failed, or its process exited. */
 export type Ended =
@@ -48,8 +48,8 @@ export type RunContext = {
   readonly adapter: Adapter
   /** The tasks its subagents are hosted with. */
   readonly hosting: Hosting
-  /** A run of a remote conversation, in member mode (D9). */
-  readonly member?: Member
+  /** A run of a remote conversation, with remote hands (D9). */
+  readonly remoteHands?: RemoteHands
 }
 
 /** What a run reaches of the process serving it. */
@@ -130,7 +130,7 @@ export const makeServing = (ctx: RunContext, process: ServingProcess): Serving =
     hosting: ctx.hosting,
     started: process.started,
     position,
-    ...(ctx.member === undefined ? {} : { member: ctx.member }),
+    ...(ctx.remoteHands === undefined ? {} : { remoteHands: ctx.remoteHands }),
   })
 
   /** The harness's summary of its own compaction, mirrored as a compaction entry that starts a new context. */

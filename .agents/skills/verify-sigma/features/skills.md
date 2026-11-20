@@ -11,8 +11,8 @@ starts with `/name`, or holds `$name`, carries that skill's `SKILL.md` in its
 committed `sigma.user` entry, and every TUI shows `with <name>, ...` under the
 message. Claude Code reads its own `CLAUDE.md` files and skills, so local
 Claude and scripted conversations list none and carry none. A Claude
-conversation on a target runs in member mode and is told them as ChatGPT is
-([Targets](./targets.md), `target-member-mode`).
+conversation on a target runs with remote hands and is told them as ChatGPT is
+([Targets](./targets.md), `target-remote-hands`).
 
 ## Sub-features
 

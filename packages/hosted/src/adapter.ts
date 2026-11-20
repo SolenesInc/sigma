@@ -25,7 +25,7 @@ export interface Adapter<S = any> {
    */
   readonly open: (config: ProcessConfig<S>, start: Start, host: Host) => Effect.Effect<Connection, never, Scope.Scope>
   /**
-   * What a member-mode run's failure `message` adds when it says the harness is signed out, as a target's own folder
+   * What a remote-hands run's failure `message` adds when it says the harness is signed out, as a target's own folder
    * holds no sign-in; `undefined` when it does not say so.
    */
   readonly signIn?: (message: string) => string | undefined
@@ -46,38 +46,38 @@ export type ProcessConfig<S = unknown> = {
   readonly instructions?: string
   /**
    * Sigma's own tools the harness is offered beside or instead of its own, each call run through `Callbacks.runOwn`:
-   * in member mode every tool of the conversation but code mode, otherwise the tools of the extensions the hosted run
+   * with remote hands every tool of the conversation but code mode, otherwise the tools of the extensions the hosted run
    * offers it (D17). A live process keeps the tools it started with, so they are part of its key.
    */
   readonly own: ReadonlyArray<ToolRegistration>
-  /** A remote conversation's process, in member mode (D9); absent for a local conversation's. */
-  readonly member?: MemberProcess
+  /** A remote conversation's process, with remote hands (D9); absent for a local conversation's. */
+  readonly remoteHands?: RemoteHandsProcess
 }
 
 /**
- * What a process in member mode starts with: the target's folders for the harness's config and work (D10), and what
+ * What a process with remote hands starts with: the target's folders for the harness's config and work (D10), and what
  * it adds to its system prompt in place of `instructions`: the conversation's sections as sigma renders them (D11).
  */
-export type MemberProcess = {
+export type RemoteHandsProcess = {
   readonly folder: { readonly config: string; readonly cwd: string }
   /** Rendered when a process starts, so a live process costs no render. */
   readonly append: Effect.Effect<string | undefined>
 }
 
 /**
- * Whether a conversation with this agent runs in member mode: its tools act on a target that is not the server's
+ * Whether a conversation with this agent runs with remote hands: its tools act on a target that is not the server's
  * machine, so the harness must not use its own tools, which act on the machine it runs on (D9).
  */
-export const isMember = (agent: Agent) => agent.target !== undefined && agent.target !== "local"
+export const usesRemoteHands = (agent: Agent) => agent.target !== undefined && agent.target !== "local"
 
 /**
- * The tools sigma offers a harness (`ProcessConfig.own`): in member mode the conversation's, but code mode, which a
+ * The tools sigma offers a harness (`ProcessConfig.own`): with remote hands the conversation's, but code mode, which a
  * harness takes no part in; otherwise those of the extensions `offered`, beside the harness's own (D17).
  */
 export const ownTools = (agent: Agent, offered: ReadonlyArray<Extension>) => {
   const names = new Set(offered.map((extension) => extension.name))
   return agent.tools.filter(
-    (tool) => tool.codeMode !== true && (isMember(agent) || names.has(toolExtension(agent, tool.name) ?? "")),
+    (tool) => tool.codeMode !== true && (usesRemoteHands(agent) || names.has(toolExtension(agent, tool.name) ?? "")),
   )
 }
 
@@ -279,8 +279,8 @@ export interface Callbacks {
   /**
    * Runs the call `call` of one of sigma's own tools, `name` (`ProcessConfig.own`), which the harness made through
    * sigma: it is committed with its tool task, as in sigma's own loop, which asks a person when the tool asks, and
-   * answered with the result that task committed, followed in member mode by what the model must read now
-   * (`Member.notice`). An own tool's call takes neither `beforeRun` nor `approve`: the adapter allows the harness's own
+   * answered with the result that task committed, followed, with remote hands, by what the model must read now
+   * (`RemoteHands.notice`). An own tool's call takes neither `beforeRun` nor `approve`: the adapter allows the harness's own
    * permission request for it at once, so a person is asked once (F18).
    */
   readonly runOwn: (call: string, name: string, input: unknown, signal?: AbortSignal) => Promise<OwnResult>

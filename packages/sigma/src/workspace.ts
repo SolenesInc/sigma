@@ -1,7 +1,7 @@
 // Where a conversation works: its directory, the `AGENTS.md` files, the skills and the agent types there, and how a
 // ChatGPT conversation is told of them, as a prompt section the harness renders before each request and commits when
 // it changes. A local Claude Code conversation reads its own `CLAUDE.md` files and skills, and a script reads nothing,
-// so their conversations get none. A remote Claude Code conversation, in member mode, gets the same section in its
+// so their conversations get none. A remote Claude Code conversation, with remote hands, gets the same section in its
 // system prompt's `append` (D11).
 //
 // The project's files are read through the conversation's environment, so a remote conversation is told what its
@@ -293,7 +293,7 @@ export const agentTypes = (workspace: Workspace, claudeConfig: string): Effect.E
   })
 
 /**
- * Whether sigma tells a conversation of its workspace: one whose loop is sigma's (ChatGPT), or one in member mode
+ * Whether sigma tells a conversation of its workspace: one whose loop is sigma's (ChatGPT), or one with remote hands
  * (Claude Code on a target), whose Claude Code reads nothing of the project itself (D9, D11).
  */
 export const toldOfWorkspace = (

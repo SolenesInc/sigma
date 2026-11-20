@@ -86,7 +86,7 @@ target                  the computer a conversation's tools act on, named by
 connector               the command, set by whatever runs sigma, that opens a
                         pipe from the server to a target's current instance
 remote conversation     a conversation whose target is not `local`
-member mode             how a remote conversation runs Claude Code: its own
+remote hands            how a remote conversation runs Claude Code: its own
                         tools off, acting only through sigma's tools
 ```
 

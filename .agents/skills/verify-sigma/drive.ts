@@ -114,7 +114,7 @@ const fakes = (): Record<string, string> => ({
  * A `claude` that runs the SDK's bundled Claude Code, as a person's sigma does, without the person's own settings: their
  * `defaultMode` and allow rules would run calls a step waits to see asked about, and Claude Code withdraws a question
  * one of them answers. The sign-in is not a setting, so it stays. Sigma's own `--setting-sources` comes first in the
- * arguments, and the last one counts. A member-mode process (`--strict-mcp-config`) reads no settings already, and keeps
+ * arguments, and the last one counts. A remote-hands process (`--strict-mcp-config`) reads no settings already, and keeps
  * that.
  *
  * It runs as the person's own `USER`, not the run's `ada`: on macOS Claude Code finds its sign-in in the keychain by

@@ -135,7 +135,7 @@ const open = () =>
     const tasks = hostedRunTasks({
       adapters: [scripted.adapter],
       processes,
-      member: {
+      remoteHands: {
         folder: () => Effect.die("no target"),
         notice: () => Effect.succeed(undefined),
         retell: () => undefined,

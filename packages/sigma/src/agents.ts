@@ -33,7 +33,7 @@ import {
   type NextTaskState,
   type TaskId,
 } from "@sigma/kernel"
-import { isMember, type JobReport, JobsDoc, REPORT_KIND } from "@sigma/hosted"
+import { usesRemoteHands, type JobReport, JobsDoc, REPORT_KIND } from "@sigma/hosted"
 import { type AssistantMessage, defaultModelOf, type ProviderInstance } from "@sigma/models"
 import { int, obj, oneOf, opt, str } from "@sigma/schema"
 import { rootConversation } from "@sigma/tools"
@@ -860,7 +860,7 @@ const inTree = <T extends { readonly execute: (input: any, api: ToolExecutionApi
 
 /**
  * What a model is told of the worker tools, when it can call them, by the name it calls `start_worker` by. A harness
- * in member mode has no subagent tool of its own to point to. It names no reason to prefer one provider over another:
+ * with remote hands has no subagent tool of its own to point to. It names no reason to prefer one provider over another:
  * which model a worker runs on is the person's choice, passed exactly (D11). It does not change during a conversation,
  * whose instructions are fixed at its start (#132), and a harness's live process keeps its system prompt.
  */
@@ -985,8 +985,8 @@ export const agentTools = (
             agent.callable.some((tool) => tool.name === "start_worker")
               ? workersSection(
                   toolNamer(providers, agent)("start_worker"),
-                  // Only a harness on a target runs in member mode, with no subagent tool of its own.
-                  !(isMember(agent) && isHarness(providers, agent.model?.provider)),
+                  // Only a harness on a target runs with remote hands, with no subagent tool of its own.
+                  !(usesRemoteHands(agent) && isHarness(providers, agent.model?.provider)),
                   isHarness(providers, agent.model?.provider),
                 )
               : undefined,

@@ -45,7 +45,15 @@ import {
 } from "@sigma/kernel"
 import type { Message } from "@sigma/models"
 import { Effect } from "effect"
-import { type Adapter, isMember, ownTools, type ProcessConfig, processKey, selectionOf, type Start } from "./adapter.ts"
+import {
+  type Adapter,
+  usesRemoteHands,
+  ownTools,
+  type ProcessConfig,
+  processKey,
+  selectionOf,
+  type Start,
+} from "./adapter.ts"
 import { JOB_KIND, JobAnchor, makeCommandTask, makeJobTask } from "./job.ts"
 import { continuedOnItsOwn, REPORT_KIND } from "./jobs.ts"
 import { openHostedProcess } from "./process.ts"
@@ -76,11 +84,11 @@ export interface HostedRunOptions {
    * prompt sections go to its system prompt, before the agent's instructions (F65). Default none.
    */
   readonly offered?: (agent: Agent) => ReadonlyArray<Extension>
-  /** How a remote conversation's runs reach sigma in member mode (D9). */
-  readonly member: MemberOptions
+  /** How a remote conversation's runs reach sigma with remote hands (D9). */
+  readonly remoteHands: RemoteHandsOptions
 }
 
-export interface MemberOptions {
+export interface RemoteHandsOptions {
   /** The harness's config folder and working folder for a target's processes, made if missing (D10). */
   readonly folder: (target: string) => Effect.Effect<{ readonly config: string; readonly cwd: string }>
   /**
@@ -371,7 +379,7 @@ type Title = NonNullable<HostedRunOptions["title"]>
 type Shared = { readonly options: HostedRunOptions; readonly hosting: Hosting }
 
 /**
- * The system prompt's `append` of a member-mode process: the conversation's sections, rendered through its env as
+ * The system prompt's `append` of a remote-hands process: the conversation's sections, rendered through its env as
  * sigma's own loop renders them for the tools it offers, so the model reads the target's instructions (D11).
  */
 const appendOf = (runtime: Runtime, api: TaskApi, served: Agent, own: ReadonlyArray<ToolRegistration>) =>
@@ -442,9 +450,9 @@ const makeRunTask = (
             const message = `${adapter.name} does not serve provider ${provider}`
             return yield* finish(ctx, adapter.name, { _tag: "failed", message })
           }
-          const { member } = shared.options
-          const target = isMember(agent) ? agent.target! : undefined
-          const folder = target === undefined ? undefined : yield* member.folder(target)
+          const { remoteHands } = shared.options
+          const target = usesRemoteHands(agent) ? agent.target! : undefined
+          const folder = target === undefined ? undefined : yield* remoteHands.folder(target)
           const offered = shared.options.offered?.(agent) ?? []
           const instructions = yield* instructionsOf(runtime, api, agent, offered)
           const own = ownTools(agent, offered)
@@ -454,9 +462,9 @@ const makeRunTask = (
             rootConversation: String(runtime.conversationId),
             own,
             ...(instructions === undefined ? {} : { instructions }),
-            ...(folder === undefined ? {} : { member: { folder, append: appendOf(runtime, api, agent, own) } }),
+            ...(folder === undefined ? {} : { remoteHands: { folder, append: appendOf(runtime, api, agent, own) } }),
           }
-          const notice = target === undefined ? undefined : member.notice(runtime.conversationId, target, "run")
+          const notice = target === undefined ? undefined : remoteHands.notice(runtime.conversationId, target, "run")
           const run: RunContext = {
             runtime,
             api,
@@ -465,10 +473,10 @@ const makeRunTask = (
             hosting: shared.hosting,
             ...(target === undefined
               ? {}
-              : { member: { notice: member.notice(runtime.conversationId, target, "call") } }),
+              : { remoteHands: { notice: remoteHands.notice(runtime.conversationId, target, "call") } }),
           }
           const title: Title = shared.options.title ?? (() => Effect.succeed(undefined))
-          const cold = () => opening(runtime, api, adapter.name, provider, title, member.retell)
+          const cold = () => opening(runtime, api, adapter.name, provider, title, remoteHands.retell)
           // The computer behind a remote conversation may have changed since its last run: it is told first, once for
           // the run however many processes serve it. A compaction is not told, and reaches no target, so its
           // `/compact` stays the whole prompt the harness reads as its command; the run after it is told. The change's
@@ -483,7 +491,7 @@ const makeRunTask = (
             shared,
             config,
             run,
-            { live: (seen) => afterSeen(runtime, provider, seen, member.retell), cold },
+            { live: (seen) => afterSeen(runtime, provider, seen, remoteHands.retell), cold },
             told,
           )
           // A live process lost while it waited costs a cold start and nothing else (D1).
@@ -503,7 +511,7 @@ const makeRunTask = (
               shared,
               config,
               run,
-              { cold: () => fresh(runtime, api, adapter.name, title, member.retell, since) },
+              { cold: () => fresh(runtime, api, adapter.name, title, remoteHands.retell, since) },
               told,
             )).ended
           }

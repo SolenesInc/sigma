@@ -27,7 +27,7 @@ import {
   type Host,
   type OwnResult,
   Inbox,
-  isMember,
+  usesRemoteHands,
   type Part,
   type ProcessConfig,
   type Said,
@@ -140,7 +140,7 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
   Effect.gen(function* () {
     const { agent, settings } = config
     const output = new Inbox<Frame>()
-    if (isMember(agent)) {
+    if (usesRemoteHands(agent)) {
       output.push({ type: "failed", message: remoteRefusal(agent.target!) })
       output.close()
       return inert(output)

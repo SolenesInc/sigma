@@ -35,17 +35,17 @@ on. attn will use targets to run a member's work in a sandbox.
   names a skill (`/name`, `$name`) while the target cannot be reached is
   refused with `TargetUnavailable` and placed nowhere; the TUI shows the
   reason as a notice. A prompt containing literal `$(...)` and no skill
-  reference can still be submitted. A call reaches for the target once: in member mode,
+  reference can still be submitted. A call reaches for the target once: with remote hands,
   what the model is told after the call does not connect again to a target
   the call found unreachable.
 - `target-reaching` commits `sigma.reaching` `{ wait: { target, since } }`
   in a conversation whose run waits for its target's hello, from a section,
-  a tool call or member mode's notice, and clears it at the hello or the
+  a tool call or remote hands' notice, and clears it at the hello or the
   failure; a server start clears what a stopped server left. The TUI's
   status bar shows `◆ reaching <t> <elapsed>` meanwhile, and `sigma exec`
   prints `reaching <t>…` on stderr once per connect.
-- `target-member-mode` runs a Claude conversation on a target in member
-  mode, at start or after a model switch: Claude Code's own tools, the
+- `target-remote-hands` runs a Claude conversation on a target with
+  remote hands, at start or after a model switch: Claude Code's own tools, the
   person's settings, connectors and other MCP servers are off, and it acts
   only through sigma's tools, served to it as `mcp__sigma__<name>` and kept
   out of tool search. Its calls are committed under sigma's names and run on
@@ -136,10 +136,10 @@ Preconditions:
   interrupted (`target-server-restart`).
 - **Subagents.** A subagent and a fork act on their parent's target.
 - **Provider.** On ChatGPT the tools and the workspace's `AGENTS.md` and
-  skills come through the target. Claude Code on a target runs in member
-  mode (`target-member-mode`): the same tools and workspace text, through
+  skills come through the target. Claude Code on a target runs with
+  remote hands (`target-remote-hands`): the same tools and workspace text, through
   sigma's MCP server and its system prompt's `append`.
-- **Sign-in.** A member-mode Claude Code is signed in as the provider's
+- **Sign-in.** A remote-hands Claude Code is signed in as the provider's
   Claude Code is, except where Claude Code keeps the sign-in in its config
   folder: on Linux, `.credentials.json`. There the target's fresh folder is
   signed out, and the sign-in must come through the environment
@@ -152,22 +152,22 @@ Preconditions:
 
 - Wire: `target-start: ...`, `target-unavailable: ...`, `target-restarted: ...`,
   `target-replaced: ...`, `target-lost: ...`, `target-worker-fork: ...`,
-  `target-member-mode: ...` in `packages/sigma/test/wire.test.ts`.
+  `target-remote-hands: ...` in `packages/sigma/test/wire.test.ts`.
 - Provider: `target-start, agents-md, skills-found: ...` in
-  `packages/sigma/test/openai.test.ts`; `target-member-mode: ...`,
-  `target-member-mode, claude-resume: ...`,
-  `target-member-mode, target-worker-fork: ...`,
-  `target-member-mode, claude-sign-in-error: ...`,
-  `target-member-mode, target-server-restart: ...`,
-  `target-member-mode, skills-list, skills-attach: ...`,
-  `target-member-mode, approval-wire: ...`,
-  `target-member-mode, claude-compact, target-restarted: ...`,
-  `target-lost, target-member-mode: ...` and
-  `target-restarted, target-member-mode: ...` in
+  `packages/sigma/test/openai.test.ts`; `target-remote-hands: ...`,
+  `target-remote-hands, claude-resume: ...`,
+  `target-remote-hands, target-worker-fork: ...`,
+  `target-remote-hands, claude-sign-in-error: ...`,
+  `target-remote-hands, target-server-restart: ...`,
+  `target-remote-hands, skills-list, skills-attach: ...`,
+  `target-remote-hands, approval-wire: ...`,
+  `target-remote-hands, claude-compact, target-restarted: ...`,
+  `target-lost, target-remote-hands: ...` and
+  `target-restarted, target-remote-hands: ...` in
   `packages/sigma/test/claude.test.ts`, on the fake `claude`'s
-  `member_bash`, `member_restart` and `member_sleep`, which
+  `remote_hands_bash`, `remote_hands_restart` and `remote_hands_sleep`, which
   `derive-claude-fixtures.ts` derives from `bash_allowed`, and
-  `member_bash_exit` and `member_sleep_exit`, which it cuts from them where
+  `remote_hands_bash_exit` and `remote_hands_sleep_exit`, which it cuts from them where
   the process exits.
 - Provider: `target-lost, skills-attach: ...` in
   `packages/sigma/test/openai.test.ts`.
@@ -197,13 +197,13 @@ Preconditions:
   before each request, on ChatGPT. Claude Code runs its own loop, so member
   mode tells it at the start of a run and in a sigma call's result instead;
   a change found between those points waits for the next one.
-- A change a member-mode run found but Claude Code never read is retold to
+- A change a remote-hands run found but Claude Code never read is retold to
   the next run's session, except when that run is a compaction: its
   `/compact` must stay the whole prompt, and the compaction moves the
   session past the change, so the model is not told of it.
-- In member mode Claude Code reads `AGENTS.md` and skills only as they were
+- With remote hands Claude Code reads `AGENTS.md` and skills only as they were
   when its process started; an edit reaches it with its next process.
-- Claude Code 2.1.312 still tells a member-mode model the home's working
+- Claude Code 2.1.312 still tells a remote-hands model the home's working
   folder, platform, shell and OS version, in an `environment` attachment of
   its session file. No option drops or replaces it except `--bare`, which
   refuses OAuth sign-in, so the `append` says that block is not where the

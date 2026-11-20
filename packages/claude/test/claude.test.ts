@@ -76,8 +76,8 @@ const open = (
       adapters: [claudeAdapter((provider) => (provider === "claude" ? claude.settings : undefined))],
       processes: yield* makeHostedProcesses(processes),
       ...(offered === undefined ? {} : { offered }),
-      // These conversations are all local, so none runs in member mode.
-      member: {
+      // These conversations are all local, so none runs with remote hands.
+      remoteHands: {
         folder: () => Effect.die("no target"),
         notice: () => Effect.succeed(undefined),
         retell: () => undefined,

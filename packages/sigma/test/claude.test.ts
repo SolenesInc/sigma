@@ -1318,7 +1318,7 @@ test("claude-tool-search: tool search set to auto in the person's Claude Code se
 })
 
 /** A Claude conversation on the test target `box`, whose work folder holds `agents`, as its AGENTS.md. */
-const memberSession = async (
+const remoteHandsSession = async (
   claude: FakeClaude,
   targets: TestTargets,
   cwd?: (work: string) => string,
@@ -1350,9 +1350,9 @@ const boxFolder = (home: string) => {
 const spawnLine = (claude: FakeClaude, spawn: number) =>
   claude.log().find((entry) => entry.spawn === spawn && entry.argv !== undefined)
 
-test("target-member-mode, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types", async () => {
+test("target-remote-hands, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's platform, AGENTS.md, skills and agent types", async () => {
   using targets = new TestTargets()
-  using claude = new FakeClaude("member_bash")
+  using claude = new FakeClaude("remote_hands_bash")
   // The conversation's folder is a repository on the target, and another at the same path on the home.
   const cwd = (work: string) => {
     mkdirSync(join(work, ".git"))
@@ -1368,7 +1368,7 @@ test("target-member-mode, worker-section: a remote conversation's Claude Code ha
     targets.platform("box", "freebsd")
     return home
   }
-  await using session = await memberSession(claude, targets, cwd)
+  await using session = await remoteHandsSession(claude, targets, cwd)
   const repo = join(session.work, "..", "home-repo")
   await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await session.view.until(settled(1))
@@ -1403,7 +1403,7 @@ test("target-member-mode, worker-section: a remote conversation's Claude Code ha
   expect(initialize.appendSystemPrompt).toContain(
     "The environment Claude Code describes (its working directory, platform, shell and OS version) is the computer Claude Code runs on",
   )
-  // What a worker is, by the tool's MCP name, with no subagent tool to point to: member mode turns Agent off.
+  // What a worker is, by the tool's MCP name, with no subagent tool to point to: remote hands turn Agent off.
   expect(initialize.appendSystemPrompt).toContain(CLAUDE_WORKERS)
   expect(initialize.appendSystemPrompt).toContain("For a quick helper inside your own turn, do the work yourself.")
   expect(initialize.appendSystemPrompt).not.toContain("subagent tool")
@@ -1430,10 +1430,10 @@ test("target-member-mode, worker-section: a remote conversation's Claude Code ha
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: made", "run_end: answered"])
 })
 
-test("target-member-mode, claude-sign-in-error: a signed-out Claude Code on a target fails the run saying how a target's Claude Code signs in", async () => {
+test("target-remote-hands, claude-sign-in-error: a signed-out Claude Code on a target fails the run saying how a target's Claude Code signs in", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("auth_failed")
-  await using session = await memberSession(claude, targets)
+  await using session = await remoteHandsSession(claude, targets)
   await session.submit("hello")
   await session.view.until(settled(1))
   expect(transcript(session.view.seen())).toEqual([
@@ -1442,7 +1442,7 @@ test("target-member-mode, claude-sign-in-error: a signed-out Claude Code on a ta
   ])
 })
 
-test("target-member-mode, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them", async () => {
+test("target-remote-hands, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them", async () => {
   using claude = new FakeClaude("text")
   await using session = await conversationWith(claude)
   await session.submit("Reply with exactly: fixture text ok")
@@ -1468,10 +1468,10 @@ test("target-member-mode, worker-claude-parent: a local conversation's Claude Co
   expect(spawnLine(claude, 0).env.CLAUDE_CONFIG_DIR).toBeUndefined()
 })
 
-test("target-member-mode, claude-resume: a remote conversation's Claude Code resumes its session in the target's folders", async () => {
+test("target-remote-hands, claude-resume: a remote conversation's Claude Code resumes its session in the target's folders", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("died_while_idle")
-  await using session = await memberSession(claude, targets)
+  await using session = await remoteHandsSession(claude, targets)
   await session.submit("Remember the word PLUM. Reply with exactly: noted")
   await session.view.until(settled(1))
   process.kill(claude.pids()[0]!, "SIGKILL")
@@ -1485,10 +1485,10 @@ test("target-member-mode, claude-resume: a remote conversation's Claude Code res
   }
 })
 
-test("target-member-mode, target-worker-fork: a fork of a remote Claude conversation forks its session in the target's folders", async () => {
+test("target-remote-hands, target-worker-fork: a fork of a remote Claude conversation forks its session in the target's folders", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("died_while_idle")
-  await using session = await memberSession(claude, targets)
+  await using session = await remoteHandsSession(claude, targets)
   await session.submit("Remember the word PLUM. Reply with exactly: noted")
   await session.view.until(settled(1))
   const at = session.view.seen().at(-1)!.id
@@ -1506,10 +1506,10 @@ test("target-member-mode, target-worker-fork: a fork of a remote Claude conversa
   expect(spawnLine(claude, 1).argv).toContain("--strict-mcp-config")
 })
 
-test("target-restarted, target-member-mode: Claude Code in member mode is told in a call's result that the computer behind it restarted under the call", async () => {
+test("target-restarted, target-remote-hands: Claude Code with remote hands is told in a call's result that the computer behind it restarted under the call", async () => {
   using targets = new TestTargets()
-  using claude = new FakeClaude("member_restart")
-  await using session = await memberSession(claude, targets)
+  using claude = new FakeClaude("remote_hands_restart")
+  await using session = await remoteHandsSession(claude, targets)
   await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await session.view.until(settled(1))
   const answered = claude.log().find((entry) => entry.received?.response?.response?.mcp_response)
@@ -1527,10 +1527,10 @@ test("target-restarted, target-member-mode: Claude Code in member mode is told i
   ).toEqual([expect.objectContaining({ target: "box", filesKept: true })])
 })
 
-test("target-lost, target-member-mode: a sigma call on a target that is down reaches for it once, so its result does not wait on a second connect", async () => {
+test("target-lost, target-remote-hands: a sigma call on a target that is down reaches for it once, so its result does not wait on a second connect", async () => {
   using targets = new TestTargets()
-  using claude = new FakeClaude("member_bash")
-  const first = await memberSession(claude, targets)
+  using claude = new FakeClaude("remote_hands_bash")
+  const first = await remoteHandsSession(claude, targets)
   first.client.close()
   await first.server.stop()
   // The target is lost while no server holds a channel to it.
@@ -1562,10 +1562,10 @@ test("target-lost, target-member-mode: a sigma call on a target that is down rea
   client.close()
 })
 
-test("target-member-mode, claude-resume: a resume after Claude Code died right after reading a sigma call's result is not told the call was cut off", async () => {
+test("target-remote-hands, claude-resume: a resume after Claude Code died right after reading a sigma call's result is not told the call was cut off", async () => {
   using targets = new TestTargets()
-  using claude = new FakeClaude("member_bash_exit", "text")
-  await using session = await memberSession(claude, targets)
+  using claude = new FakeClaude("remote_hands_bash_exit", "text")
+  await using session = await remoteHandsSession(claude, targets)
   await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await session.view.until(settled(1))
   expect(results(session.view.seen())).toEqual([expect.objectContaining({ isError: false })])
@@ -1576,10 +1576,10 @@ test("target-member-mode, claude-resume: a resume after Claude Code died right a
   expect(claude.userTexts(1)[0]).toEqual(["Reply with exactly: fixture text ok"])
 })
 
-test("target-member-mode: a sigma call running when its Claude Code process exits is ended, with one result, before the run ends", async () => {
+test("target-remote-hands: a sigma call running when its Claude Code process exits is ended, with one result, before the run ends", async () => {
   using targets = new TestTargets()
-  using claude = new FakeClaude("member_sleep_exit")
-  await using session = await memberSession(claude, targets)
+  using claude = new FakeClaude("remote_hands_sleep_exit")
+  await using session = await remoteHandsSession(claude, targets)
   await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await session.view.until(settled(1))
   expect(calls(session.view.seen()).map((call) => call.name)).toEqual(["bash"])
@@ -1588,7 +1588,7 @@ test("target-member-mode: a sigma call running when its Claude Code process exit
   expect(runEnds(session.view.seen()).map((end) => end.outcome)).toEqual(["failed"])
 })
 
-test("target-member-mode, skills-list, skills-attach: a remote Claude conversation lists its target's skills, and a skill named in a message reaches Claude Code read from the target", async () => {
+test("target-remote-hands, skills-list, skills-attach: a remote Claude conversation lists its target's skills, and a skill named in a message reaches Claude Code read from the target", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("text")
   const skill = (work: string) => {
@@ -1599,7 +1599,7 @@ test("target-member-mode, skills-list, skills-attach: a remote Claude conversati
     )
     return work
   }
-  await using session = await memberSession(claude, targets, skill)
+  await using session = await remoteHandsSession(claude, targets, skill)
   const listed = await session.client.call("skills/list", { conversation: session.conversation })
   expect(listed.result.map((found: { name: string; description: string }) => [found.name, found.description])).toEqual([
     ["deploy", "Deploy it"],
@@ -1609,10 +1609,10 @@ test("target-member-mode, skills-list, skills-attach: a remote Claude conversati
   expect(claude.userTexts(0)[0]!.join("\n")).toContain("Run make deploy.")
 })
 
-test("target-member-mode, approval-wire: a sigma call in member mode that asks a person and is denied does not run on the target, and Claude Code reads the denial", async () => {
+test("target-remote-hands, approval-wire: a sigma call with remote hands that asks a person and is denied does not run on the target, and Claude Code reads the denial", async () => {
   using targets = new TestTargets()
-  using claude = new FakeClaude("member_bash")
-  await using session = await memberSession(claude, targets, undefined, { ask: { approvals: "ask" } })
+  using claude = new FakeClaude("remote_hands_bash")
+  await using session = await remoteHandsSession(claude, targets, undefined, { ask: { approvals: "ask" } })
   await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await session.answer(false)
   await session.view.until(settled(1))
@@ -1623,11 +1623,11 @@ test("target-member-mode, approval-wire: a sigma call in member mode that asks a
   expect(results(session.view.seen())).toEqual([expect.objectContaining({ isError: true })])
 })
 
-test("target-member-mode, claude-compact, target-restarted: a compaction in member mode sends only /compact, and the run after it is told that the computer restarted", async () => {
+test("target-remote-hands, claude-compact, target-restarted: a compaction with remote hands sends only /compact, and the run after it is told that the computer restarted", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("compaction_resume", "text")
   const options = { claudeIdle: 0 } as ServerOptions
-  const first = await memberSession(claude, targets, undefined, { options })
+  const first = await remoteHandsSession(claude, targets, undefined, { options })
   await first.submit("Remember the word PLUM. Reply with exactly: noted")
   await first.view.until(settled(1))
   first.client.close()
@@ -1659,10 +1659,10 @@ test("target-member-mode, claude-compact, target-restarted: a compaction in memb
   client.close()
 })
 
-test("target-member-mode, target-server-restart: a call of sigma's tools cut off by a crashed server has one result, its tool task's", async () => {
+test("target-remote-hands, target-server-restart: a call of sigma's tools cut off by a crashed server has one result, its tool task's", async () => {
   using targets = new TestTargets()
-  using claude = new FakeClaude("member_sleep", "text")
-  const first = await memberSession(claude, targets)
+  using claude = new FakeClaude("remote_hands_sleep", "text")
+  const first = await remoteHandsSession(claude, targets)
   await first.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await first.view.until(() => calls(first.view.seen()).length === 1)
   first.client.close()
@@ -1681,10 +1681,10 @@ test("target-member-mode, target-server-restart: a call of sigma's tools cut off
   client.close()
 })
 
-test("target-restarted, target-member-mode: a remote Claude conversation whose run fails before Claude Code reads it is told that its computer restarted in the run after", async () => {
+test("target-restarted, target-remote-hands: a remote Claude conversation whose run fails before Claude Code reads it is told that its computer restarted in the run after", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("text", "auth_failed", "text")
-  const first = await memberSession(claude, targets)
+  const first = await remoteHandsSession(claude, targets)
   await first.submit("Reply with exactly: fixture text ok")
   await first.view.until(settled(1))
   first.client.close()
@@ -1712,10 +1712,10 @@ test("target-restarted, target-member-mode: a remote Claude conversation whose r
   client.close()
 })
 
-test("target-restarted, target-member-mode: a fresh Claude Code session after a run that failed before Claude Code read it is told that its computer restarted", async () => {
+test("target-restarted, target-remote-hands: a fresh Claude Code session after a run that failed before Claude Code read it is told that its computer restarted", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("text", "auth_failed", "text")
-  const first = await memberSession(claude, targets)
+  const first = await remoteHandsSession(claude, targets)
   await first.submit("Reply with exactly: fixture text ok")
   await first.view.until(settled(1))
   first.client.close()
@@ -1747,10 +1747,10 @@ test("target-restarted, target-member-mode: a fresh Claude Code session after a 
   client.close()
 })
 
-test("target-restarted, target-member-mode: a remote Claude conversation's next run is told first that its computer restarted while the server was down", async () => {
+test("target-restarted, target-remote-hands: a remote Claude conversation's next run is told first that its computer restarted while the server was down", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("text", "text")
-  const first = await memberSession(claude, targets)
+  const first = await remoteHandsSession(claude, targets)
   await first.submit("Reply with exactly: fixture text ok")
   await first.view.until(settled(1))
   first.client.close()
@@ -1970,10 +1970,10 @@ test("worker-claude-parent, subagent-claude: a Claude subagent that calls sigma'
   expect(transcript(session.view.seen()).at(-1)).toBe("run_end: answered")
 })
 
-test("target-member-mode, approval-wire: a sigma call of a remote Claude Code that asks reaches a person once: Claude Code's own ask is allowed for it, and its tool task asks", async () => {
+test("target-remote-hands, approval-wire: a sigma call of a remote Claude Code that asks reaches a person once: Claude Code's own ask is allowed for it, and its tool task asks", async () => {
   using targets = new TestTargets()
-  using claude = new FakeClaude("member_bash")
-  await using session = await memberSession(claude, targets, undefined, { ask: { approvals: "ask" } })
+  using claude = new FakeClaude("remote_hands_bash")
+  await using session = await remoteHandsSession(claude, targets, undefined, { ask: { approvals: "ask" } })
   await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await session.answer(true)
   await session.view.until(settled(1))

@@ -31,10 +31,10 @@ import { recordJob } from "./jobs.ts"
 import type { Job, JobLinks } from "./links.ts"
 
 /**
- * What a run in member mode has of sigma (D9): what the model must read after each call of sigma's tools, such as a
+ * What a run with remote hands has of sigma (D9): what the model must read after each call of sigma's tools, such as a
  * computer behind the conversation that changed (D6).
  */
-export type Member = {
+export type RemoteHands = {
   readonly notice: Effect.Effect<string | undefined>
 }
 
@@ -118,8 +118,8 @@ export type TranscriptScope = {
   readonly started: (call: string) => Job
   /** The run's own conversation: its entries move its position. A job's has none. */
   readonly position?: Position
-  /** A run in member mode; a job has none, since member mode offers no Agent tool. */
-  readonly member?: Member
+  /** A run with remote hands; a job has none, since remote hands offer no Agent tool. */
+  readonly remoteHands?: RemoteHands
 }
 
 /** Removes every approval request the task `task` keyed in the conversation: `<task>/<call>`. */
@@ -482,7 +482,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
 
   /**
    * Runs an own tool's call: commits it with its tool task, waits for the task, and answers with the result it
-   * committed, followed by what the model must read now (`Member.notice`).
+   * committed, followed by what the model must read now (`RemoteHands.notice`).
    */
   const runOwn: Callbacks["runOwn"] = (id, name, input, signal) =>
     run(
@@ -504,7 +504,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
           yield* commit((tx) => Effect.map(tx.entry(id), (found) => void (entry = found)))
         }
         const message = entry?.model?.[0] as ToolResultMessage | undefined
-        const notice = yield* scope.member?.notice ?? Effect.succeed(undefined)
+        const notice = yield* scope.remoteHands?.notice ?? Effect.succeed(undefined)
         const told: TextContent[] = notice === undefined ? [] : [{ type: "text", text: notice }]
         if (message === undefined) {
           return {

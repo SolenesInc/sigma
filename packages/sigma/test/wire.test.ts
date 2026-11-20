@@ -2437,7 +2437,7 @@ test("target-unavailable: a home with no target_connector refuses a remote start
   client.close()
 })
 
-test("target-member-mode: Claude Code can start on a target, and a conversation there can switch to it, since it runs only sigma's tools there", async () => {
+test("target-remote-hands: Claude Code can start on a target, and a conversation there can switch to it, since it runs only sigma's tools there", async () => {
   using targets = new TestTargets()
   const work = targets.add("box")
   await using server = await targetServer(targets, [])

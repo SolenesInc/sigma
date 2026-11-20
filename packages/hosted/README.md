@@ -16,9 +16,9 @@ adapter's run task for a model whose provider its `settings` knows. `options.pro
 server: the worker tools), and whose prompt sections go to its system prompt before the agent's instructions. The
 harness calls sigma's tools (`ownTools`, `ProcessConfig.own`) each through `Callbacks.runOwn` of the run or the job
 that made it, which commits it with a `pi.tool` task and answers with that task's result.
-`options.member` is how a remote conversation's runs reach sigma in member mode (D9): the harness's own tools are off
-and every tool of the conversation but code mode is its own, each call's answer followed by `member.notice`. Its process starts in the target's folders
-(`member.folder`), with the conversation's sections as its system prompt's addition, and `member.retell` says what a
+`options.remoteHands` is how a remote conversation's runs reach sigma with remote hands (D9): the harness's own tools are off
+and every tool of the conversation but code mode is its own, each call's answer followed by `remoteHands.notice`. Its process starts in the target's folders
+(`remoteHands.folder`), with the conversation's sections as its system prompt's addition, and `remoteHands.retell` says what a
 session is told of entries sigma recorded with no model content, such as a change behind its target.
 
 - `src/adapter.ts`: the seam. `Adapter` (its task kind, its name in texts, the `api` its responses carry, its settings

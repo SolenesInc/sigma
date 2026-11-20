@@ -6,13 +6,13 @@
 // subagent_working: `subagent` until its subagent's Read returns, then the process goes quiet, as if it never answered
 // the interrupt, and the next spawn is `resume_after_kill`'s resumed one, told that the Agent call was cut off.
 //
-// member_bash: `bash_allowed` as Claude Code plays it in member mode, where its own tools are off: its Bash call is a
+// remote_hands_bash: `bash_allowed` as Claude Code plays it with remote hands, where its own tools are off: its Bash call is a
 // call of sigma's `bash` over sigma's MCP server, which Claude Code makes as an `mcp_message` once the call is allowed,
-// and whose answer is the result it reads. member_restart is the same with a command that restarts the target's
+// and whose answer is the result it reads. remote_hands_restart is the same with a command that restarts the target's
 // instance under the call.
 //
-// member_bash_exit: member_bash until Claude Code wrote the result of its sigma call, then the process exits.
-// member_sleep_exit: member_sleep until Claude Code made its sigma call, then the process exits while the call runs.
+// remote_hands_bash_exit: remote_hands_bash until Claude Code wrote the result of its sigma call, then the process exits.
+// remote_hands_sleep_exit: remote_hands_sleep until Claude Code made its sigma call, then the process exits while the call runs.
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
@@ -97,8 +97,8 @@ const subagentWorking = () => {
   ])
 }
 
-/** member_bash's command says where it ran and on which instance; member_restart's restarts the test target's. */
-const memberBash = (name: string, command: string) => {
+/** remote_hands_bash's command says where it ran and on which instance; remote_hands_restart's restarts the test target's. */
+const remoteHandsBash = (name: string, command: string) => {
   const source = read("bash_allowed")
   const call = source
     .find(
@@ -108,13 +108,13 @@ const memberBash = (name: string, command: string) => {
         line.frame.message.content.some((block: any) => block.type === "tool_use"),
     )!
     .frame.message.content.find((block: any) => block.type === "tool_use").id as string
-  const asMember = (line: Line): Line => {
+  const asRemoteHands = (line: Line): Line => {
     const text = JSON.stringify(line)
       .replaceAll('"name":"Bash"', '"name":"mcp__sigma__bash"')
       .replaceAll('"tool_name":"Bash"', '"tool_name":"mcp__sigma__bash"')
       .replaceAll('"display_name":"Bash"', '"display_name":"bash"')
-    const member = JSON.parse(text)
-    // The call's input, wherever Claude Code repeats it, is the member command.
+    const played = JSON.parse(text)
+    // The call's input, wherever Claude Code repeats it, is the given command.
     const visit = (value: any) => {
       if (value === null || typeof value !== "object") return
       if (typeof value.command === "string" && value.command.includes("touch made.txt")) {
@@ -123,18 +123,18 @@ const memberBash = (name: string, command: string) => {
       }
       for (const child of Object.values(value)) visit(child)
     }
-    visit(member.frame)
-    // Its process starts as member mode starts one: Claude Code's own tools, settings and other MCP servers off.
-    if (member.frame.argv) {
-      member.frame.argv = member.frame.argv.flatMap((arg: string) =>
+    visit(played.frame)
+    // Its process starts as remote hands start one: Claude Code's own tools, settings and other MCP servers off.
+    if (played.frame.argv) {
+      played.frame.argv = played.frame.argv.flatMap((arg: string) =>
         arg.startsWith("--setting-sources=")
           ? ["--setting-sources=", "--tools=ToolSearch", "--strict-mcp-config"]
           : [arg],
       )
     }
-    return member
+    return played
   }
-  const lines = source.slice(1).map(asMember)
+  const lines = source.slice(1).map(asRemoteHands)
   const result = lines.findIndex(
     (line) =>
       line.type === "emit_inbound" &&
@@ -185,9 +185,9 @@ const memberBash = (name: string, command: string) => {
 }
 
 subagentWorking()
-memberBash("member_bash", 'echo "$SIGMA_TARGET_INSTANCE" > made; pwd')
-memberBash("member_restart", "echo box-2 > ../instance; kill -9 $(cat ../pid)")
-memberBash("member_sleep", "sleep 600")
+remoteHandsBash("remote_hands_bash", 'echo "$SIGMA_TARGET_INSTANCE" > made; pwd')
+remoteHandsBash("remote_hands_restart", "echo box-2 > ../instance; kill -9 $(cat ../pid)")
+remoteHandsBash("remote_hands_sleep", "sleep 600")
 
 /** `name`'s first process until the first line `until` names, then that process exits. */
 const exitAfter = (scenario: string, name: string, until: (line: Line) => boolean, derived: string) => {
@@ -203,18 +203,18 @@ const exitAfter = (scenario: string, name: string, until: (line: Line) => boolea
 }
 
 exitAfter(
-  "member_bash_exit",
-  "member_bash",
+  "remote_hands_bash_exit",
+  "remote_hands_bash",
   (line) =>
     line.type === "emit_inbound" &&
     line.frame.type === "user" &&
     Array.isArray(line.frame.message.content) &&
     line.frame.message.content.some((block: any) => block.type === "tool_result"),
-  "member_bash until Claude Code wrote its sigma call's result, then the process exits",
+  "remote_hands_bash until Claude Code wrote its sigma call's result, then the process exits",
 )
 exitAfter(
-  "member_sleep_exit",
-  "member_sleep",
+  "remote_hands_sleep_exit",
+  "remote_hands_sleep",
   (line) => line.type === "emit_inbound" && line.frame.request?.subtype === "mcp_message",
-  "member_sleep until Claude Code made its sigma call, then the process exits while the call runs",
+  "remote_hands_sleep until Claude Code made its sigma call, then the process exits while the call runs",
 )
