@@ -52,7 +52,7 @@ import {
   type Start,
 } from "./process.ts"
 import type { ClaudeProcesses, Openings } from "./processes.ts"
-import { history, INTERRUPTED, JOINING, type Said, textOf, unseen } from "./retell.ts"
+import { history, INTERRUPTED, JOINING, type Retell, type Said, textOf, unseen } from "./retell.ts"
 import type { ClaudeRunCheckpoint, Ended, RunContext } from "./serving.ts"
 import { ClaudeSessionDoc } from "./session.ts"
 import { expireApprovals, type Hosting } from "./transcript.ts"
@@ -86,6 +86,11 @@ export interface MemberOptions {
    * `undefined`. Asked before each run and after each of sigma's tool calls.
    */
   readonly notice: (conversation: ConversationId, target: string) => Effect.Effect<string | undefined>
+  /**
+   * What a session is told of an entry sigma recorded with no model content, such as a change behind its target: told
+   * among what the session missed, so a run that ended before Claude Code read the notice leaves it to the next (D6).
+   */
+  readonly retell: Retell
 }
 
 const failed = (message: string, reason: string): Next => ({
@@ -174,25 +179,36 @@ const stopped = (entry: EntryRecord) =>
  * they changed the context it holds, as for a resume (F12). What a stop recorded is not told: only a stop the process
  * itself went through leaves it after `seen`, since any other cut-off ends the process.
  */
-const afterSeen = (runtime: Runtime, provider: string, seen: number) =>
+const afterSeen = (runtime: Runtime, provider: string, seen: number, retell: Retell) =>
   Effect.map(entriesAfter(runtime, seen), (missed) => {
     if (!continuable(missed, provider)) return undefined
-    const told = unseen(missed.filter((entry) => !stopped(entry)))
-    return told.length === 0 ? [CONTINUE] : told
+    return missedText(
+      missed.filter((entry) => !stopped(entry)),
+      retell,
+    )
   })
+
+/**
+ * What a session is told of the entries it missed, or `CONTINUE` for none. A compaction's `/compact` stays the whole
+ * prompt, since Claude Code reads only that as its command, so what `retell` names waits for a later run.
+ */
+const missedText = (missed: readonly EntryRecord[], retell: Retell): ReadonlyArray<Said> => {
+  const all = unseen(missed, retell)
+  const told = isCompaction(all) ? unseen(missed) : all
+  return told.length === 0 ? [CONTINUE] : told
+}
 
 /** The id of the conversation's newest entry. */
 const newest = (runtime: Runtime) => Effect.map(runtime.entries({}, 1), (page) => Number(page.items[0]?.id ?? 0))
 
 /** Where Claude Code's session starts for this run, and what it is told first. */
-const opening = (runtime: Runtime, api: TaskApi, provider: string, title: Title) =>
+const opening = (runtime: Runtime, api: TaskApi, provider: string, title: Title, retell: Retell) =>
   Effect.gen(function* () {
     const current = (yield* runtime.snapshot(ClaudeSessionDoc, runtime.conversationId))?.current
     if (current !== undefined && current.provider === provider) {
       const missed = yield* entriesAfter(runtime, current.seen)
       if (continuable(missed, provider)) {
-        const told = unseen(missed)
-        const texts = told.length === 0 ? [CONTINUE] : told
+        const texts = missedText(missed, retell)
         const start: Start =
           current.conversation === Number(runtime.conversationId)
             ? { _tag: "resume", session: current.session, at: current.at }
@@ -200,22 +216,28 @@ const opening = (runtime: Runtime, api: TaskApi, provider: string, title: Title)
         return { start, texts }
       }
     }
-    return yield* fresh(runtime, api, title)
+    return yield* fresh(runtime, api, title, retell, current?.seen)
   })
 
-/** A new session, told the conversation's context; one that already has answers is told it joins it. */
-const fresh = (runtime: Runtime, api: TaskApi, title: Title) =>
+/**
+ * A new session, told the conversation's context; one that already has answers is told it joins it. What `retell`
+ * names after `since`, the position of the session it replaces, that session never read, so it is told first.
+ */
+const fresh = (runtime: Runtime, api: TaskApi, title: Title, retell: Retell, since: number | undefined) =>
   Effect.gen(function* () {
     const { messages } = yield* api.context(runtime.conversationId)
     const named = yield* title(runtime.conversationId)
+    const missed = since === undefined ? [] : yield* entriesAfter(runtime, since)
     const told = history(messages as Message[])
+    // A compaction's `/compact` stays the whole prompt.
+    const retold = isCompaction(told) ? [] : missed.flatMap((entry) => retell(entry) ?? [])
     const joins = messages.some((message) => message.role !== "user")
     const start: Start = {
       _tag: "fresh",
       session: crypto.randomUUID(),
       ...(named === undefined || named === "" ? {} : { title: named }),
     }
-    return { start, texts: joins ? [JOINING, ...told] : told }
+    return { start, texts: [...retold, ...(joins ? [JOINING] : []), ...told] }
   })
 
 /** What a run tells its process before `texts`, the opening it was given. */
@@ -389,20 +411,22 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
             ...(notice === undefined ? {} : { member: { notice } }),
           }
           const title: Title = shared.options.title ?? (() => Effect.succeed(undefined))
-          const cold = () => opening(runtime, api, provider, title)
+          const cold = () => opening(runtime, api, provider, title, member.retell)
           // The computer behind a remote conversation may have changed since its last run: it is told first, once for
           // the run however many processes serve it. A compaction is not told, and reaches no target, so its
-          // `/compact` stays the whole prompt Claude Code reads as its command; the run after it is told.
+          // `/compact` stays the whole prompt Claude Code reads as its command; the run after it is told. The change's
+          // entry is retold to a session that has not seen it, so a process started after the change was recorded
+          // already holds it in its opening.
           const changed = notice === undefined ? undefined : yield* Effect.cached(notice)
           const told: Told = (texts) =>
             changed === undefined || isCompaction(texts)
               ? Effect.succeed([])
-              : Effect.map(changed, (text) => (text === undefined ? [] : [text]))
+              : Effect.map(changed, (text) => (text === undefined || texts.includes(text) ? [] : [text]))
           let { ended, live } = yield* converse(
             shared,
             config,
             run,
-            { live: (seen) => afterSeen(runtime, provider, seen), cold },
+            { live: (seen) => afterSeen(runtime, provider, seen, member.retell), cold },
             told,
           )
           // A live process lost while it waited costs a cold start and nothing else (D1).
@@ -411,13 +435,20 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
           }
           if (ended._tag === "gone") {
             // The session is gone, or no longer holds the position (F12): start over, told the conversation.
+            const since = (yield* runtime.snapshot(ClaudeSessionDoc, runtime.conversationId))?.current?.seen
             yield* runtime.commit((tx) =>
               Effect.map(tx.doc(ClaudeSessionDoc, runtime.conversationId), (doc) => {
                 delete doc.current
                 return undefined as never
               }),
             )
-            ended = (yield* converse(shared, config, run, { cold: () => fresh(runtime, api, title) }, told)).ended
+            ended = (yield* converse(
+              shared,
+              config,
+              run,
+              { cold: () => fresh(runtime, api, title, member.retell, since) },
+              told,
+            )).ended
           }
           // A target's own Claude Code folder holds no sign-in where Claude Code keeps it there, as on Linux (C45).
           if (folder !== undefined && ended._tag === "failed" && SIGNED_OUT.test(ended.message)) {

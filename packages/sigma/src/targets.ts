@@ -10,7 +10,7 @@ import type { ExecutionEnv } from "@sigma/env"
 import type { AgentHello } from "@sigma/env/protocol"
 import { type Channel, spawnChannel, TargetPool } from "@sigma/env/remote"
 import { defineExtension, type Harness } from "@sigma/harness"
-import { type ConversationId, defineDoc, type Tx } from "@sigma/kernel"
+import { type ConversationId, defineDoc, type EntryRecord, type Tx } from "@sigma/kernel"
 import { LOCAL_TARGET, TARGET_CHANGED_KIND } from "@sigma/protocol"
 import { Effect } from "effect"
 import type { Home } from "./home.ts"
@@ -90,6 +90,13 @@ export const recordTarget = (tx: Tx, conversation: ConversationId, target: strin
     yield* tx.appendEntry(conversation, { kind: TARGET_CHANGED_KIND, data: { target, from, to, filesKept } })
     return changed
   })
+
+/**
+ * What a Claude Code session that has not seen a `sigma.target_changed` entry is told of it, as a run that ended before
+ * Claude Code read its notice leaves it (D6).
+ */
+export const retellTarget = (entry: EntryRecord) =>
+  entry.kind === TARGET_CHANGED_KIND ? changeText(entry.data as unknown as TargetChange) : undefined
 
 /** What the model reads of the last change behind its target (D6). */
 const changeText = ({ to, filesKept }: TargetChange) =>

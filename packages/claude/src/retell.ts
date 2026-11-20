@@ -36,14 +36,19 @@ export const textOf = (content: unknown): string =>
 
 const messagesOf = (entry: EntryRecord): readonly Message[] => (entry.model ?? []) as unknown as readonly Message[]
 
+/** What the model is told of an entry sigma records with no model content, or `undefined` for one it is not. */
+export type Retell = (entry: EntryRecord) => string | undefined
+
 /**
  * What a resumed session missed: the entries after its position, as text. Prompts are told as they are; what Claude
  * wrote and sigma kept although the session lost it, and the results sigma recorded for calls the session holds no
- * result of, are told as cut off.
+ * result of, are told as cut off. An entry `retell` names is told as it says.
  */
-export function unseen(entries: readonly EntryRecord[]): Said[] {
-  return entries.flatMap((entry) =>
-    messagesOf(entry).flatMap((message): Said[] => {
+export function unseen(entries: readonly EntryRecord[], retell: Retell = () => undefined): Said[] {
+  return entries.flatMap((entry) => {
+    const retold = retell(entry)
+    if (retold !== undefined) return [retold]
+    return messagesOf(entry).flatMap((message): Said[] => {
       switch (message.role) {
         case "user":
           return promptOf(message.content)
@@ -56,8 +61,8 @@ export function unseen(entries: readonly EntryRecord[]): Said[] {
         default:
           return []
       }
-    }),
-  )
+    })
+  })
 }
 
 type Told = { readonly text: string; readonly images?: readonly ImageContent[]; readonly asked: boolean }

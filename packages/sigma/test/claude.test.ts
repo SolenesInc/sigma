@@ -1351,6 +1351,72 @@ test("target-member-mode, target-server-restart: a call of sigma's tools cut off
   client.close()
 })
 
+test("target-restarted, target-member-mode: a remote Claude conversation whose run fails before Claude Code reads it is told that its computer restarted in the run after", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("text", "auth_failed", "text")
+  const first = await memberSession(claude, targets)
+  await first.submit("Reply with exactly: fixture text ok")
+  await first.view.until(settled(1))
+  first.client.close()
+  await first.server.stop()
+  writeFileSync(join(targets.root, "box", "instance"), "box-2")
+
+  await using server = await runningServer([], {
+    home: first.server.home,
+    claude: claude.options,
+    config: { target_connector: targets.connector },
+  })
+  const client = await RawClient.connect(server.home.socket)
+  const view = watchView(client, first.conversation)
+  await view.until(() => true)
+  // This run finds the restart, and its Claude Code fails before it reads anything.
+  await submit(client, first.conversation, "hello")
+  await view.until(settled(2))
+  await submit(client, first.conversation, "Reply with exactly: fixture text ok")
+  await view.until(settled(3))
+  expect(claude.userTexts(2)[0]).toEqual([
+    "hello",
+    "The computer behind this conversation restarted (now instance box-2). Your files are as you left them; processes you started are gone.",
+    "Reply with exactly: fixture text ok",
+  ])
+  client.close()
+})
+
+test("target-restarted, target-member-mode: a fresh Claude Code session after a run that failed before Claude Code read it is told that its computer restarted", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("text", "auth_failed", "text")
+  const first = await memberSession(claude, targets)
+  await first.submit("Reply with exactly: fixture text ok")
+  await first.view.until(settled(1))
+  first.client.close()
+  await first.server.stop()
+  writeFileSync(join(targets.root, "box", "instance"), "box-2")
+
+  await using server = await runningServer([], {
+    home: first.server.home,
+    claude: claude.options,
+    config: { target_connector: targets.connector },
+  })
+  const client = await RawClient.connect(server.home.socket)
+  const view = watchView(client, first.conversation)
+  await view.until(() => true)
+  await submit(client, first.conversation, "hello")
+  await view.until(settled(2))
+  // A reset leaves nothing the session can go on from, so the next run starts a fresh one.
+  expect(
+    (await client.call("conversation/reset", { conversation: first.conversation, author: person("ada") })).error,
+  ).toBe(undefined)
+  await view.until((current) => current.seen().some((entry) => entry.kind === "pi.reset"))
+  await submit(client, first.conversation, "Reply with exactly: fixture text ok")
+  await view.until(settled(3))
+  expect(claude.spawns()[2]!["--resume"]).toBeUndefined()
+  expect(claude.userTexts(2)[0]).toEqual([
+    "The computer behind this conversation restarted (now instance box-2). Your files are as you left them; processes you started are gone.",
+    "Reply with exactly: fixture text ok",
+  ])
+  client.close()
+})
+
 test("target-restarted, target-member-mode: a remote Claude conversation's next run is told first that its computer restarted while the server was down", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("text", "text")

@@ -43,7 +43,9 @@ on. attn will use targets to run a member's work in a sandbox.
   skills, then which computer its tools act on: the target, by name and the
   platform its sigma-env reports, over the computer Claude Code's own
   environment block describes. A restarted or replaced instance is told at the start of its next
-  run, or in the result of the call it happened under. Claude Code waits for
+  run, or in the result of the call it happened under; a run that fails before
+  Claude Code reads it leaves it to the next run, which is told it among what
+  its session missed. Claude Code waits for
   a sigma call as long as sigma's bash may run, so bash's own timeout is the
   limit the model sees.
 - `target-subagent-fork` runs a subagent's calls and a fork's calls on their
@@ -165,6 +167,10 @@ Preconditions:
   before each request, on ChatGPT. Claude Code runs its own loop, so member
   mode tells it at the start of a run and in a sigma call's result instead;
   a change found between those points waits for the next one.
+- A change a member-mode run found but Claude Code never read is retold to
+  the next run's session, except when that run is a compaction: its
+  `/compact` must stay the whole prompt, and the compaction moves the
+  session past the change, so the model is not told of it.
 - In member mode Claude Code reads `AGENTS.md` and skills only as they were
   when its process started; an edit reaches it with its next process.
 - Claude Code 2.1.312 still tells a member-mode model the home's working
