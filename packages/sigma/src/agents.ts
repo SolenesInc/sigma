@@ -37,13 +37,14 @@ import type { AssistantMessage } from "@sigma/models"
 import { int, obj, oneOf, opt, str } from "@sigma/schema"
 import { rootConversation } from "@sigma/tools"
 import { Clock, Duration, Effect, Option, Stream } from "effect"
+import type { ExecutionEnv } from "@sigma/env"
 import type { AgentType } from "./workspace.ts"
 
-/** The agent types a conversation's agent can spawn, from its provider and working directory. */
-export type AgentTypes = (agent: {
-  readonly model?: { readonly provider: string }
-  readonly cwd?: string
-}) => ReadonlyArray<AgentType>
+/** The agent types a conversation's agent can spawn, from its provider and its working directory through `env`. */
+export type AgentTypes = (
+  agent: { readonly model?: { readonly provider: string }; readonly cwd?: string; readonly target?: string },
+  env: ExecutionEnv | undefined,
+) => Effect.Effect<ReadonlyArray<AgentType>>
 
 /** How a subagent's last task ended, as `list_agents` reports it. */
 export type AgentStatus = "pending_init" | "interrupted" | { completed: string } | { errored: string }
@@ -378,7 +379,7 @@ const spawnAgent = (limits: AgentLimits, agentTypes: AgentTypes) =>
         if (input.model !== undefined && !listed(input.model))
           return failed(`no model ${input.model} on ${parentModel!.provider}; leave model out to use yours`)
         const wanted = input.agent_type?.trim()
-        const types = wanted ? agentTypes(agent) : []
+        const types = wanted ? yield* agentTypes(agent, api.env) : []
         const agentType = wanted ? types.find((type) => type.name === wanted) : undefined
         if (wanted && agentType === undefined) {
           const known = types.map((type) => type.name)
@@ -661,7 +662,10 @@ const treeOf = (harness: Harness, root: ConversationId) =>
   })
 
 /** The subagent tools, under `limits`; their tasks come with them, so a restart resumes pending reporters. */
-export const agentTools = (limits: AgentLimits = DEFAULT_AGENT_LIMITS, agentTypes: AgentTypes = () => []) =>
+export const agentTools = (
+  limits: AgentLimits = DEFAULT_AGENT_LIMITS,
+  agentTypes: AgentTypes = () => Effect.succeed([]),
+) =>
   defineExtension({
     name: AGENTS_EXTENSION,
     tasks: [Anchor, Reporter],

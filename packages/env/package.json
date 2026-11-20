@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./agent": "./src/agent.ts",
     "./local": "./src/local.ts",
+    "./protocol": "./src/protocol.ts",
     "./registry": "./src/registry.ts",
     "./remote": "./src/remote.ts",
     "./search": "./src/search.ts",

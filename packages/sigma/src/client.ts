@@ -17,6 +17,10 @@ export class Client extends Context.Service<Client, RpcClient.FromGroup<typeof S
 ) {}
 
 export interface StartOptions {
+  /** The computer its tools act on; default the server's own. */
+  readonly target?: string
+  /** A path on the target; default the current folder. */
+  readonly cwd?: string
   readonly provider?: string
   readonly model?: string
   readonly effort?: string

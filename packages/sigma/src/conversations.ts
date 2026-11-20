@@ -3,7 +3,14 @@
 // lineage of the conversation they run in.
 import { ApprovalsDoc, type Harness, SubagentOriginDoc } from "@sigma/harness"
 import { type ConversationId, type ConversationRecord, type Cursor, type EntryId } from "@sigma/kernel"
-import { type ConversationInfo, type Lineage, type RunEnd, type TreeStatus, USER_KIND } from "@sigma/protocol"
+import {
+  type ConversationInfo,
+  LOCAL_TARGET,
+  type Lineage,
+  type RunEnd,
+  type TreeStatus,
+  USER_KIND,
+} from "@sigma/protocol"
 import { Effect } from "effect"
 import { ConversationIdsDoc } from "./ids.ts"
 import { selectionOf } from "./providers.ts"
@@ -146,6 +153,7 @@ const info = (harness: Harness, conversation: ConversationRecord): Effect.Effect
         ? {}
         : { fork: { of: yield* wireId(harness, parent.conversationId), at: Number(parent.at) } }),
       cwd: agent.cwd ?? "",
+      target: agent.target ?? LOCAL_TARGET,
       model: selectionOf(agent),
       approvals: approvals?.auto === true ? "auto" : "ask",
       ...(lineage === undefined ? {} : { lineage }),

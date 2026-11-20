@@ -2,7 +2,9 @@
 // (`@sigma/protocol`). Conversations run on the home's providers (`./providers.ts`).
 import { claudeRunTasks, makeClaudeProcesses } from "@sigma/claude"
 import { CodemodeSandbox } from "@sigma/codemode/sandbox"
+import type { ExecutionEnv } from "@sigma/env"
 import { LocalExecutionEnv } from "@sigma/env/local"
+import type { TargetPool } from "@sigma/env/remote"
 import { ProcessRegistry } from "@sigma/env/registry"
 import {
   answerApproval,
@@ -54,6 +56,7 @@ import {
   NoSuchConversation,
   NoSuchEntry,
   TakesNoInput,
+  TargetUnavailable,
   UnknownProvider,
   type EntryRecord as WireEntry,
   USER_KIND,
@@ -100,7 +103,9 @@ import { attachedImages } from "./images.ts"
 import { agentTools, type AgentTypes, interruptTree } from "./agents.ts"
 import { type Extensions, openExtensions, StatusLinesDoc } from "./extensions/index.ts"
 import { followTreeStatus, type TreeStatuses } from "./status.ts"
-import { skillsOf, userInput, workspaceInstructions } from "./workspace.ts"
+import { attachedSkills, skillsOf, userInput, type Workspace, workspaceInstructions } from "./workspace.ts"
+import { projectDefaultModel } from "./config.ts"
+import { envOn, isLocal, openTargets, recordTarget, targetSection } from "./targets.ts"
 import { lineageOf, listConversations, titleOf, wireId } from "./conversations.ts"
 import { readableNdJsonRpc } from "./wire-errors.ts"
 
@@ -129,10 +134,21 @@ export type KernelHarnessService = {
   readonly models: Models
   /** Opened read-only: it shows the home and changes nothing. */
   readonly readOnly: boolean
+  /** The channel to each target its conversations act on. */
+  readonly targets: TargetPool
+  /** The environment of a conversation with this agent state, on its target. */
+  readonly envOf: (agent: { readonly cwd?: string; readonly target?: string }) => ExecutionEnv
+  /** Where a conversation with this agent state works, read through `env`. */
+  readonly workspaceOf: (agent: { readonly cwd?: string; readonly target?: string }, env: ExecutionEnv) => Workspace
 }
 
 export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessService>()("sigma/KernelHarness") {
-  static readonly layer = (home: Home, readOnly: boolean, live: ClaudeLiveOptions) =>
+  static readonly layer = (
+    home: Home,
+    readOnly: boolean,
+    live: ClaudeLiveOptions,
+    connector: ReadonlyArray<string> | undefined,
+  ) =>
     Layer.effect(
       KernelHarness,
       Effect.gen(function* () {
@@ -162,10 +178,44 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         const models = fromProviders(
           [...instances.values()].flatMap((instance) => (instance.provider ? [instance.provider] : [])),
         )
-        const typesOf: AgentTypes = (agent) => agentTypes(agent.model?.provider, agent.cwd ?? home.dir)
+        // A crash leaves the local commands it ran running. They are killed before any run resumes, which would start them
+        // again beside the old copies (D15). The home's lock is held, so none of them is another server's.
+        const commands = new ProcessRegistry(home.processes)
+        if (!readOnly) commands.sweep()
+        // Closed after the harness, so the runs stop before their targets' channels end; ending a channel stops the
+        // target's commands (D7).
+        const targets = yield* Effect.acquireRelease(
+          Effect.sync(() => openTargets(home, connector)),
+          (targets) => targets.close(),
+        )
+        const local = (cwd: string) => new LocalExecutionEnv({ cwd, processes: commands })
+        const homeEnv = local(home.dir)
+        const envOf = (agent: { readonly cwd?: string; readonly target?: string }) => envOn(targets, local, home, agent)
+        const workspaceOf = (
+          agent: { readonly cwd?: string; readonly target?: string },
+          env: ExecutionEnv,
+        ): Workspace => {
+          const target = agent.target
+          return {
+            env,
+            cwd: agent.cwd ?? home.dir,
+            home: { dir: home.dir, env: homeEnv },
+            local: isLocal(target),
+            reachable: isLocal(target) ? Effect.void : Effect.asVoid(targets.connect(target)),
+          }
+        }
+        const typesOf: AgentTypes = (agent, env) =>
+          env === undefined ? Effect.succeed([]) : agentTypes(agent.model?.provider, workspaceOf(agent, env))
         const base = [sigmaTools(images), agentTools(agents, typesOf), codeModeTools(sandbox)]
         for (const extension of base) registry.install(extension)
-        registry.install(workspaceInstructions(home, instances, typesOf))
+        registry.install(
+          workspaceInstructions(
+            instances,
+            (agent, env) => (env === undefined ? undefined : workspaceOf(agent, env)),
+            typesOf,
+          ),
+        )
+        registry.install(targetSection(targets, () => harness))
         // Claude Code has its own tools and subagents, so sigma's built-in ones are not offered to it. The tools the
         // extensions remove are known once they load, below; Claude Code is told not to use its own of them.
         let removedTools: () => ReadonlyArray<string> = () => []
@@ -197,16 +247,12 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
                 }),
               )
             : Effect.void
-        // A crash leaves the local commands it ran running. They are killed before any run resumes, which would start them
-        // again beside the old copies (D15). The home's lock is held, so none of them is another server's.
-        const commands = new ProcessRegistry(home.processes)
-        if (!readOnly) commands.sweep()
-        const harness = yield* Effect.acquireRelease(
+        const harness: Harness = yield* Effect.acquireRelease(
           Effect.flatMap(openSqliteStorage(home.database), (storage) =>
             openHarness(storage, {
               registry,
               models,
-              env: ({ cwd }) => Effect.succeed(new LocalExecutionEnv({ cwd: cwd ?? home.dir, processes: commands })),
+              env: (agent) => Effect.succeed(envOf(agent)),
               runEnded,
               inputWithdrawn,
               viewDocs: [StatusLinesDoc],
@@ -229,7 +275,19 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
         // Loaded before anything runs, so the extensions guard the calls a restart resumes.
         const extensions = yield* openExtensions(home, registry, base, () => harness)
         removedTools = extensions.removed
-        return { home, harness, stoppedTooOften, extensions, status, images, models, readOnly }
+        return {
+          home,
+          harness,
+          stoppedTooOften,
+          extensions,
+          status,
+          images,
+          models,
+          readOnly,
+          targets,
+          envOf,
+          workspaceOf,
+        }
       }).pipe(Effect.orDie),
     )
 }
@@ -289,7 +347,19 @@ const toWindow = (window: Window | undefined): ConversationWindow | undefined =>
 
 const Handlers = SigmaRpcs.toLayer(
   Effect.gen(function* () {
-    const { home, harness, stoppedTooOften, extensions, status, images, models, readOnly } = yield* KernelHarness
+    const {
+      home,
+      harness,
+      stoppedTooOften,
+      extensions,
+      status,
+      images,
+      models,
+      readOnly,
+      targets,
+      envOf,
+      workspaceOf,
+    } = yield* KernelHarness
     const connectionQueue = yield* ConnectionQueue
     const providers = yield* Providers
     const setup = yield* Setup.make(providers.instances, yield* committedSignIns(harness, readOnly))
@@ -375,6 +445,7 @@ const Handlers = SigmaRpcs.toLayer(
 
     const startConversation = (
       cwd: string,
+      target: string | undefined,
       id: string | undefined,
       approvals: "ask" | "auto" | undefined,
       instructions: string | undefined,
@@ -383,8 +454,20 @@ const Handlers = SigmaRpcs.toLayer(
     ) =>
       Effect.gen(function* () {
         yield* writable
+        // A remote target is reached first: one that cannot be reached starts nothing (D4).
+        const remote = isLocal(target) ? undefined : target
+        const hello =
+          remote === undefined
+            ? undefined
+            : yield* targets
+                .connect(remote)
+                .pipe(Effect.mapError((error) => new TargetUnavailable({ target: remote, reason: error.reason })))
         const last = yield* Effect.orDie(harness.session.snapshot(LastModelDoc))
-        const { selection, instance } = yield* providers.choose(cwd, ask, last?.selection)
+        const project = yield* projectDefaultModel(
+          envOf({ cwd, ...(remote === undefined ? {} : { target: remote }) }),
+          cwd,
+        )
+        const { selection, instance } = yield* providers.choose(project, ask, last?.selection)
         const model = yield* agentModel(selection, instance)
         // One commit: a second start with the same id finds the first one's mapping.
         let started: ConversationId | undefined
@@ -392,9 +475,11 @@ const Handlers = SigmaRpcs.toLayer(
           harness.createConversation({
             ownership: { kind: "ownerless" },
             agent: { ...model, cwd, ...(instructions === undefined ? {} : { instructions }) },
+            ...(remote === undefined ? {} : { target: remote }),
             init: (tx, created) =>
               Effect.gen(function* () {
                 started = created
+                if (hello !== undefined) yield* recordTarget(tx, created, remote!, hello)
                 if (approvals === "auto") yield* approveAutomatically(tx, created)
                 if (id !== undefined) (yield* tx.doc(ConversationIdsDoc)).ids[id] = Number(created)
                 ;(yield* tx.doc(LastModelDoc)).selection = { ...selection }
@@ -510,9 +595,10 @@ const Handlers = SigmaRpcs.toLayer(
 
     return SigmaRpcs.of({
       initialize: () => Effect.succeed({ version: VERSION, protocol: PROTOCOL_VERSION, readOnly }),
-      "conversation/start": ({ cwd, id, approvals, instructions, author, ...ask }) =>
+      "conversation/start": ({ cwd, target, id, approvals, instructions, author, ...ask }) =>
         Effect.gen(function* () {
-          if (id === undefined) return yield* startConversation(cwd, undefined, approvals, instructions, ask, author)
+          if (id === undefined)
+            return yield* startConversation(cwd, target, undefined, approvals, instructions, ask, author)
           // A conversation's number opens it, as its chosen id does, and answers with the id every other call names it
           // by; a number that names none is refused below.
           const numbered = kernelNumber(id)
@@ -527,7 +613,8 @@ const Handlers = SigmaRpcs.toLayer(
           return yield* choosing.withPermits(1)(
             Effect.gen(function* () {
               const existing = chosenNumber(yield* Effect.orDie(harness.session.snapshot(ConversationIdsDoc)), id)
-              if (existing === undefined) return yield* startConversation(cwd, id, approvals, instructions, ask, author)
+              if (existing === undefined)
+                return yield* startConversation(cwd, target, id, approvals, instructions, ask, author)
               const agent = yield* Effect.orDie(harness.resolveAgent(idFromNumber<ConversationId>(existing)))
               return { conversation: id, model: selectionOf(agent) }
             }),
@@ -537,9 +624,11 @@ const Handlers = SigmaRpcs.toLayer(
         Effect.gen(function* () {
           const conversation = yield* takingInput(id)
           const agent = yield* agentOf(conversation)
+          const env = envOf(agent)
+          const skills = yield* skillsOf(providers.instances, agent, workspaceOf(agent, env))
           const { content, attached } = userInput(
             text,
-            skillsOf(home, providers.instances, agent),
+            yield* attachedSkills(env, text, skills),
             yield* attachedImages(attaching, images, models, agent),
           )
           const entry = {
@@ -589,7 +678,10 @@ const Handlers = SigmaRpcs.toLayer(
         }),
       ),
       "skills/list": ({ conversation: id }) =>
-        Effect.map(Effect.flatMap(find(id), agentOf), (agent) => [...skillsOf(home, providers.instances, agent)]),
+        Effect.gen(function* () {
+          const agent = yield* agentOf(yield* find(id))
+          return [...(yield* skillsOf(providers.instances, agent, workspaceOf(agent, envOf(agent))))]
+        }),
       "conversation/entries": ({ conversation: id, from, to, order, limit, cursor }) =>
         Effect.gen(function* () {
           const conversation = yield* find(id)
@@ -810,12 +902,17 @@ export const serverLayer = (home: Home, options: ServerOptions) =>
     Layer.provide(readableNdJsonRpc),
     Layer.provide(homeSocketServer(home.socket)),
     Layer.provideMerge(
-      KernelHarness.layer(home, options.readOnly === true, {
-        ...(options.claudeIdle === undefined ? {} : { idle: options.claudeIdle }),
-        ...(options.claudeStop === undefined ? {} : { stop: options.claudeStop }),
-        ...(options.claudeClock === undefined ? {} : { clock: options.claudeClock }),
-        idleCompaction: options.providers.config.claude_idle_compaction !== false,
-      }),
+      KernelHarness.layer(
+        home,
+        options.readOnly === true,
+        {
+          ...(options.claudeIdle === undefined ? {} : { idle: options.claudeIdle }),
+          ...(options.claudeStop === undefined ? {} : { stop: options.claudeStop }),
+          ...(options.claudeClock === undefined ? {} : { clock: options.claudeClock }),
+          idleCompaction: options.providers.config.claude_idle_compaction !== false,
+        },
+        options.providers.config.target_connector,
+      ),
     ),
     Layer.provideMerge(
       Providers.layer(

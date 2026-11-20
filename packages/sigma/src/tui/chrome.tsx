@@ -56,6 +56,8 @@ export interface Screen {
   /** The conversation it was forked from, and that one's title. */
   readonly fork?: { readonly of: string; readonly title?: string | undefined } | undefined
   readonly cwd: string | undefined
+  /** The computer its tools act on, when it is not the server's own. */
+  readonly target: string | undefined
   readonly model: ModelSelection | undefined
   readonly status: TreeStatus["status"]
   readonly workingSince: number | undefined
@@ -268,7 +270,13 @@ const Header = (props: { screen: Screen }) => (
         </text>
       )}
     </Show>
-    <Show when={props.screen.cwd}>{(cwd) => <text fg={color.dim} flexShrink={1}>{`  ${cwd()}`}</text>}</Show>
+    <Show when={props.screen.cwd}>
+      {(cwd) => (
+        <text fg={color.dim} flexShrink={1}>
+          {props.screen.target === undefined ? `  ${cwd()}` : `  on ${props.screen.target}  ${cwd()}`}
+        </text>
+      )}
+    </Show>
   </box>
 )
 

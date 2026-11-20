@@ -297,6 +297,7 @@ export function resolveAgent<T extends ToolRegistration>(
     sections: agentSections,
     ...(instructions === undefined ? {} : { instructions }),
     ...(state?.cwd === undefined ? {} : { cwd: state.cwd }),
+    ...(state?.target === undefined ? {} : { target: state.target }),
     ...(state?.maxTurns === undefined ? {} : { maxTurns: state.maxTurns }),
     ...(state?.compaction === undefined ? {} : { compaction: state.compaction }),
   }

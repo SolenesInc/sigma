@@ -186,6 +186,11 @@ lists when a change touches them.
   session; `/usage` and `usage/get` show cached input.
 - [Slash commands](./commands.md) (people): `/help` lists the TUI's commands in
   a panel; a line naming no command goes to the model.
+- [Targets](./targets.md) (people, agents, triggers): `--target` and
+  `conversation/start`'s `target` run a conversation's tools, its subagents'
+  and its forks' on another computer through the home's `target_connector`;
+  the TUI shows the target, a restarted or replaced instance is announced, and
+  a lost one fails its calls while the run goes on.
 - [Status and chosen ids](./status.md) (agents): `status/watch` follows every tree's
   status and how its runs end, a conversation says how its last run ended, and
   `conversation/start` takes a chosen `id`.

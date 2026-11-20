@@ -1,8 +1,10 @@
 // The wire: a real server in process, driven as a raw JSON-RPC client over its socket.
 import { expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { homeWithExtensions } from "./support/extensions.ts"
+import { TestTargets } from "./support/targets.ts"
+import type { ScriptStep } from "@sigma/models"
 import { deadline, errorTag, hangUpMidAnswer, RawClient } from "./support/raw.ts"
 import {
   person,
@@ -1574,6 +1576,7 @@ type Listed = {
   number: number
   title?: string
   cwd: string
+  target: string
   model: { provider: string; model?: string; effort?: string }
   approvals: string
   lineage?: Record<string, string>
@@ -1628,6 +1631,7 @@ test("subagent-spawn, subagent-model: conversation/list shows each subagent with
       number: expect.any(Number),
       title: "delegate",
       cwd: server.home.dir,
+      target: "local",
       model: { provider: "script", model: "script" },
       approvals: "ask",
       instructions: "Be brief.",
@@ -1638,6 +1642,7 @@ test("subagent-spawn, subagent-model: conversation/list shows each subagent with
       number: Number(spawned(view, "/root/same")),
       title: "same",
       cwd: server.home.dir,
+      target: "local",
       model: { provider: "script", model: "script" },
       approvals: "ask",
       lineage: { parent: "lead", root: "lead", call: calls[0]!, title: "same", task: "/root/same" },
@@ -1648,6 +1653,7 @@ test("subagent-spawn, subagent-model: conversation/list shows each subagent with
       number: Number(spawned(view, "/root/other")),
       title: "other",
       cwd: server.home.dir,
+      target: "local",
       model: { provider: "script", model: "script-code-mode" },
       approvals: "ask",
       lineage: { parent: "lead", root: "lead", call: calls[1]!, title: "other", task: "/root/other" },
@@ -2646,3 +2652,214 @@ test("serve-read-only: a read-only server shows a home's conversations without r
     rmSync(home.dir, { recursive: true, force: true })
   }
 })
+
+/** A server whose home reaches `targets` through their test connector. */
+const targetServer = (targets: TestTargets, script: ReadonlyArray<ScriptStep>) =>
+  runningServer(script, { config: { target_connector: targets.connector } })
+
+const startOn = async (client: RawClient, target: string, cwd: string, extra: Record<string, unknown> = {}) =>
+  client.call("conversation/start", { cwd, target, author: person("ada"), approvals: "auto", ...extra })
+
+const listed = async (client: RawClient) =>
+  (await client.call("conversation/list")).result as Array<{ id: string; target: string; cwd: string }>
+
+test("target-start: a conversation started on a target runs its tools on the target's instance, in the target's folder", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box", "box-1")
+  await using server = await targetServer(targets, [
+    { tool: { name: "bash", input: { command: 'echo "$SIGMA_TARGET_INSTANCE" > made; pwd' } } },
+    { text: "made it" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = (await startOn(client, "box", work, { id: "on-box" })).result.conversation as string
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "make a file")
+  await view.until(settled(1))
+  expect(toolResults(view)).toEqual([{ text: `${work}\n`, isError: false }])
+  // Written by a command that ran under the target's sigma-env, and not where the server runs.
+  expect(readFileSync(join(work, "made"), "utf8")).toBe("box-1\n")
+  expect(existsSync(join(process.cwd(), "made"))).toBe(false)
+  expect((await listed(client)).map(({ id, target, cwd }) => ({ id, target, cwd }))).toEqual([
+    { id: "on-box", target: "box", cwd: work },
+  ])
+  // An id that names a conversation keeps its target.
+  const again = await startOn(client, "elsewhere", "/nowhere", { id: "on-box" })
+  expect(again.result.conversation).toBe("on-box")
+  expect((await listed(client)).map(({ target }) => target)).toEqual(["box"])
+  client.close()
+})
+
+test("target-start: a conversation started without a target is local, as conversation/list says", async () => {
+  await using server = await runningServer([])
+  const client = await RawClient.connect(server.home.socket)
+  await start(client, server.home.dir)
+  expect((await listed(client)).map(({ target }) => target)).toEqual(["local"])
+  client.close()
+})
+
+test("target-unavailable: a start on a target its connector cannot reach fails with the connector's reason and creates nothing", async () => {
+  using targets = new TestTargets()
+  await using server = await targetServer(targets, [])
+  const client = await RawClient.connect(server.home.socket)
+  const refused = await startOn(client, "nope", "/work", { id: "never" })
+  expect(errorTag(refused)).toBe("TargetUnavailable")
+  const failure = refused.error!.data.find((each) => each._tag === "Fail")!.error as unknown as {
+    target: string
+    reason: string
+  }
+  expect(failure).toMatchObject({ target: "nope", reason: "connector exited 3: no target named nope" })
+  expect(await listed(client)).toEqual([])
+  client.close()
+})
+
+test("target-unavailable: a home with no target_connector refuses a remote start, naming the setting", async () => {
+  await using server = await runningServer([])
+  const client = await RawClient.connect(server.home.socket)
+  const refused = await startOn(client, "box", "/work")
+  expect(errorTag(refused)).toBe("TargetUnavailable")
+  const failure = refused.error!.data.find((each) => each._tag === "Fail")!.error as unknown as { reason: string }
+  expect(failure.reason).toBe(
+    `this home has no target_connector in ${join(server.home.dir, "config.toml")}; whatever runs sigma sets it to the command that reaches a target`,
+  )
+  expect(await listed(client)).toEqual([])
+  client.close()
+})
+
+type TargetChange = { target: string; from: Record<string, string>; to: Record<string, string>; filesKept: boolean }
+const targetChanges = (watch: ViewWatch) =>
+  watch
+    .seen()
+    .filter((entry) => entry.kind === "sigma.target_changed")
+    .map((entry) => entry.data as TargetChange)
+
+/** The text of each system entry's `target` section, as the model is told it. */
+const targetNotices = (watch: ViewWatch) =>
+  watch.seen().flatMap((entry) => {
+    const message = entry.model?.[0] as { role?: string; sections?: Record<string, string> } | undefined
+    return message?.role === "system" && message.sections?.target !== undefined ? [message.sections.target] : []
+  })
+
+/**
+ * A run whose first call stops the target's sigma-env after giving it new ids, as a restarted or replaced instance
+ * would; the run's next request reaches the new one.
+ */
+const changeInstance = async (instance: string, files: string) => {
+  const targets = new TestTargets()
+  const work = targets.add("box", "box-1", "vol-1")
+  const server = await targetServer(targets, [
+    {
+      tool: {
+        name: "bash",
+        input: { command: `echo ${instance} > ../instance; echo ${files} > ../files; ${targets.killCommand("box")}` },
+      },
+    },
+    { text: "noted" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = (await startOn(client, "box", work)).result.conversation as string
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "go")
+  await view.until(settled(1))
+  return {
+    view,
+    async [Symbol.asyncDispose]() {
+      client.close()
+      await server[Symbol.asyncDispose]()
+      targets[Symbol.dispose]()
+    },
+  }
+}
+
+test("target-restarted: a new instance on the same files is committed as sigma.target_changed, and the model is told its files are kept before its next request", async () => {
+  await using run = await changeInstance("box-2", "vol-1")
+  expect(targetChanges(run.view)).toEqual([
+    {
+      target: "box",
+      from: { instance: "box-1", files: "vol-1" },
+      to: { instance: "box-2", files: "vol-1" },
+      filesKept: true,
+    },
+  ])
+  expect(targetNotices(run.view)).toEqual([
+    "The computer behind this conversation restarted (now instance box-2). Your files are as you left them; processes you started are gone.",
+  ])
+  // Announced after the call that lost the instance, before the model's answer.
+  const kinds = run.view.seen().map((entry) => entry.kind)
+  expect(kinds.indexOf("sigma.target_changed")).toBeGreaterThan(kinds.indexOf("pi.tool-result"))
+  expect(kinds.lastIndexOf("pi.system")).toBeLessThan(kinds.lastIndexOf("pi.assistant"))
+  expect(transcript(run.view.seen()).slice(-2)).toEqual(["assistant: noted", "run_end: answered"])
+})
+
+test("target-replaced: a new instance on new files is committed with filesKept false, and the model is told what is gone", async () => {
+  await using run = await changeInstance("box-9", "vol-9")
+  expect(targetChanges(run.view)).toEqual([
+    {
+      target: "box",
+      from: { instance: "box-1", files: "vol-1" },
+      to: { instance: "box-9", files: "vol-9" },
+      filesKept: false,
+    },
+  ])
+  expect(targetNotices(run.view)).toEqual([
+    "The computer behind this conversation was replaced (now instance box-9). Files, processes and changes from before are gone.",
+  ])
+})
+
+test("target-lost: a call on a target that is gone fails with the connector's reason, and the run goes on to the model's next step", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box")
+  await using server = await targetServer(targets, [
+    { tool: { name: "bash", input: { command: `rm ../instance; ${targets.killCommand("box")}` } } },
+    { tool: { name: "bash", input: { command: "echo still here" } } },
+    { text: "the target is gone; reporting it" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = (await startOn(client, "box", work)).result.conversation as string
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "go")
+  await view.until(settled(1))
+  expect(toolResults(view)).toEqual([
+    { text: expect.stringContaining("target box unavailable: connector exited SIGKILL"), isError: true },
+    { text: expect.stringContaining("target box unavailable: connector exited 3: no target named box"), isError: true },
+  ])
+  expect(targetChanges(view)).toEqual([])
+  expect(transcript(view.seen()).slice(-2)).toEqual([
+    "assistant: the target is gone; reporting it",
+    "run_end: answered",
+  ])
+  client.close()
+})
+
+test("target-subagent-fork: a subagent's calls and a fork's calls act on their parent's target", async () => {
+  using targets = new TestTargets()
+  const work = targets.add("box", "box-1")
+  const where = { tool: { name: "bash", input: { command: 'echo "$SIGMA_TARGET_INSTANCE $PWD"' } } }
+  await using server = await targetServer(targets, [
+    call("spawn_agent", { task_name: "helper", message: "look around", fork_turns: "none" }),
+    call("wait_agent", { timeout_ms: 600_000 }),
+    { ...where, agent: "/root/helper" },
+    { text: "looked", agent: "/root/helper" },
+    { text: "helper looked" },
+    where,
+    { text: "the fork looked" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  const conversation = (await startOn(client, "box", work)).result.conversation as string
+  const view = watchView(client, conversation)
+  await submit(client, conversation, "delegate")
+  await view.until(settled(1), 20_000)
+  const helper = watchView(client, spawned(view, "/root/helper"))
+  await helper.until(settled(1))
+  expect(toolResults(helper)).toEqual([{ text: `box-1 ${work}\n`, isError: false }])
+
+  const at = view.seen().findLast((entry) => entry.kind === "sigma.run_end")!.id
+  const fork = (await client.call("conversation/fork", { author: person("ada"), conversation, at })).result
+    .conversation as string
+  const forked = watchView(client, fork)
+  await submit(client, fork, "look yourself")
+  await forked.until(settled(2))
+  expect(toolResults(forked).at(-1)).toEqual({ text: `box-1 ${work}\n`, isError: false })
+  const targetOf = async (id: string) => (await listed(client)).find((each) => each.id === id)!.target
+  expect([await targetOf(spawned(view, "/root/helper")), await targetOf(fork)]).toEqual(["box", "box"])
+  client.close()
+}, 30_000)

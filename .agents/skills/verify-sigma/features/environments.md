@@ -45,7 +45,7 @@ Feature ledger area N: spec §7.3; README Environment; example 28-sandbox-per-co
   needs the spill path of an interrupted command passes `onSpill`.
 - `@sigma/env/remote` is the client: `TargetPool` keeps one channel per target, opened by a `connect` the server
   supplies, and `pool.env(target, cwd)` is a view over it. `@sigma/env/agent` is `sigma-env`, built by
-  `bun scripts/sigma-env.ts`. Nothing in the server uses them yet; the conversation binding comes with targets.
+  `bun scripts/sigma-env.ts`. The server builds a remote conversation's environment as such a view ([Targets](./targets.md)).
 - `search` is optional in the interface; grep uses it when present, so a remote grep is one call, and walks otherwise.
 - `listFiles` is optional in the interface, and the local environment does not implement it, as upstream's does not;
   its conformance cases run only for an environment that does.

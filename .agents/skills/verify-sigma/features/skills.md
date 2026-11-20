@@ -41,8 +41,10 @@ scripted conversations list none and carry none.
   after the `AGENTS.md` files. Only a signed-in run shows the model taking
   them.
 - `agents-md` tells ChatGPT `SIGMA_HOME/AGENTS.md`, then the `AGENTS.md` (or
-  `AGENTS.override.md` instead) of each folder from the repository's root down
-  to the conversation's directory, up to 32 KiB in all, then the skill list.
+  `AGENTS.override.md` instead, or `CLAUDE.md` in a folder with neither) of
+  each folder from the repository's root down to the conversation's
+  directory, up to 32 KiB in all, then the skill list. On a target, the
+  folders are the target's ([Targets](./targets.md)).
   Only a ChatGPT run shows it.
 
 ## How to get to it
@@ -50,7 +52,7 @@ scripted conversations list none and carry none.
 ### People
 
 - Put skills in `<repo>/.agents/skills/<name>/SKILL.md`, `<repo>/.claude/skills/<name>/SKILL.md`, the same under any folder between the repository's root and the conversation's directory, or `SIGMA_HOME/skills/<name>/SKILL.md`.
-- Put instructions in `SIGMA_HOME/AGENTS.md` and in `AGENTS.md` or `AGENTS.override.md` in the repository's folders.
+- Put instructions in `SIGMA_HOME/AGENTS.md` and in `AGENTS.md`, `AGENTS.override.md` or `CLAUDE.md` in the repository's folders.
 - In an OpenAI conversation, type a message in the TUI that starts with `/name` or holds `$name`.
 - Run `sigma --instructions '<text>'`.
 - The TUI has no skill completion or listing; `skills/list` is the list.

@@ -130,8 +130,10 @@ export type Report = ReportInfo & { readonly error: unknown }
 /** What the environment builder gets. */
 export type EnvTarget = {
   readonly conversationId: ConversationId
-  /** The conversation's agent `cwd`. */
+  /** The conversation's agent `cwd`, a path on `target`. */
   readonly cwd?: string
+  /** The computer its tools act on; absent for `local`. */
+  readonly target?: string
   readonly read: DocumentReader
 }
 
@@ -142,6 +144,11 @@ export type ConversationCreateOptions = {
   readonly ownership: ConversationOwnership
   /** Applied in the creating commit after the creation hook's copy, before `init`. */
   readonly agent?: AgentChange
+  /**
+   * The computer its tools act on, written in the creating commit; no later change can set it. A fork and a subagent
+   * get their parent's.
+   */
+  readonly target?: string
   readonly init?: ConversationInit
 }
 
@@ -655,6 +662,7 @@ class HarnessHost<T extends ToolRegistration> implements Harness<T> {
                 ? yield* tx.forkConversation(target.parentId, target.at, { ownership: target.ownership })
                 : yield* tx.createConversation({ ownership: target.ownership })
           if (options.agent !== undefined) yield* configure(tx, record.id, options.agent)
+          if (options.target !== undefined) (yield* tx.doc(AgentDoc, record.id)).target = options.target
           if (options.init !== undefined) yield* options.init(tx, record.id)
           return record.id
         }),
@@ -864,6 +872,7 @@ class HarnessHost<T extends ToolRegistration> implements Harness<T> {
       build({
         conversationId,
         ...(state?.cwd === undefined ? {} : { cwd: state.cwd }),
+        ...(state?.target === undefined ? {} : { target: state.target }),
         read: { snapshot: (token, ...address) => session.snapshot(token, ...address) },
       }),
     )

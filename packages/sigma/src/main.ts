@@ -1,9 +1,10 @@
 #!/usr/bin/env -S BUN_GC_TIMER_DISABLE=1 bun
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { Console, Effect, Layer, Option } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
-import type { ExtensionInfo } from "@sigma/protocol"
+import { type ExtensionInfo, LOCAL_TARGET } from "@sigma/protocol"
 import { Client, clientLayer, REFUSAL_FILE, ServerFailed, serverAnswers, type StartOptions } from "./client.ts"
 import { exec } from "./exec.ts"
 import { claimHome, defaultHome, HOME_TAKEN_EXIT, type Home, type HomeTaken, replaceServer } from "./home.ts"
@@ -47,7 +48,21 @@ const instructionsFlag = Flag.String("instructions").pipe(
   Flag.optional,
 )
 
+const targetFlag = Flag.String("target").pipe(
+  Flag.withDescription(
+    "Start the conversation on this target, as the home's target_connector names it: its tools act on that computer",
+  ),
+  Flag.optional,
+)
+
+const cwdFlag = Flag.String("cwd").pipe(
+  Flag.withDescription("Start the conversation in this folder, a path on its target; default the current folder"),
+  Flag.optional,
+)
+
 const startFlags = {
+  target: targetFlag,
+  cwd: cwdFlag,
   auto: autoFlag,
   provider: providerFlag,
   model: modelFlag,
@@ -56,12 +71,20 @@ const startFlags = {
 }
 
 const startWith = (flags: {
+  readonly target: Option.Option<string>
+  readonly cwd: Option.Option<string>
   readonly auto: boolean
   readonly provider: Option.Option<string>
   readonly model: Option.Option<string>
   readonly effort: Option.Option<string>
   readonly instructions: Option.Option<string>
 }): StartOptions => ({
+  ...Option.match(flags.target, { onNone: () => ({}), onSome: (target) => ({ target }) }),
+  // A local folder is the one the person means from here; a path on another computer is taken as given.
+  ...Option.match(flags.cwd, {
+    onNone: () => ({}),
+    onSome: (cwd) => ({ cwd: Option.isNone(flags.target) || flags.target.value === LOCAL_TARGET ? resolve(cwd) : cwd }),
+  }),
   ...(flags.auto ? { approvals: "auto" as const } : {}),
   ...Option.match(flags.provider, { onNone: () => ({}), onSome: (provider) => ({ provider }) }),
   ...Option.match(flags.model, { onNone: () => ({}), onSome: (model) => ({ model }) }),

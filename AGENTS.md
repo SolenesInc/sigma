@@ -45,6 +45,29 @@ conversation            one transcript and the work done in it; like one chat
 ```
 
 ```text
+target                  the computer a conversation's tools act on, named by
+│                       an opaque id fixed at start; `local` is the server's
+│                       own machine, the default
+├─ instance (1 at a time) the machine or container behind the target now; it
+│                       can restart or be replaced
+├─ files                the storage behind the conversation's working folder;
+│                       a restart keeps it, a replacement does not
+└─ sigma-env            sigma's program on the instance; it runs the
+                        conversation's file and shell calls
+```
+
+```text
+connector               the command, set by whatever runs sigma, that opens a
+                        pipe from the server to a target's current instance
+remote conversation     a conversation whose target is not `local`
+member mode             how a remote conversation runs Claude Code: its own
+                        tools off, acting only through sigma's tools
+```
+
+A conversation's subagents and forks share its target. Sigma does not name who
+provides a target, or what kind of host it is.
+
+```text
 commit                  one atomic write to the store; the only way state
                         changes, and what clients are shown
 task                    durable work the kernel runs in phases, each safe to

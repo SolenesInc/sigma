@@ -2,14 +2,20 @@
 // ChatGPT conversation is told of them, as a prompt section the harness renders before each request and commits when
 // it changes. Claude Code reads its own `CLAUDE.md` files and skills, and a script reads nothing, so their
 // conversations get none.
+//
+// The project's files are read through the conversation's environment, so a remote conversation is told what its
+// target holds, never what the home has at the same path (D11). What is the home's own, its `AGENTS.md`, its skills
+// and the Claude Code agent types, is read from the home; a remote conversation gets only the `AGENTS.md`, since its
+// tools cannot read a file on the home and it takes nothing of the person's `~/.claude` (Q3).
 import { defineExtension } from "@sigma/harness"
+import type { ExecutionEnv } from "@sigma/env"
 import type { ImageContent, ProviderInstance, TextContent } from "@sigma/models"
 import { Effect } from "effect"
-import type { Home } from "./home.ts"
 import type { AgentTypes } from "./agents.ts"
 import type { AttachedSkill, Skill } from "@sigma/protocol"
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { basename, dirname, join } from "node:path"
+import { posix } from "node:path"
+
+const { basename, dirname, join } = posix
 
 export const AGENTS_MD_LIMIT = 32 * 1024
 
@@ -18,47 +24,91 @@ export interface AgentsMd {
   readonly text: string
 }
 
-const read = (path: string) => {
-  try {
-    return readFileSync(path, "utf8")
-  } catch {
-    return undefined
-  }
+/**
+ * Where a conversation's instructions come from: `env` at `cwd`, a path on its target, and the home's own files
+ * through `home`, the home's environment. `local` when the conversation's tools act on the home, so they can read the
+ * home's skills too.
+ */
+export interface Workspace {
+  readonly env: ExecutionEnv
+  readonly cwd: string
+  readonly home: { readonly dir: string; readonly env: ExecutionEnv }
+  readonly local: boolean
+  /** Fails when the target cannot be reached now, so a file that cannot be read is one that is not there. */
+  readonly reachable: Effect.Effect<void, unknown>
 }
 
-const isFile = (path: string) => {
-  try {
-    return statSync(path).isFile()
-  } catch {
-    return false
-  }
-}
+const all = <A>(effects: Iterable<Effect.Effect<A>>) => Effect.all(effects, { concurrency: "unbounded" })
 
-const projectDirs = (cwd: string): Array<string> => {
-  const dirs: Array<string> = []
-  for (let dir = cwd; ; dir = dirname(dir)) {
-    dirs.push(dir)
-    if (existsSync(join(dir, ".git"))) return dirs.reverse()
-    if (dirname(dir) === dir) return [cwd]
-  }
-}
+/** The file's text, or `undefined` when it cannot be read. */
+const read = (env: ExecutionEnv, path: string) =>
+  env.readTextFile(path).pipe(Effect.orElseSucceed(() => undefined as string | undefined))
 
-export const agentsMd = (cwd: string, home: string): Array<AgentsMd> => {
-  const project = projectDirs(cwd).map((dir) =>
-    isFile(join(dir, "AGENTS.override.md")) ? join(dir, "AGENTS.override.md") : join(dir, "AGENTS.md"),
+const folders = (env: ExecutionEnv, root: string) =>
+  env.listDir(root).pipe(
+    Effect.map((entries) => entries.map((entry) => join(root, entry.name))),
+    Effect.orElseSucceed((): Array<string> => []),
   )
-  let room = AGENTS_MD_LIMIT
-  const files: Array<AgentsMd> = []
-  for (const path of [join(home, "AGENTS.md"), ...project]) {
-    if (room === 0) break
-    const text = read(path)
-    if (text === undefined || text.trim() === "") continue
-    const kept = Buffer.from(text).subarray(0, room).toString("utf8").replace(/�$/, "")
-    room -= Buffer.byteLength(kept)
-    files.push({ path, text: kept })
+
+/**
+ * The folders from the repository's root down to `cwd`, or just `cwd` outside a repository. Every ancestor is asked at
+ * once, so a remote one costs one round trip.
+ */
+const projectDirs = (env: ExecutionEnv, cwd: string): Effect.Effect<Array<string>> => {
+  const ancestors: Array<string> = []
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    ancestors.push(dir)
+    if (dirname(dir) === dir) break
   }
-  return files
+  return Effect.map(
+    all(ancestors.map((dir) => env.exists(join(dir, ".git")).pipe(Effect.orElseSucceed(() => false)))),
+    (found) => {
+      const root = found.indexOf(true)
+      return root === -1 ? [cwd] : ancestors.slice(0, root + 1).reverse()
+    },
+  )
 }
+
+/**
+ * The instructions file of each project folder: `AGENTS.override.md`, else `AGENTS.md`, else `CLAUDE.md` for a
+ * repository that has only that (F23).
+ */
+const INSTRUCTION_FILES = ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"]
+
+/** The home's `AGENTS.md`, then each project folder's instructions file, within `AGENTS_MD_LIMIT` together. */
+export const agentsMd = (workspace: Workspace): Effect.Effect<Array<AgentsMd>> =>
+  Effect.gen(function* () {
+    const { env, cwd, home } = workspace
+    const homePath = join(home.dir, "AGENTS.md")
+    const dirs = yield* projectDirs(env, cwd)
+    const [homeText, project] = yield* Effect.all(
+      [
+        read(home.env, homePath),
+        all(
+          dirs.map((dir) =>
+            Effect.map(all(INSTRUCTION_FILES.map((name) => read(env, join(dir, name)))), (texts) => {
+              const at = texts.findIndex((text) => text !== undefined)
+              return at === -1 ? undefined : { path: join(dir, INSTRUCTION_FILES[at]!), text: texts[at]! }
+            }),
+          ),
+        ),
+      ],
+      { concurrency: "unbounded" },
+    )
+    let room = AGENTS_MD_LIMIT
+    const files: Array<AgentsMd> = []
+    for (const file of [homeText === undefined ? undefined : { path: homePath, text: homeText }, ...project]) {
+      if (room === 0) break
+      if (file === undefined || file.text.trim() === "") continue
+      const kept = Buffer.from(file.text)
+        .subarray(0, room)
+        .toString("utf8")
+        .replace(/\uFFFD$/, "")
+      room -= Buffer.byteLength(kept)
+      files.push({ path: file.path, text: kept })
+    }
+    return files
+  })
 
 const BLOCK_SCALARS = new Set(["|", ">", "|-", ">-", "|+", ">+"])
 
@@ -93,36 +143,40 @@ const afterFrontmatter = (text: string) => {
   return end < 0 ? "" : lines.slice(end + 1).join("\n")
 }
 
-const readSkill = (folder: string): Skill | undefined => {
+const readSkill = (env: ExecutionEnv, folder: string): Effect.Effect<Skill | undefined> => {
   const path = join(folder, "SKILL.md")
-  const text = read(path)
-  if (text === undefined) return undefined
-  const fields = frontmatter(text)
-  return { name: fields.get("name") || basename(folder), description: fields.get("description") ?? "", path }
+  return Effect.map(read(env, path), (text) => {
+    if (text === undefined) return undefined
+    const fields = frontmatter(text)
+    return { name: fields.get("name") || basename(folder), description: fields.get("description") ?? "", path }
+  })
 }
 
-const folders = (root: string) => {
-  try {
-    return readdirSync(root).map((name) => join(root, name))
-  } catch {
-    return []
-  }
-}
+/** The skills in each of `roots` through `env`, read at once, in the order of `roots`. */
+const skillsIn = (env: ExecutionEnv, roots: ReadonlyArray<string>) =>
+  Effect.flatMap(all(roots.map((root) => folders(env, root))), (found) =>
+    all(found.flat().map((folder) => readSkill(env, folder))),
+  )
 
-export const skillsFor = (cwd: string, home: string): Array<Skill> => {
-  const roots = [
-    ...projectDirs(cwd)
-      .reverse()
-      .flatMap((dir) => [join(dir, ".agents", "skills"), join(dir, ".claude", "skills")]),
-    join(home, "skills"),
-  ]
-  const skills = new Map<string, Skill>()
-  for (const folder of roots.flatMap(folders)) {
-    const skill = readSkill(folder)
-    if (skill && !skills.has(skill.name)) skills.set(skill.name, skill)
-  }
-  return [...skills.values()].sort((a, b) => a.name.localeCompare(b.name))
-}
+/** The skills a conversation can use, nearest first by name: the project's, then the home's for a local one. */
+export const skillsFor = (workspace: Workspace): Effect.Effect<Array<Skill>> =>
+  Effect.gen(function* () {
+    const { env, cwd, home, local } = workspace
+    const dirs = (yield* projectDirs(env, cwd)).reverse()
+    const [project, own] = yield* Effect.all(
+      [
+        skillsIn(
+          env,
+          dirs.flatMap((dir) => [join(dir, ".agents", "skills"), join(dir, ".claude", "skills")]),
+        ),
+        local ? skillsIn(home.env, [join(home.dir, "skills")]) : Effect.succeed([]),
+      ],
+      { concurrency: "unbounded" },
+    )
+    const skills = new Map<string, Skill>()
+    for (const skill of [...project, ...own]) if (skill && !skills.has(skill.name)) skills.set(skill.name, skill)
+    return [...skills.values()].sort((a, b) => a.name.localeCompare(b.name))
+  })
 
 const skillsHeading = (read: string) => `# Skills
 
@@ -130,39 +184,42 @@ A skill is a folder of instructions for one kind of task, in a \`SKILL.md\` file
 
 `
 
-/** What ChatGPT is told of the `AGENTS.md` files of a conversation in `cwd`: one block each, or `""`. */
-export const agentsMdInstructions = (cwd: string, home: string) =>
-  agentsMd(cwd, home)
-    .map((file) => `\n# AGENTS.md instructions from ${file.path}\n\n${file.text.trimEnd()}\n`)
-    .join("")
+/** What ChatGPT is told of the `AGENTS.md` files of a conversation: one block each, or `""`. */
+const agentsMdInstructions = (files: ReadonlyArray<AgentsMd>) =>
+  files.map((file) => `\n# AGENTS.md instructions from ${file.path}\n\n${file.text.trimEnd()}\n`).join("")
 
 /**
- * What ChatGPT is told of the skills a conversation in `cwd` can use, or `""` when it has none. `read` names the tool
- * that reads a file, as the server offers it.
+ * What ChatGPT is told of the skills a conversation can use, or `""` when it has none. `read` names the tool that reads
+ * a file, as the server offers it.
  */
-export const skillsInstructions = (cwd: string, home: string, read: string) => {
-  const skills = skillsFor(cwd, home)
-  return skills.length === 0
+const skillsInstructions = (skills: ReadonlyArray<Skill>, read: string) =>
+  skills.length === 0
     ? ""
     : `\n${skillsHeading(read)}${skills.map((skill) => `- ${skill.name}: ${skill.description} (file: ${skill.path})\n`).join("")}`
-}
 
 const skillName = (text: string) => (text.match(/^[\p{L}\p{N}\-_.:]*/u)?.[0] ?? "").replace(/[.:]+$/, "")
 
-export const attachedSkills = (text: string, skills: ReadonlyArray<Skill>): Array<AttachedSkill> => {
+/** The skills `text` names, each with its `SKILL.md` read through `env` now. */
+export const attachedSkills = (
+  env: ExecutionEnv,
+  text: string,
+  skills: ReadonlyArray<Skill>,
+): Effect.Effect<Array<AttachedSkill>> => {
   const trimmed = text.trimStart()
   const names = [
     ...(trimmed.startsWith("/") ? [skillName(trimmed.slice(1))] : []),
     ...[...trimmed.matchAll(/\$/g)].map((match) => skillName(trimmed.slice(match.index + 1))),
   ]
-  const attached: Array<AttachedSkill> = []
+  const named: Array<Skill> = []
   for (const name of names) {
     const skill = skills.find((known) => known.name === name)
-    if (!skill || attached.some((done) => done.name === name)) continue
-    const skillText = read(skill.path)
-    if (skillText !== undefined) attached.push({ name: skill.name, path: skill.path, text: skillText })
+    if (skill && !named.includes(skill)) named.push(skill)
   }
-  return attached
+  return Effect.map(all(named.map((skill) => read(env, skill.path))), (texts) =>
+    named.flatMap((skill, at) =>
+      texts[at] === undefined ? [] : [{ name: skill.name, path: skill.path, text: texts[at]! }],
+    ),
+  )
 }
 
 export interface AgentType {
@@ -172,37 +229,53 @@ export interface AgentType {
   readonly instructions: string
 }
 
-const readAgentType = (path: string): AgentType | undefined => {
-  const text = read(path)
-  if (text === undefined) return undefined
-  const fields = frontmatter(text)
-  const model = fields.get("model")
-  return {
-    name: fields.get("name") || basename(path, ".md"),
-    description: fields.get("description") ?? "",
-    ...(model ? { model } : {}),
-    instructions: afterFrontmatter(text).trim(),
-  }
-}
-
-export const agentTypes = (cwd: string, claudeConfig: string): Array<AgentType> => {
-  const roots = [
-    ...projectDirs(cwd)
-      .reverse()
-      .map((dir) => join(dir, ".claude", "agents")),
-    join(claudeConfig, "agents"),
-  ]
-  const types = new Map<string, AgentType>()
-  for (const root of roots) {
-    for (const path of folders(root)
-      .filter((path) => path.endsWith(".md"))
-      .sort()) {
-      const type = readAgentType(path)
-      if (type && !types.has(type.name)) types.set(type.name, type)
+const readAgentType = (env: ExecutionEnv, path: string): Effect.Effect<AgentType | undefined> =>
+  Effect.map(read(env, path), (text) => {
+    if (text === undefined) return undefined
+    const fields = frontmatter(text)
+    const model = fields.get("model")
+    return {
+      name: fields.get("name") || basename(path, ".md"),
+      description: fields.get("description") ?? "",
+      ...(model ? { model } : {}),
+      instructions: afterFrontmatter(text).trim(),
     }
-  }
-  return [...types.values()].sort((a, b) => a.name.localeCompare(b.name))
-}
+  })
+
+const typesIn = (env: ExecutionEnv, roots: ReadonlyArray<string>) =>
+  Effect.flatMap(all(roots.map((root) => folders(env, root))), (found) =>
+    all(
+      found.flatMap((paths) =>
+        paths
+          .filter((path) => path.endsWith(".md"))
+          .sort()
+          .map((path) => readAgentType(env, path)),
+      ),
+    ),
+  )
+
+/**
+ * The agent types a ChatGPT conversation can spawn, nearest first by name: the project's `.claude/agents`, then a
+ * local conversation's in `claudeConfig`, Claude Code's config folder on the home.
+ */
+export const agentTypes = (workspace: Workspace, claudeConfig: string): Effect.Effect<Array<AgentType>> =>
+  Effect.gen(function* () {
+    const { env, cwd, home, local } = workspace
+    const dirs = (yield* projectDirs(env, cwd)).reverse()
+    const [project, own] = yield* Effect.all(
+      [
+        typesIn(
+          env,
+          dirs.map((dir) => join(dir, ".claude", "agents")),
+        ),
+        local ? typesIn(home.env, [join(claudeConfig, "agents")]) : Effect.succeed([]),
+      ],
+      { concurrency: "unbounded" },
+    )
+    const types = new Map<string, AgentType>()
+    for (const type of [...project, ...own]) if (type && !types.has(type.name)) types.set(type.name, type)
+    return [...types.values()].sort((a, b) => a.name.localeCompare(b.name))
+  })
 
 /** What ChatGPT is told of the agent types `spawn_agent` takes, or `""` when there are none. */
 const agentTypesInstructions = (types: ReadonlyArray<AgentType>) =>
@@ -210,9 +283,15 @@ const agentTypesInstructions = (types: ReadonlyArray<AgentType>) =>
     ? ""
     : `\n# Agent types\n\nThe agent types \`spawn_agent\` takes as \`agent_type\`:\n${types.map((type) => `- ${type.name}: ${type.description}\n`).join("")}`
 
+/** Where a conversation with this agent state works; `undefined` for one with no environment. */
+export type WorkspaceOf = (
+  agent: { readonly cwd?: string; readonly target?: string },
+  env: ExecutionEnv | undefined,
+) => Workspace | undefined
+
 export const workspaceInstructions = (
-  home: Home,
   instances: ReadonlyMap<string, ProviderInstance>,
+  workspaceOf: WorkspaceOf,
   agentTypes: AgentTypes,
 ) =>
   defineExtension({
@@ -221,38 +300,51 @@ export const workspaceInstructions = (
       {
         key: "workspace",
         tag: false,
-        render: ({ agent }) =>
-          Effect.sync(() => {
+        render: ({ agent, env, shown }) =>
+          Effect.gen(function* () {
             const provider = agent.model?.provider
             if (provider === undefined || instances.get(provider)?.kind !== "openai") return undefined
-            const cwd = agent.cwd ?? home.dir
+            const workspace = workspaceOf(agent, env)
+            if (workspace === undefined) return undefined
             // Past the depth limit a subagent has no spawn_agent, so it has no use for the types. A code-mode model is
             // offered only codemode, whose scripts call spawn_agent, so the callable tools decide, not the offered ones.
             const offersSpawn = agent.callable.some((tool) => tool.name === "spawn_agent")
-            const text = `The working directory is ${cwd}.\n${agentsMdInstructions(cwd, home.dir)}${skillsInstructions(cwd, home.dir, "read")}${agentTypesInstructions(offersSpawn ? agentTypes(agent) : [])}`
+            yield* workspace.reachable
+            const [files, skills, types] = yield* Effect.all(
+              [
+                agentsMd(workspace),
+                skillsFor(workspace),
+                offersSpawn ? agentTypes(agent, env) : Effect.succeed([] as ReadonlyArray<AgentType>),
+              ],
+              { concurrency: "unbounded" },
+            )
+            const text = `The working directory is ${workspace.cwd}.\n${agentsMdInstructions(files)}${skillsInstructions(skills, "read")}${agentTypesInstructions(types)}`
             return text.trimEnd()
-          }),
+          }).pipe(
+            // A target it cannot reach now keeps what the model was told; its tools say what is gone.
+            Effect.catch(() => Effect.succeed(shown.workspace)),
+          ),
       },
     ],
   })
 
 /** The skills input to a conversation on `agent` can name: a ChatGPT conversation's, and none for the rest. */
 export const skillsOf = (
-  home: Home,
   instances: ReadonlyMap<string, ProviderInstance>,
-  agent: { readonly model?: { readonly provider: string }; readonly cwd?: string },
-): ReadonlyArray<Skill> => {
+  agent: { readonly model?: { readonly provider: string } },
+  workspace: Workspace | undefined,
+): Effect.Effect<ReadonlyArray<Skill>> => {
   const provider = agent.model?.provider
-  if (provider === undefined || instances.get(provider)?.kind !== "openai") return []
-  return skillsFor(agent.cwd ?? home.dir, home.dir)
+  if (provider === undefined || instances.get(provider)?.kind !== "openai" || workspace === undefined)
+    return Effect.succeed([])
+  return skillsFor(workspace)
 }
 
 /**
  * What a person's `text` and `images` give the model: the text, the `SKILL.md` of each skill it names, read now so a
  * later edit of the file changes later messages only, then the images; and the skills it carried, for the transcript.
  */
-export const userInput = (text: string, skills: ReadonlyArray<Skill>, images: ReadonlyArray<ImageContent>) => {
-  const attached = attachedSkills(text, skills)
+export const userInput = (text: string, attached: Array<AttachedSkill>, images: ReadonlyArray<ImageContent>) => {
   if (attached.length === 0 && images.length === 0) return { content: text, attached }
   const content: Array<TextContent | ImageContent> = [
     { type: "text", text },
