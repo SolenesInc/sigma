@@ -442,15 +442,11 @@ describe("documents", () => {
           // Receipts on an M-series Mac: a commit's median is 0.047 ms with or without a stalled watch, and 10,000 commits
           // grow the heap about 0.1 MB with one, against 7.2 MB for an observer that keeps every change. The bounds sit
           // past the healthy numbers and below the unbounded one.
+          // The two sessions' commits alternate, so a busy machine slows both alike and the ratio of their medians
+          // holds under any load; measured in sequence, a load that rose between the two phases broke it.
           const commits = 10_000
           const unwatched = yield* newSession()
           yield* slide(unwatched)
-          const baseline: number[] = []
-          for (let i = 0; i < commits; i++) {
-            const start = performance.now()
-            yield* slide(unwatched)
-            baseline.push(performance.now() - start)
-          }
 
           const session = yield* newSession()
           yield* slide(session)
@@ -467,10 +463,18 @@ describe("documents", () => {
           expect((yield* Queue.take(seen)).value.next).toBe(2)
 
           const before = heapUsed()
+          const baseline: number[] = []
           const watched: number[] = []
           for (let i = 0; i < commits; i++) {
-            const start = performance.now()
+            // clock: the promise is that a stalled watch does not slow commits, so the test times them
+            let start = performance.now()
+            yield* slide(unwatched)
+            // clock: as above
+            baseline.push(performance.now() - start)
+            // clock: as above
+            start = performance.now()
             yield* slide(session)
+            // clock: as above
             watched.push(performance.now() - start)
           }
           const grown = heapUsed() - before
