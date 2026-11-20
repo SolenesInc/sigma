@@ -847,27 +847,53 @@ test("worker-types, code-mode-models: a code-mode model that can start workers i
   expect(session.said().slice(-2)).toEqual(["assistant: Reviewed.", "run_end: answered"])
 })
 
-test("worker-provider, worker-section, codemode-tool: ChatGPT, told of workers, starts one on Claude Code from a script and reads its answer from the wait", async () => {
-  await using fake = new FakeOpenAi()
-  const expected = fake.play("code_mode_worker_on_claude")
-  using claude = new FakeClaude("models", "text")
-  await using session = await conversationWith(fake, { model: "gpt-6.1-sol", claude: claude.options })
-  await session.submit("Ask Claude to reply with: fixture text ok")
-  await session.view.until(settled(1), 20_000)
-  expectRequests(fake, expected)
-  expect(instructionsOf(fake, 0)).toContain(
-    "Workers. This session can start workers with the start_worker tool. A worker is an agent in a conversation of its own",
-  )
-  // The script's result, which ChatGPT reads next, is the worker's answer.
-  const input = JSON.parse(fake.responses()[1]!.body).input as Array<{ type: string; output?: unknown }>
-  expect(input.find((item) => item.type === "custom_tool_call_output")?.output).toMatch(/Output:\n\nfixture text ok$/)
-  const listed = (await session.client.call("conversation/list")).result as Array<{
-    model: { provider: string }
-    lineage?: { task?: string }
-  }>
-  expect(listed.find((each) => each.lineage?.task === "/root/poet")?.model.provider).toBe("claude")
-  expect(claude.userTexts()).toEqual([[expect.stringMatching(/Payload:\nReply with exactly: fixture text ok$/)]])
-  expect(session.said().slice(-2)).toEqual(["assistant: Claude says: fixture text ok", "run_end: answered"])
+test("worker-provider, worker-types, worker-section, codemode-tool: an advertised agent type reaches a Claude worker, using its model only when Claude lists it", async () => {
+  for (const [typeModel, workerModel] of [
+    ["gpt-6-luna", undefined],
+    ["opus", "opus"],
+  ] as const) {
+    await using fake = new FakeOpenAi()
+    const expected = fake.play("code_mode_worker_on_claude")
+    using claude = new FakeClaude("models", "text")
+    await using session = await conversationWith(fake, {
+      model: "gpt-6.1-sol",
+      claude: claude.options,
+      cwd: (home) => {
+        write(
+          join(home, ".claude", "agents", "reviewer.md"),
+          "---\nname: reviewer\ndescription: Reviews diffs\nmodel: " + typeModel + "\n---\nBe strict about tests.",
+        )
+        return home
+      },
+    })
+    await session.submit("Ask Claude to use the reviewer type and reply with: fixture text ok")
+    await session.view.until(settled(1), 20_000)
+    expectRequests(fake, expected)
+    const parent = instructionsOf(fake, 0)
+    expect(parent).toContain(
+      "Workers. This session can start workers with the start_worker tool. A worker is an agent in a conversation of its own",
+    )
+    expect(parent).toContain(
+      "# Agent types\n\nThe agent types `start_worker` takes as `agent_type`:\n- reviewer: Reviews diffs",
+    )
+    const input = JSON.parse(fake.responses()[1]!.body).input as Array<{ type: string; output?: unknown }>
+    expect(input.find((item) => item.type === "custom_tool_call_output")?.output).toMatch(/Output:\n\nfixture text ok$/)
+    const listed = (await session.client.call("conversation/list")).result as Array<{
+      model: { provider: string; model?: string }
+      lineage?: { task?: string; agentType?: string }
+    }>
+    const worker = listed.find((each) => each.lineage?.task === "/root/poet")
+    expect(worker?.lineage?.agentType).toBe("reviewer")
+    expect(worker?.model.provider).toBe("claude")
+    expect(worker?.model.model).toBe(workerModel)
+    const spawn = claude.spawns()[0]!
+    if (workerModel === undefined) expect(spawn).not.toHaveProperty("--model")
+    else expect(spawn["--model"]).toBe(workerModel)
+    const initialize = claude.log().find((entry) => entry.initialize && entry.probe === undefined)?.initialize
+    expect(initialize.appendSystemPrompt).toContain("# You are a reviewer agent\n\nBe strict about tests.")
+    expect(claude.userTexts()).toEqual([[expect.stringMatching(/Payload:\nReply with exactly: fixture text ok$/)]])
+    expect(session.said().slice(-2)).toEqual(["assistant: Claude says: fixture text ok", "run_end: answered"])
+  }
 })
 
 test("code-mode-models, openai-code-mode, codemode-grammar, codemode-tool: a model ChatGPT marks code-mode-only is offered codemode alone, writes raw JavaScript for it, and gets the script's result", async () => {

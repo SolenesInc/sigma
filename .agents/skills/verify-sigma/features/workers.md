@@ -32,7 +32,8 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
 - `worker-provider` starts a worker on another ready provider named in
   `provider`, Claude Code included. It starts from its brief alone: no fork
   (`fork_turns` `"all"` is refused), none of the parent's instructions, and
-  the `model` named or that provider's default. An unknown provider, or one
+  the `model` named, the agent type's model if the destination lists it, or
+  that provider's default. An unknown provider, or one
   that is not ready, is refused, naming the ready ones:
   `no provider <p>; the ready providers are ...` or
   `provider <p> is not ready; the ready providers are ...`. The tool's
@@ -135,16 +136,17 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
 - `worker-types` reads agent types from `.claude/agents/*.md` from the
   directory up to the repository root, then Claude Code's config directory's
   `agents/` (`$CLAUDE_CONFIG_DIR`, else `~/.claude`; a conversation on a target
-  reads only the project's). A ChatGPT conversation, or a Claude one on a
-  target (told `mcp__sigma__start_worker`), that can call `start_worker`, directly or from a code mode script, is told
-  them under `# Agent types` and names one as `start_worker`'s `agent_type`;
-  an unknown one fails the call, naming the types there are. A worker's
-  instructions are those its parent inherited (the root's own, for a
-  worker of the root), then the line naming its task, then
-  `# You are a <name> agent` and the type's body; a parent's own task line
-  and type do not pass down, its `lineage` has `agentType`, its card reads
-  `⧉ <name> (<agent type>)`, and it runs on the type's `model` when ChatGPT
-  lists it.
+  reads only the project's). ChatGPT and Claude Code on a target are told
+  which types they can pass in `agent_type` under the Agent types heading.
+  The caller's types apply when it starts a worker on any provider. Sigma
+  looks on the destination if the caller has no type of that name. An
+  unknown type fails the call and lists the available types. A worker on
+  its parent's provider gets the parent's inherited instructions before its
+  task line. A worker on another provider starts with the task line. The
+  heading `# You are a <name> agent` and the type's body follow in either case.
+  The worker's lineage has `agentType` and its card reads `⧉ <name> (<agent type>)`.
+  A ChatGPT worker on its parent's provider uses the type's model when
+  ChatGPT lists it and the call omits a model.
 - `subagent-claude` gives each subagent Claude Code starts a conversation of
   its own: the parent shows a `⧉ <description> (<agent type>)` card in place
   of the `Agent` call, the subagent's conversation holds its prompt, calls, results and last
@@ -635,7 +637,7 @@ Provider, `packages/sigma/test/openai.test.ts`:
 - worker-fork: a started agent's last answer reaches the parent
 - worker-types, cache-fork-worker: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out
 - worker-types, code-mode-models: a code-mode model that can start workers is told the agent types, and so is its worker
-- worker-provider, worker-section, codemode-tool: ChatGPT, told of workers, starts one on Claude Code from a script and reads its answer from the wait
+- worker-provider, worker-types, worker-section, codemode-tool: ChatGPT starts a Claude worker of an advertised type from a script, uses its model only if Claude lists it, and reads the worker's answer from the wait
 
 Provider, `packages/sigma/test/claude.test.ts`:
 

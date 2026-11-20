@@ -385,7 +385,7 @@ const startDescription = (providers: WorkerProviders) => {
   const list = providerList(providers)
   return `Starts a worker: an agent in a conversation of its own, which the user can open, watch and talk to, and which keeps working after your turn ends. Returns the worker's task name at once. Its final answer comes back through wait_worker, or as a message when you are not waiting.
 If your task is \`/root/task1\` and you name a worker "scout", its task name is \`/root/task1/scout\`. You can call it \`scout\` or \`/root/task1/scout\`; other agents reach it by its full name.
-A worker runs on your provider and model unless you name others. Set \`provider\` and \`model\` only to what the user named, unchanged.${list === "" ? "" : ` The providers are ${list}.`} On your provider the worker has your tools. A worker starts from your message alone, with none of your history or instructions, so write a complete brief, when it runs on another provider or you run in a harness (Claude Code or agy); otherwise it starts with your history, unless \`fork_turns\` is "none". On another provider it runs that provider's default model when you name none.
+A worker runs on your provider unless you name another. Set \`provider\` and \`model\` only to what the user named, unchanged.${list === "" ? "" : ` The providers are ${list}.`} On your provider the worker has your tools. A worker starts from your message alone, with none of your history or instructions, so write a complete brief, when it runs on another provider or you run in a harness (Claude Code or agy); otherwise it starts with your history, unless \`fork_turns\` is "none". When you name no model, the worker uses the agent type's model if the provider supports it. Otherwise it uses your model on your provider or the destination's default on another provider.
 Start workers only when the user, or instructions such as AGENTS.md or a skill, ask for workers, delegation or parallel work.`
 }
 
@@ -401,7 +401,7 @@ const startSchema = (providers: WorkerProviders) =>
     model: opt(
       str({
         description:
-          "The model to run the worker on, exactly as the user named it. Omit to use yours, or the provider's default on another provider.",
+          "The model to run the worker on, exactly as the user named it. Omit to use the agent type's model if supported, otherwise yours or the other provider's default.",
       }),
     ),
     effort: opt(
@@ -466,28 +466,39 @@ const startWorker = (limits: AgentLimits, agentTypes: AgentTypes, providers: Wor
         const provider = named ?? parentModel?.provider
         if (input.model !== undefined && provider === undefined) return failed("this agent has no model to vary")
         const instance = provider === undefined ? undefined : providers.get(provider)
-        // A provider whose loop sigma runs lists its models; one that runs its own, as Claude Code, takes any name it
-        // knows, so the name passes to it unchanged.
-        const listed = (model: string | undefined) =>
-          model !== undefined &&
-          (isHarness(providers, provider) || api.models().getModel(provider!, model) !== undefined)
-        if (input.model !== undefined && !listed(input.model))
+        // Explicit model names pass through to a harness, which can accept names outside its model list.
+        const acceptsModel = (model: string) =>
+          provider !== undefined &&
+          (isHarness(providers, provider) || api.models().getModel(provider, model) !== undefined)
+        if (input.model !== undefined && !acceptsModel(input.model))
           return failed(
             `no model ${input.model} on ${provider}; leave model out to use ${other ? "its default" : "yours"}`,
           )
         const wanted = input.agent_type?.trim()
-        const types = wanted ? yield* agentTypes(other ? { ...agent, model: { provider: named } } : agent, api.env) : []
-        const agentType = wanted ? types.find((type) => type.name === wanted) : undefined
-        if (wanted && agentType === undefined) {
-          const known = types.map((type) => type.name)
-          return failed(`no agent type ${wanted}; there are ${known.length === 0 ? "none" : known.join(", ")}`)
+        let agentType: AgentType | undefined
+        if (wanted) {
+          const types = [...(yield* agentTypes(agent, api.env))]
+          agentType = types.find((type) => type.name === wanted)
+          // Accept types the destination already supported when the caller did not advertise the name.
+          if (agentType === undefined && other) {
+            const destination = yield* agentTypes({ ...agent, model: { provider: named } }, api.env)
+            agentType = destination.find((type) => type.name === wanted)
+            types.push(...destination)
+          }
+          if (agentType === undefined) {
+            const known = [...new Set(types.map((type) => type.name))]
+            return failed(`no agent type ${wanted}; there are ${known.length === 0 ? "none" : known.join(", ")}`)
+          }
         }
-        // A type's model applies when the provider lists it; one the call names wins. On another provider, with
-        // neither, the worker takes the model a new conversation there gets (F48).
-        const model =
-          input.model ??
-          (provider !== undefined && listed(agentType?.model) ? agentType!.model : undefined) ??
-          (other ? ((yield* defaultModelOf(instance!)) ?? "") : undefined)
+        let model = input.model
+        const typeModel = agentType?.model
+        if (model === undefined && typeModel !== undefined) {
+          const available = other
+            ? (yield* instance!.models(false)).some(({ id }) => id === typeModel)
+            : acceptsModel(typeModel)
+          if (available) model = typeModel
+        }
+        if (model === undefined && other) model = (yield* defaultModelOf(instance!)) ?? ""
         const own = yield* taskOf(api, api.conversationId)
         const members = yield* membersOf(api)
         const working = yield* workingCounter(api, members, api.conversationId)
