@@ -410,7 +410,7 @@ Preconditions:
   `drive.ts r watch <subagent id>` shows its `bash` call in
   `sigma.approvals`. Run
   `drive.ts r rpc conversation/interrupt '{"author": {"id": "ada", "name": "ada"}, "conversation": "<id>"}'` (result
-  `null`) on the root only. `drive.ts r watch <id>` and
+  `{"withdrawn": []}`) on the root only. `drive.ts r watch <id>` and
   `drive.ts r watch <subagent id>` each end with a `sigma.run_end`
   `interrupted`, no `pi.live` run, and the subagent's approval requests are
   empty; `made` was never created.
