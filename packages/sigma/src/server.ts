@@ -117,7 +117,6 @@ import { followTreeStatus, type TreeStatuses } from "./status.ts"
 import {
   attachedSkills,
   skillNames,
-  skillsOf,
   toldOfWorkspace,
   userInput,
   type Workspace,
@@ -187,7 +186,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
     Layer.effect(
       KernelHarness,
       Effect.gen(function* () {
-        const { instances, agents, claude, agy, agentTypes } = yield* Providers
+        const { instances, agents, claude, agy, agentTypes, skills } = yield* Providers
         const lifetime = yield* Lifetime
         // An idle conversation compacts as a person's compact does, by its `/compact` input; one that is busy again by
         // then refuses it and goes on.
@@ -274,6 +273,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
             instances,
             (agent, env, conversation) => (env === undefined ? undefined : workspaceOf(agent, env, conversation)),
             typesOf,
+            skills,
           ),
         )
         registry.install(
@@ -733,7 +733,7 @@ const Handlers = SigmaRpcs.toLayer(
           // A skill named while its target is unreachable could not be read, and the input would go without it, as if
           // it named none: it is refused instead, so the person knows.
           if (skillNames(text).length > 0 && toldOfWorkspace(providers.instances, agent)) yield* reach(agent.target)
-          const skills = skillsOf(providers.instances, agent, workspaceOf(agent, env))
+          const skills = providers.skills(agent.model?.provider, workspaceOf(agent, env))
           const { content, attached } = userInput(
             text,
             yield* attachedSkills(env, text, skills),
@@ -788,7 +788,7 @@ const Handlers = SigmaRpcs.toLayer(
       "skills/list": ({ conversation: id }) =>
         Effect.gen(function* () {
           const agent = yield* agentOf(yield* find(id))
-          return [...(yield* skillsOf(providers.instances, agent, workspaceOf(agent, envOf(agent))))]
+          return [...(yield* providers.skills(agent.model?.provider, workspaceOf(agent, envOf(agent))))]
         }),
       "conversation/entries": ({ conversation: id, from, to, order, limit, cursor }) =>
         Effect.gen(function* () {

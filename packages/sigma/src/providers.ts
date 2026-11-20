@@ -15,21 +15,25 @@ import {
   type TranscriptContext,
 } from "@sigma/models"
 import { AUTH_BASE, BASE_URL, CALLBACK_PORT, type ChatGptOptions, chatGptInstance } from "@sigma/models/chatgpt"
-import { type ModelSelection, UnknownEffort, UnknownProvider } from "@sigma/protocol"
+import { type ModelSelection, type Skill, UnknownEffort, UnknownProvider } from "@sigma/protocol"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { Context, Effect, Layer, Schema } from "effect"
 import { chooseModel, expandHome, type HomeConfig, type Instance, type ModelAsk } from "./config.ts"
 import type { Home } from "./home.ts"
 import instructions from "./instructions.md" with { type: "text" }
-import { type AgentType, agentTypes, type Workspace } from "./workspace.ts"
+import { type AgentType, agentTypes, skillsFor, type Workspace } from "./workspace.ts"
 import { taskOfRequest } from "./agents.ts"
 
 /**
  * Where a ChatGPT instance keeps its sign-in and models, the URLs it reaches, and the Claude Code config directory
  * whose agent types it can spawn; sigma adds its instructions.
  */
-export type OpenAiOptions = Omit<ChatGptOptions, "instructions"> & { readonly claudeConfig: string }
+export type OpenAiOptions = Omit<ChatGptOptions, "instructions"> & {
+  readonly claudeConfig: string
+  /** The person's own skills folder, `~/.agents/skills`, which other coding agents read too. */
+  readonly personalSkills: string
+}
 
 export interface ProviderOptions {
   readonly script?: ReadonlyArray<ScriptStep>
@@ -59,6 +63,7 @@ export const openAiOptions =
     baseUrl: process.env.SIGMA_OPENAI_URL ?? BASE_URL,
     callbackPort: CALLBACK_PORT,
     claudeConfig: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
+    personalSkills: join(homedir(), ".agents", "skills"),
   })
 
 const claudeInstance = (base: ClaudeProcessSettings, instance: Instance): ClaudeProcessSettings => {
@@ -194,6 +199,12 @@ export class Providers extends Context.Service<
      */
     readonly agentTypes: (provider: string | undefined, workspace: Workspace) => Effect.Effect<ReadonlyArray<AgentType>>
     /**
+     * The skills a conversation on `provider` in `workspace` is told of and can name: a ChatGPT instance's, from the
+     * project, the home and the person's own folder; a member-mode Claude Code's, from the project on its target; none
+     * for the rest, which find their own.
+     */
+    readonly skills: (provider: string | undefined, workspace: Workspace) => Effect.Effect<ReadonlyArray<Skill>>
+    /**
      * The model a conversation starts with when it asks for `ask`, given its project's `default_model` and the model
      * chosen last.
      */
@@ -222,6 +233,12 @@ export class Providers extends Context.Service<
             if (kind === "openai") return agentTypes(workspace, options.openai(provider!).claudeConfig)
             // In member mode only the project's types, on the target, apply (D11); the home's are the person's.
             if (kind === "claude" && !workspace.local) return agentTypes(workspace, "")
+            return Effect.succeed([])
+          },
+          skills: (provider, workspace) => {
+            const kind = provider === undefined ? undefined : instances.get(provider)?.kind
+            if (kind === "openai") return skillsFor(workspace, options.openai(provider!).personalSkills)
+            if (kind === "claude" && !workspace.local) return skillsFor(workspace)
             return Effect.succeed([])
           },
           choose: (project, ask, last) =>

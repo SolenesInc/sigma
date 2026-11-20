@@ -9,7 +9,7 @@ import type { Home } from "../src/home.ts"
 import { TestTargets } from "./support/targets.ts"
 import { FakeClaude } from "./support/claude.ts"
 import type { ClaudeProcessSettings } from "@sigma/claude"
-import { accessToken, ACCOUNT, FakeOpenAi, matches, signIn } from "./support/openai.ts"
+import { accessToken, ACCOUNT, FakeOpenAi, matches, personalSkills, signIn } from "./support/openai.ts"
 import { DEADLINE, deadline, errorTag, RawClient } from "./support/raw.ts"
 import {
   person,
@@ -550,13 +550,18 @@ const project = (home: string) => {
   )
   write(join(repo, ".claude", "skills", "plain", "SKILL.md"), "No frontmatter.")
   write(join(home, "skills", "ship", "SKILL.md"), "---\nname: ship\ndescription: >\n  Ship it\n  carefully\n---\nShip.")
+  write(
+    join(personalSkills(home), "workflow", "SKILL.md"),
+    "---\nname: workflow\ndescription: The person's workflow\n---\n",
+  )
+  write(join(personalSkills(home), "ship", "SKILL.md"), "---\nname: ship\ndescription: The person's ship\n---\n")
   return join(repo, "app")
 }
 
 const instructionsOf = (fake: FakeOpenAi, request: number): string =>
   JSON.parse(fake.responses()[request]!.body).instructions
 
-test("openai-instructions, agents-md, skills-found, skills-nearest, skills-frontmatter: ChatGPT is told its working directory, the AGENTS.md files from home down to it, and the skills it can use", async () => {
+test("openai-instructions, agents-md, skills-found, skills-nearest, skills-frontmatter: ChatGPT is told its working directory, the AGENTS.md files from home down to it, and the skills it can use, the person's ~/.agents/skills last", async () => {
   await using fake = new FakeOpenAi()
   fake.play("text_answer")
   fake.play("text_answer")
@@ -575,6 +580,7 @@ test("openai-instructions, agents-md, skills-found, skills-nearest, skills-front
       `- plain:  (file: ${join(home, "repo", ".claude", "skills", "plain", "SKILL.md")})`,
       review,
       `- ship: Ship it carefully (file: ${join(home, "skills", "ship", "SKILL.md")})`,
+      `- workflow: The person's workflow (file: ${join(personalSkills(home), "workflow", "SKILL.md")})`,
     ].join("\n")
   expect(instructionsOf(fake, 0)).toEndWith(
     [
@@ -731,7 +737,7 @@ test("openai-instructions: every tool ChatGPT's instructions name is one its req
   expect(toolLike.filter((name) => !offered.includes(name))).toEqual([])
 })
 
-test("skills-found: a conversation outside any repository is told only its own folder's skills and the home's", async () => {
+test("skills-found: a conversation outside any repository is told only its own folder's skills, the home's and the person's", async () => {
   await using fake = new FakeOpenAi()
   fake.play("text_answer")
   await using session = await conversationWith(fake, {
@@ -746,6 +752,7 @@ test("skills-found: a conversation outside any repository is told only its own f
   const instructions = instructionsOf(fake, 0)
   expect(instructions).toContain("- near: Here")
   expect(instructions).toContain("- ship: Ship it carefully")
+  expect(instructions).toContain("- workflow: The person's workflow")
   expect(instructions).not.toContain("- review:")
   expect(instructions).not.toContain("Repo rules.")
   expect(instructions).toContain("Home rules.")
@@ -896,8 +903,9 @@ test("skills-list, skills-attach, skills-snapshot: a skill named in a message co
     ["plain", ""],
     ["review", "Nearer review"],
     ["ship", "Ship it carefully"],
+    ["workflow", "The person's workflow"],
   ])
-  await session.submit("/review this, then $ship and $nothing.")
+  await session.submit("/review this, then $ship, $workflow and $nothing.")
   await session.view.until(settled(1))
   const nearer = join(home.dir, "repo", "app", ".claude", "skills", "review", "SKILL.md")
   writeFileSync(nearer, "---\nname: review\ndescription: Nearer review\n---\nLook again.")
@@ -907,6 +915,7 @@ test("skills-list, skills-attach, skills-snapshot: a skill named in a message co
   expect(first!.skills).toEqual([
     { name: "review", path: nearer, text: expect.stringContaining("Look nearer.") },
     { name: "ship", path: join(home.dir, "skills", "ship", "SKILL.md"), text: expect.stringContaining("Ship.") },
+    { name: "workflow", path: join(personalSkills(home.dir), "workflow", "SKILL.md"), text: expect.any(String) },
   ])
   expect(second!.skills).toEqual([{ name: "review", path: nearer, text: expect.stringContaining("Look again.") }])
   const sent = fake.responses().map((request) => JSON.stringify(JSON.parse(request.body).input))

@@ -191,7 +191,7 @@ Provider, `packages/sigma/test/openai.test.ts`:
 - openai-signed-out, provider-signed-out: a conversation with ChatGPT before signing in says how to fix it
 - openai-answer: an answer whose CRLF event separators arrive split across reads is read whole
 - openai-model: the conversation's model and effort reach ChatGPT
-- openai-instructions, agents-md, skills-found, skills-nearest, skills-frontmatter: ChatGPT is told its working directory, the AGENTS.md files from home down to it, and the skills it can use
+- openai-instructions, agents-md, skills-found, skills-nearest, skills-frontmatter: ChatGPT is told its working directory, the AGENTS.md files from home down to it, and the skills it can use, the person's ~/.agents/skills last
 - openai-instructions: every tool ChatGPT's instructions name is one its request offers, by the same name
 - code-mode-models, openai-code-mode, codemode-grammar, codemode-tool: a model ChatGPT marks code-mode-only is offered codemode alone, writes raw JavaScript for it, and gets the script's result
 - openai-invalid: a sign-in file that is not one fails the run, naming the file
