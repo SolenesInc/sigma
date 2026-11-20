@@ -34,7 +34,8 @@ on. attn will use targets to run a member's work in a sandbox.
   so a hung target costs one wait, not one per section and call. Input that
   names a skill (`/name`, `$name`) while the target cannot be reached is
   refused with `TargetUnavailable` and placed nowhere; the TUI shows the
-  reason as a notice. A call reaches for the target once: in member mode,
+  reason as a notice. A prompt containing literal `$(...)` and no skill
+  reference can still be submitted. A call reaches for the target once: in member mode,
   what the model is told after the call does not connect again to a target
   the call found unreachable.
 - `target-reaching` commits `sigma.reaching` `{ wait: { target, since } }`

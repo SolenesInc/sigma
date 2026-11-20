@@ -674,11 +674,12 @@ test("target-start, agents-md, skills-found: a remote conversation is told the A
   expect(skills.map((skill: { name: string }) => skill.name)).toEqual(["deploy"])
 })
 
-test("target-lost, skills-attach: input that names a skill on a target that cannot be reached is refused with the connector's reason, and nothing is placed", async () => {
+test("target-lost, skills-attach: an unavailable target refuses a named skill and still accepts literal shell substitution", async () => {
   using targets = new TestTargets()
   const work = targets.add("box")
   write(join(work, ".agents", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy it\n---\nShip it.\n")
   await using fake = new FakeOpenAi()
+  fake.play("text_answer")
   fake.play("text_answer")
   const home = tempHome()
   try {
@@ -716,6 +717,11 @@ test("target-lost, skills-attach: input that names a skill on a target that cann
     expect(
       users.map((entry) => (entry.data as { skills?: Array<{ name: string }> }).skills?.map((skill) => skill.name)),
     ).toEqual([["deploy"]])
+
+    const literal = "Why does shell substitution use $(...) here?"
+    expect((await submit(client, conversation, literal)).error).toBeUndefined()
+    await view.until(settled(2))
+    expect(transcript(view.seen())).toContain(`user: ${literal}`)
     client.close()
   } finally {
     rmSync(home.dir, { recursive: true, force: true })

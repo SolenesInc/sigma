@@ -212,7 +212,7 @@ export const skillNames = (text: string): Array<string> => {
   return [
     ...(trimmed.startsWith("/") ? [skillName(trimmed.slice(1))] : []),
     ...[...trimmed.matchAll(/\$/g)].map((match) => skillName(trimmed.slice(match.index + 1))),
-  ]
+  ].filter((name) => name !== "")
 }
 
 /** The skills `text` names, each with its `SKILL.md` read through `env` now; `skills` is read only when it names one. */
