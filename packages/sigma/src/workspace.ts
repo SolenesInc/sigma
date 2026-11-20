@@ -160,8 +160,11 @@ const skillsIn = (env: ExecutionEnv, roots: ReadonlyArray<string>) =>
     all(found.flat().map((folder) => readSkill(env, folder))),
   )
 
-/** The skills a conversation can use, nearest first by name: the project's, then the home's for a local one. */
-export const skillsFor = (workspace: Workspace): Effect.Effect<Array<Skill>> =>
+/**
+ * The skills a conversation can use, nearest first by name: the project's, then for a local one the home's and those in
+ * `personal`, the person's own folder.
+ */
+export const skillsFor = (workspace: Workspace, personal?: string): Effect.Effect<Array<Skill>> =>
   Effect.gen(function* () {
     const { env, cwd, home, local } = workspace
     const dirs = (yield* projectDirs(env, cwd)).reverse()
@@ -171,7 +174,9 @@ export const skillsFor = (workspace: Workspace): Effect.Effect<Array<Skill>> =>
           env,
           dirs.flatMap((dir) => [join(dir, ".agents", "skills"), join(dir, ".claude", "skills")]),
         ),
-        local ? skillsIn(home.env, [join(home.dir, "skills")]) : Effect.succeed([]),
+        local
+          ? skillsIn(home.env, [join(home.dir, "skills"), ...(personal === undefined ? [] : [personal])])
+          : Effect.succeed([]),
       ],
       { concurrency: "unbounded" },
     )
@@ -328,6 +333,7 @@ export const workspaceInstructions = (
   instances: ReadonlyMap<string, ProviderInstance>,
   workspaceOf: WorkspaceOf,
   agentTypes: AgentTypes,
+  skillsOf: (provider: string | undefined, workspace: Workspace) => Effect.Effect<ReadonlyArray<Skill>>,
 ) =>
   defineExtension({
     name: "sigma-workspace",
@@ -347,7 +353,7 @@ export const workspaceInstructions = (
             const [files, skills, types] = yield* Effect.all(
               [
                 agentsMd(workspace),
-                skillsFor(workspace),
+                skillsOf(agent.model?.provider, workspace),
                 offersStart ? agentTypes(agent, env) : Effect.succeed([] as ReadonlyArray<AgentType>),
               ],
               { concurrency: "unbounded" },
@@ -362,14 +368,6 @@ export const workspaceInstructions = (
       },
     ],
   })
-
-/** The skills input to a conversation on `agent` can name: those of one sigma tells of its workspace, else none. */
-export const skillsOf = (
-  instances: ReadonlyMap<string, ProviderInstance>,
-  agent: { readonly model?: { readonly provider: string }; readonly target?: string },
-  workspace: Workspace,
-): Effect.Effect<ReadonlyArray<Skill>> =>
-  toldOfWorkspace(instances, agent) ? skillsFor(workspace) : Effect.succeed([])
 
 /**
  * What a person's `text` and `images` give the model: the text, the `SKILL.md` of each skill it names, read now so a

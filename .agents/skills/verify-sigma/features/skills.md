@@ -3,7 +3,9 @@
 An OpenAI conversation is told the `AGENTS.md` files and the skills of its
 directory. A skill is a folder with a `SKILL.md`, found under `.agents/skills`
 and `.claude/skills` from the conversation's directory up to the repository's
-root, then under `SIGMA_HOME/skills`; the nearest skill of a name wins.
+root, then under `SIGMA_HOME/skills`, then under the person's own
+`~/.agents/skills`, where other coding agents also read them; the nearest skill
+of a name wins.
 `skills/list` answers which skills a conversation can name. A message that
 starts with `/name`, or holds `$name`, carries that skill's `SKILL.md` in its
 committed `sigma.user` entry, and every TUI shows `with <name>, ...` under the
@@ -19,11 +21,13 @@ conversation on a target runs in member mode and is told them as ChatGPT is
   `NoSuchConversation` for an unknown id.
 - `skills-found` looks in `.agents/skills` and `.claude/skills` of each folder
   from the conversation's directory up to the folder holding `.git`, then in
-  `SIGMA_HOME/skills`. A directory outside any repository looks only in itself
-  and the home.
+  `SIGMA_HOME/skills`, then in `~/.agents/skills` of the server's user. A
+  directory outside any repository looks only in itself, the home and
+  `~/.agents/skills`. A conversation on a target looks in neither the home nor
+  `~/.agents/skills`.
 - `skills-nearest` keeps the nearest skill of a name: a deeper folder before a
   shallower one, `.agents` before `.claude` in one folder, the project before
-  the home.
+  the home, and the home before `~/.agents/skills`.
 - `skills-frontmatter` takes `name` and `description` from the `SKILL.md`
   frontmatter, folding a `>` or `|` description into one line and unquoting a
   quoted one; without a `name` the folder names the skill, and without a
@@ -58,7 +62,7 @@ conversation on a target runs in member mode and is told them as ChatGPT is
 
 ### People
 
-- Put skills in `<repo>/.agents/skills/<name>/SKILL.md`, `<repo>/.claude/skills/<name>/SKILL.md`, the same under any folder between the repository's root and the conversation's directory, or `SIGMA_HOME/skills/<name>/SKILL.md`.
+- Put skills in `<repo>/.agents/skills/<name>/SKILL.md`, `<repo>/.claude/skills/<name>/SKILL.md`, the same under any folder between the repository's root and the conversation's directory, `SIGMA_HOME/skills/<name>/SKILL.md`, or `~/.agents/skills/<name>/SKILL.md`.
 - Put instructions in `SIGMA_HOME/AGENTS.md` and in `AGENTS.md`, `AGENTS.override.md` or `CLAUDE.md` in the repository's folders.
 - In an OpenAI conversation, type a message in the TUI that starts with `/name` or holds `$name`.
 - Run `sigma --instructions '<text>'`.
@@ -97,7 +101,8 @@ Preconditions:
   `"description": ""`, `deploy` `Ship the app folder` from
   `project/app/.agents/skills`, `notes` `Take notes` from `home/skills`, and
   `review` `Review a change line by line` from `project/.claude/skills`, in
-  that order. With `"conversation": "nope"` it exits 1 with
+  that order, among the skills in your own `~/.agents/skills` whose names
+  these do not take, each with its path there. With `"conversation": "nope"` it exits 1 with
   `NoSuchConversation`.
 - **None for script or Claude.** Start the same with `"provider": "script"`,
   and again with `"provider": "claude"`: `skills/list` answers `[]` for both.
@@ -182,8 +187,8 @@ Screen, `packages/sigma/test/screen.test.ts`:
 
 Provider, `packages/sigma/test/openai.test.ts`:
 
-- openai-instructions, agents-md, skills-found, skills-nearest, skills-frontmatter: ChatGPT is told its working directory, the AGENTS.md files from home down to it, and the skills it can use
-- skills-found: a conversation outside any repository is told only its own folder's skills and the home's
+- openai-instructions, agents-md, skills-found, skills-nearest, skills-frontmatter: ChatGPT is told its working directory, the AGENTS.md files from home down to it, and the skills it can use, the person's ~/.agents/skills last
+- skills-found: a conversation outside any repository is told only its own folder's skills, the home's and the person's
 - start-instructions: ChatGPT is told the instructions its conversation started with, after the AGENTS.md files, and a subagent's follow its parent's
 - skills-list, skills-attach, skills-snapshot: a skill named in a message comes with it as SKILL.md read then, for the model and every client
 - skills-list: a conversation on a provider that finds its own skills lists none, and an unknown one is refused
@@ -206,6 +211,8 @@ Provider, `packages/sigma/test/openai.test.ts`:
   the committed entry, seen with `watch`.
 - Every `AGENTS.md` and skill is read at each run, so no restart is needed
   after changing one.
+- A run keeps the person's `HOME`, so its lists and requests also hold the
+  skills in your own `~/.agents/skills`.
 
 ## With a real account
 

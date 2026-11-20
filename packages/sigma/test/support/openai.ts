@@ -49,6 +49,8 @@ const renamed = (line: string, tools: Readonly<Record<string, string>>) =>
     line,
   )
 
+/** The person's own skills folder, `~/.agents/skills`, that a test server on `home` reads. */
+export const personalSkills = (home: string) => join(home, "person", ".agents", "skills")
 export class FakeOpenAi {
   readonly received: Array<Received> = []
   private readonly replies: Array<Reply> = []
@@ -84,6 +86,7 @@ export class FakeOpenAi {
         baseUrl: this.base,
         callbackPort: 0,
         claudeConfig: join(home.dir, "claude"),
+        personalSkills: personalSkills(home.dir),
       })
   }
 
