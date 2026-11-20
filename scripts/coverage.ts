@@ -1,5 +1,5 @@
 // Checks the feature map against the tests. `bun run coverage` prints everything;
-// `bun run check` (scripts/check.ts) passes --quiet and prints only the summary and any problem.
+// `bun run check` passes --quiet and prints only the summary and any problem.
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
@@ -13,9 +13,8 @@ type Test = { ids: string[]; file: string; title: string }
 const problems: string[] = []
 
 const quiet = process.argv.includes("--quiet")
-// `bun run check` runs the tests as several processes, each writing its own JUnit file.
-const junitPaths = process.argv.slice(2).filter((a) => !a.startsWith("--"))
-if (junitPaths.length === 0) throw new Error("usage: coverage.ts [--quiet] <junit.xml>...")
+const junitPath = process.argv.slice(2).find((a) => !a.startsWith("--"))
+if (!junitPath) throw new Error("usage: coverage.ts [--quiet] <junit.xml>")
 
 function readUseCases(): Map<string, UseCase> {
   const out = new Map<string, UseCase>()
@@ -61,7 +60,7 @@ function unescape(s: string): string {
 }
 
 function readTests(useCases: Map<string, UseCase>): Test[] {
-  const xml = junitPaths.map((p) => readFileSync(p, "utf8")).join("\n")
+  const xml = readFileSync(junitPath!, "utf8")
   const out: Test[] = []
   for (const m of xml.matchAll(/<testcase\b([^>]*?)(\/>|>([\s\S]*?)<\/testcase>)/g)) {
     const attrs = m[1]!

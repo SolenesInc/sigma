@@ -271,7 +271,7 @@ pattern: `down` only reaches what this run's home and tmux socket own.
 
 The map in [features/](features/README.md) is the maintained source for what
 to drive. A change that adds or changes a user-facing behavior updates its
-feature file, or adds one, in the same landing. Read the files of the features a
+feature file, or adds one, in the same PR. Read the files of the features a
 change touches, drive every way in and every context they list that applies,
 and add any trap or test a file lacks. The helper is type-checked with the
 rest of the repository. `/maintain-verification-skill` audits the map against
