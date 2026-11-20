@@ -434,53 +434,60 @@ describe("documents", () => {
       }),
     ))
 
-  test("view-slow-folding: a stalled watch neither slows commits nor grows, and resumes with one root replacement", () =>
-    run(
-      Effect.gen(function* () {
-        // Receipts on an M-series Mac: a commit's median is 0.047 ms with or without a stalled watch, and 10,000 commits
-        // grow the heap about 0.1 MB with one, against 7.2 MB for an observer that keeps every change. The bounds sit
-        // past the healthy numbers and below the unbounded one.
-        const commits = 10_000
-        const unwatched = yield* newSession()
-        yield* slide(unwatched)
-        const baseline: number[] = []
-        for (let i = 0; i < commits; i++) {
-          const start = performance.now()
+  test(
+    "view-slow-folding: a stalled watch neither slows commits nor grows, and resumes with one root replacement",
+    () =>
+      run(
+        Effect.gen(function* () {
+          // Receipts on an M-series Mac: a commit's median is 0.047 ms with or without a stalled watch, and 10,000 commits
+          // grow the heap about 0.1 MB with one, against 7.2 MB for an observer that keeps every change. The bounds sit
+          // past the healthy numbers and below the unbounded one.
+          const commits = 10_000
+          const unwatched = yield* newSession()
           yield* slide(unwatched)
-          baseline.push(performance.now() - start)
-        }
+          const baseline: number[] = []
+          for (let i = 0; i < commits; i++) {
+            const start = performance.now()
+            yield* slide(unwatched)
+            baseline.push(performance.now() - start)
+          }
 
-        const session = yield* newSession()
-        yield* slide(session)
-        const watch = (yield* session.watchDoc(Window))!
-        const gate = yield* Deferred.make<void>()
-        const seen = yield* Queue.unbounded<DocumentChange<{ items: number[]; next: number }>>()
-        yield* Effect.forkScoped(
-          Stream.runForEach(watch.changes, (change) => Effect.andThen(Queue.offer(seen, change), Deferred.await(gate))),
-        )
-        // The consumer takes the first change and stalls on it.
-        yield* slide(session)
-        expect((yield* Queue.take(seen)).value.next).toBe(2)
-
-        const before = heapUsed()
-        const watched: number[] = []
-        for (let i = 0; i < commits; i++) {
-          const start = performance.now()
+          const session = yield* newSession()
           yield* slide(session)
-          watched.push(performance.now() - start)
-        }
-        const grown = heapUsed() - before
+          const watch = (yield* session.watchDoc(Window))!
+          const gate = yield* Deferred.make<void>()
+          const seen = yield* Queue.unbounded<DocumentChange<{ items: number[]; next: number }>>()
+          yield* Effect.forkScoped(
+            Stream.runForEach(watch.changes, (change) =>
+              Effect.andThen(Queue.offer(seen, change), Deferred.await(gate)),
+            ),
+          )
+          // The consumer takes the first change and stalls on it.
+          yield* slide(session)
+          expect((yield* Queue.take(seen)).value.next).toBe(2)
 
-        expect(median(watched)).toBeLessThan(2 * median(baseline) + 0.05)
-        expect(grown).toBeLessThan(2_000_000)
+          const before = heapUsed()
+          const watched: number[] = []
+          for (let i = 0; i < commits; i++) {
+            const start = performance.now()
+            yield* slide(session)
+            watched.push(performance.now() - start)
+          }
+          const grown = heapUsed() - before
 
-        // Released, the consumer gets the newest value in one root replacement, then commits one by one again.
-        yield* Deferred.succeed(gate, undefined)
-        const caughtUp = yield* Queue.take(seen)
-        expect(yield* session.snapshot(Window)).toEqual(caughtUp.value)
-        expect(caughtUp.ops).toEqual([["r", caughtUp.value]])
-        yield* slide(session)
-        expect((yield* Queue.take(seen)).value.next).toBe(caughtUp.value.next + 1)
-      }),
-    ))
+          expect(median(watched)).toBeLessThan(2 * median(baseline) + 0.05)
+          expect(grown).toBeLessThan(2_000_000)
+
+          // Released, the consumer gets the newest value in one root replacement, then commits one by one again.
+          yield* Deferred.succeed(gate, undefined)
+          const caughtUp = yield* Queue.take(seen)
+          expect(yield* session.snapshot(Window)).toEqual(caughtUp.value)
+          expect(caughtUp.ops).toEqual([["r", caughtUp.value]])
+          yield* slide(session)
+          expect((yield* Queue.take(seen)).value.next).toBe(caughtUp.value.next + 1)
+        }),
+      ),
+    // Its 20,000 commits take 3 to 5 s on CI, and up to 34 s on a 10-core M5 at load average 40 to 70.
+    60_000,
+  )
 })
