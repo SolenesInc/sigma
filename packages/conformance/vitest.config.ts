@@ -28,6 +28,10 @@ export default defineConfig({
 	test: {
 		include: ["upstream/test/**/*.test.ts", "amended/**/*.test.ts"],
 		environment: "node",
+		// A tripwire past a busy machine: vitest's 5 s default timed out tools-images, harness-context and env-node rows
+		// in 3 of 22 of sigma's gate runs at load average 15 to 40. The slowest of those rows took 7.0 s under load 32 to
+		// 43 on a 10-core M5 (prepares concurrent images, evict mode), and 0.5 s at rest.
+		testTimeout: 30_000,
 		setupFiles: ["./upstream/test/setup-document-retention.ts", "./setup-rows.ts", "./setup-timeout-message.ts"],
 	},
 });
