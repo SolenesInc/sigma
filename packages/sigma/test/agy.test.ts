@@ -476,6 +476,44 @@ test("gemini-wake, gemini-interrupt: stopping a wake run cancels agy's turn and 
   expect(runEnds(session.view.seen())).toHaveLength(3)
 })
 
+test("gemini-wake, gemini-interrupt: stopping a wake during an agy command preserves jobs and lets the next prompt run", async () => {
+  using agy = new FakeAgy("wake_command_cancelled")
+  await using session = await conversationWith(agy)
+  await session.submit(
+    "Start `sleep 15; echo first-marker` and `sleep 45; echo concurrent-marker` independently. When the first finishes, run `sleep 30; echo second-marker`.",
+  )
+  await session.answer(true)
+  await session.view.until((watch) => runEnds(watch.seen()).length === 1 && reportsOf(watch.seen()).length === 1)
+  await session.answer(true)
+  await agy.logged(
+    (fake) => fake.received().filter((frame) => frame.result?.outcome?.optionId === "allow").length === 2,
+  )
+
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  await session.view.until(settled(2))
+  await agy.logged((fake) => fake.received().some((frame) => frame.id === "late-permission"))
+  expect(agy.received().find((frame) => frame.id === "late-permission")?.result).toEqual({
+    outcome: { outcome: "cancelled" },
+  })
+
+  await session.submit("Reply with exactly: recovered")
+  await session.view.until(settled(3))
+  const entries = session.view.seen()
+  expect(runEnds(entries).map((end) => end.outcome)).toEqual(["answered", "interrupted", "answered"])
+  expect(reportsOf(entries)).toEqual([
+    expect.objectContaining({ title: "sleep 15; echo first-marker", status: "done" }),
+    expect.objectContaining({ title: "Concurrent background command", status: "done" }),
+  ])
+  const announced = calls(entries)
+  expect(announced).toHaveLength(3)
+  expect(results(entries).at(-1)).toEqual({
+    call: announced[2]!.id,
+    text: "interrupted; it may or may not have taken effect",
+    isError: true,
+  })
+  expect(transcript(entries).slice(-2)).toEqual(["assistant: recovered", "run_end: answered"])
+})
+
 test("gemini-health, provider-signed-out: a signed-out agy is listed as signed out with how to sign in, and a run on it fails saying so", async () => {
   using agy = new FakeAgy("signed_out", "models_signed_out")
   await using session = await conversationWith(agy)

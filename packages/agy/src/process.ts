@@ -259,6 +259,8 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
        * waking the conversation again, until it is next prompted or a job ends.
        */
       let hushed = false
+      /** Calls from a stopped wake can report their end after a job or a prompt lets agy speak again. */
+      const cancelledWakeCalls = new Set<string>()
       let text = ""
       let responses = 0
       let positions = 0
@@ -392,9 +394,18 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
           if (known.job) continue
           if (known.refused)
             out.push({ type: "results", at: at(), results: [{ call: id, text: DENIED, isError: true }] })
+          if (waking) cancelledWakeCalls.add(id)
           calls.delete(id)
         }
         return out
+      }
+
+      /** Keeps late tool events from starting a wake or being committed to the next prompted run. */
+      const dropWakeCall = (id: string, ended = false) => {
+        if (!hushed && !cancelledWakeCalls.has(id)) return false
+        if (ended) cancelledWakeCalls.delete(id)
+        else cancelledWakeCalls.add(id)
+        return true
       }
 
       /**
@@ -441,10 +452,10 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
             const id = String(change.toolCallId)
             const known = calls.get(id)
             const status = change.status
-            // A job's progress is not a turn of agy's own (not seen from 1.5.13, whose commands report only their end).
-            if (known?.job && status !== "completed" && status !== "failed") return []
-            if (status !== "completed" && status !== "failed") return [...wake(), ...sight(change)]
+            const endedCall = status === "completed" || status === "failed"
             if (known?.job) {
+              // A job's progress is not a turn of agy's own.
+              if (!endedCall) return []
               // A job's end: news from outside the turn, which the hosted process reports (D2).
               calls.delete(id)
               hushed = false
@@ -452,6 +463,8 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
               const summary = outputOf(change)
               return [{ type: "job-ended", id, status: ended, ...(summary === "" ? {} : { summary }) }]
             }
+            if (dropWakeCall(id, endedCall)) return []
+            if (!endedCall) return [...wake(), ...sight(change)]
             const out = [...wake(), ...sight(change)]
             const refused = calls.get(id)?.refused === true
             calls.delete(id)
@@ -474,8 +487,13 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
 
       const ask = (id: number | string, params: Json): Frame[] => {
         const change = params.toolCall as Json
+        const callId = String(change.toolCallId)
+        if (dropWakeCall(callId)) {
+          acp.reply(id, { outcome: { outcome: "cancelled" } })
+          return []
+        }
         const out = [...wake(), ...sight(change)]
-        if (calls.get(String(change.toolCallId))?.own !== undefined) {
+        if (calls.get(callId)?.own !== undefined) {
           // An own tool's tool task asks a person when the tool asks, so agy's ask is allowed at once (F18).
           const options = (params.options ?? []) as Array<{ optionId: string; kind: string }>
           const allow = options.find((each) => each.kind === "allow_once")?.optionId ?? "allow"
@@ -484,7 +502,7 @@ export const openConnection = (config: ProcessConfig<AgySettings>, start: Start,
         }
         const aborted = new AbortController()
         asking.set(id, { params, aborted })
-        const call = calls.get(String(change.toolCallId))!.call
+        const call = calls.get(callId)!.call
         void host
           .callbacks(undefined)
           .then((callbacks) => callbacks.approve(call, aborted.signal))

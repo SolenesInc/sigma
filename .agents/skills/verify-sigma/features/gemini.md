@@ -88,6 +88,13 @@ Steps:
   `Reply with exactly: after the stop`: the first run ends `interrupted`, the
   second answers `after the stop`, and the log shows one spawn and a
   `session/cancel`.
+- **Interrupt a wake during a command** (`gemini-wake`, `gemini-interrupt`),
+  fixture `wake_command_cancelled`. Send the prompt in the fixture and
+  allow the two calls agy asks about. Press `Esc` while the
+  second command is running. The wake ends interrupted and the TUI returns
+  to READY. Send `Reply with exactly: recovered`. The next run answers
+  `recovered`, and the socket view shows two completed job reports and three run ends
+  (answered, interrupted, answered).
 - **Resume** (`gemini-resume`), fixture `restart`:
   `drive.ts r sigma exec --provider agy --model gemini-4-hydrogen --effort low 'Remember the word PLUM. Reply with exactly: noted'`,
   `drive.ts r rpc server/stop`, then
