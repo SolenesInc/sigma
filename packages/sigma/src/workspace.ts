@@ -259,7 +259,7 @@ const typesIn = (env: ExecutionEnv, roots: ReadonlyArray<string>) =>
   )
 
 /**
- * The agent types a ChatGPT conversation can spawn, nearest first by name: the project's `.claude/agents`, then a
+ * The agent types a conversation sigma serves its tools to can spawn, nearest first by name: the project's `.claude/agents`, then a
  * local conversation's in `claudeConfig`, Claude Code's config folder on the home.
  */
 export const agentTypes = (workspace: Workspace, claudeConfig: string): Effect.Effect<Array<AgentType>> =>
@@ -293,17 +293,17 @@ export const toldOfWorkspace = (
   return kind === "openai" || (kind === "claude" && agent.target !== undefined && agent.target !== "local")
 }
 
-/** The name a conversation's model calls sigma's `read` by: Claude Code reaches it over sigma's MCP server. */
-const readTool = (
-  instances: ReadonlyMap<string, ProviderInstance>,
-  agent: { readonly model?: { readonly provider: string } },
-) => (agent.model !== undefined && instances.get(agent.model.provider)?.kind === "claude" ? "mcp__sigma__read" : "read")
+/** The name a conversation's model calls sigma's tool `name` by: Claude Code reaches it over sigma's MCP server. */
+const toolNamer =
+  (instances: ReadonlyMap<string, ProviderInstance>, agent: { readonly model?: { readonly provider: string } }) =>
+  (name: string) =>
+    agent.model !== undefined && instances.get(agent.model.provider)?.kind === "claude" ? `mcp__sigma__${name}` : name
 
-/** What ChatGPT is told of the agent types `spawn_agent` takes, or `""` when there are none. */
-const agentTypesInstructions = (types: ReadonlyArray<AgentType>) =>
+/** What the model is told of the agent types `spawn_agent` takes, or `""` when there are none. */
+const agentTypesInstructions = (types: ReadonlyArray<AgentType>, spawn: string) =>
   types.length === 0
     ? ""
-    : `\n# Agent types\n\nThe agent types \`spawn_agent\` takes as \`agent_type\`:\n${types.map((type) => `- ${type.name}: ${type.description}\n`).join("")}`
+    : `\n# Agent types\n\nThe agent types \`${spawn}\` takes as \`agent_type\`:\n${types.map((type) => `- ${type.name}: ${type.description}\n`).join("")}`
 
 /** Where a conversation with this agent state works; `undefined` for one with no environment. */
 export type WorkspaceOf = (
@@ -339,7 +339,8 @@ export const workspaceInstructions = (
               ],
               { concurrency: "unbounded" },
             )
-            const text = `The working directory is ${workspace.cwd}.\n${agentsMdInstructions(files)}${skillsInstructions(skills, readTool(instances, agent))}${agentTypesInstructions(types)}`
+            const named = toolNamer(instances, agent)
+            const text = `The working directory is ${workspace.cwd}.\n${agentsMdInstructions(files)}${skillsInstructions(skills, named("read"))}${agentTypesInstructions(types, named("spawn_agent"))}`
             return text.trimEnd()
           }).pipe(
             // A target it cannot reach now keeps what the model was told; its tools say what is gone.

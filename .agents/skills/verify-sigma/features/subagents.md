@@ -9,7 +9,9 @@ last did and whether it works, waits on a person or ended; a call the subagent
 asks about shows on its card and `^Y` or `^N` answers it from the parent. A
 subagent's last message of each run reaches its parent. `Esc` stops the run
 and every subagent's under it. On Claude, Claude Code runs its own subagents,
-and sigma commits each into a conversation of its own the same way. What a
+and sigma commits each into a conversation of its own the same way; on a
+target, Claude Code's Agent tool is off and it calls sigma's `spawn_agent`
+(`target-member-mode`). What a
 subagent's requests keep of the prompt cache is in
 [Prompt cache](./prompt-cache.md).
 
@@ -60,8 +62,9 @@ subagent's requests keep of the prompt cache is in
   is offered `spawn_agent`.
 - `subagent-types` reads agent types from `.claude/agents/*.md` from the
   directory up to the repository root, then Claude Code's config directory's
-  `agents/` (`$CLAUDE_CONFIG_DIR`, else `~/.claude`). A ChatGPT conversation
-  that can call `spawn_agent`, directly or from a code mode script, is told
+  `agents/` (`$CLAUDE_CONFIG_DIR`, else `~/.claude`; a conversation on a target
+  reads only the project's). A ChatGPT conversation, or a Claude one on a
+  target (told `mcp__sigma__spawn_agent`), that can call `spawn_agent`, directly or from a code mode script, is told
   them under `# Agent types` and names one as `spawn_agent`'s `agent_type`;
   an unknown one fails the call, naming the types there are. A subagent's
   instructions are those its parent inherited (the root's own, for a

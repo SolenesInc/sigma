@@ -114,6 +114,14 @@ const memberBash = (name: string, command: string) => {
       for (const child of Object.values(value)) visit(child)
     }
     visit(member.frame)
+    // Its process starts as member mode starts one: Claude Code's own tools, settings and other MCP servers off.
+    if (member.frame.argv) {
+      member.frame.argv = member.frame.argv.flatMap((arg: string) =>
+        arg.startsWith("--setting-sources=")
+          ? ["--setting-sources=", "--tools=ToolSearch", "--strict-mcp-config"]
+          : [arg],
+      )
+    }
     return member
   }
   const lines = source.slice(1).map(asMember)
@@ -126,7 +134,8 @@ const memberBash = (name: string, command: string) => {
   )
   const answer = { content: [{ type: "text", text: "<the target's folder>" }], isError: false }
   lines[result]!.frame.message.content = [{ tool_use_id: call, type: "tool_result", content: answer.content }]
-  const id = crypto.randomUUID()
+  // A fixed id, so deriving again writes the same fixture.
+  const id = "6f1c0a52-3b7e-4d2a-9c41-0d5e8a7b2f13"
   const mcp = { jsonrpc: "2.0", id: 2 }
   lines.splice(
     result,
@@ -168,3 +177,4 @@ const memberBash = (name: string, command: string) => {
 subagentWorking()
 memberBash("member_bash", 'echo "$SIGMA_TARGET_INSTANCE" > made; pwd')
 memberBash("member_restart", "echo box-2 > ../instance; kill -9 $(cat ../pid)")
+memberBash("member_sleep", "sleep 600")

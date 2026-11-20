@@ -45,7 +45,7 @@ export type McpResult = { content: McpPart[]; isError: boolean }
 export const OWN_TOOL = "mcp__sigma__"
 
 /** Sigma's name of a tool Claude Code calls: an MCP tool's without its prefix. */
-export const toolName = (name: string) => (name.startsWith(OWN_TOOL) ? name.slice(OWN_TOOL.length) : name)
+const toolName = (name: string) => (name.startsWith(OWN_TOOL) ? name.slice(OWN_TOOL.length) : name)
 
 /** A tool result as MCP carries it: its text and its images, whose shape MCP shares with sigma's. */
 const mcpContent = (content: unknown): McpPart[] => {
@@ -66,11 +66,10 @@ const toolUseOf = (extra: unknown) => {
 }
 
 /**
- * What a run in member mode has of sigma (D9): the names of sigma's tools Claude Code reaches over MCP, and what the
- * model must read after each of their calls, such as a computer behind the conversation that changed (D6).
+ * What a run in member mode has of sigma (D9): what the model must read after each call of sigma's tools, such as a
+ * computer behind the conversation that changed (D6). Its process reaches no MCP server but sigma's.
  */
 export type Member = {
-  readonly own: ReadonlySet<string>
   readonly notice: Effect.Effect<string | undefined>
 }
 
@@ -174,7 +173,9 @@ type Sighting = { readonly call: ToolCall; readonly response: string; readonly a
 /** The transcript of the conversation `scope` writes. */
 export const makeTranscript = (scope: TranscriptScope) => {
   const { runtime, api, agent, commit, serially, provider, modelId, position } = scope
-  const own = scope.member?.own ?? new Set<string>()
+  const member = scope.member !== undefined
+  /** The name sigma knows a tool Claude Code names `tool` by: one of sigma's own loses its MCP prefix. */
+  const nameOf = (tool: string) => (member ? toolName(tool) : tool)
   const conversationId = runtime.conversationId
   const task = runtime.taskId
   const main = position !== undefined
@@ -238,7 +239,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
               model: [assistant([call], seen.response, "toolUse")],
             })
             let tool: TaskId<ToolTaskResult> | undefined
-            if (runs && own.has(call.name)) {
+            if (runs) {
               tool = yield* tx.createTask(
                 ToolTask,
                 { kind: "model", assistant: entry.id, callId: call.id },
@@ -338,7 +339,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
     Effect.runPromise(effect, signal === undefined ? undefined : { signal })
 
   /** Whether Claude Code's `tool` is one of sigma's own, served over MCP. */
-  const isOwn = (tool: string) => tool.startsWith(OWN_TOOL) && own.has(toolName(tool))
+  const isOwn = (tool: string) => member && tool.startsWith(OWN_TOOL)
 
   /** Commits each call Claude Code runs itself before it runs, so the intent is durable before the effect. */
   const preToolUse: HookCallback = async (input, _toolUseID, { signal }) => {
@@ -393,7 +394,7 @@ export const makeTranscript = (scope: TranscriptScope) => {
             call: {
               type: "toolCall",
               id: block.id,
-              name: toolName(block.name),
+              name: nameOf(block.name),
               arguments: block.input as ToolCall["arguments"],
             },
             response: responseId,

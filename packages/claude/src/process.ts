@@ -64,7 +64,8 @@ export type ProcessConfig = {
  */
 export type MemberProcess = {
   readonly folder: { readonly config: string; readonly cwd: string }
-  readonly append: string | undefined
+  /** Rendered when a process starts, so a live process costs no render. */
+  readonly append: Effect.Effect<string | undefined>
 }
 
 /**
@@ -75,10 +76,10 @@ export const isMember = (agent: Agent) => agent.target !== undefined && agent.ta
 
 /**
  * How long Claude Code waits for a call of sigma's tools in member mode: as long as sigma's bash may run (its largest
- * `timeout`), so each tool's own limit, such as bash's 1800 s default, is the one the model sees. Measured with Claude
- * Code 2.1.329: an in-process MCP server's call has no idle timeout, waits `MCP_TOOL_TIMEOUT` when set, which a
- * person's environment may set lower, and otherwise 1e8 ms; a call past it is aborted and the model reads
- * `MCP server "sigma" tool "<name>" timed out after <n>s`.
+ * `timeout`, `MAX_TIMEOUT_SECONDS` in packages/tools' bash.ts), so each tool's own limit, such as bash's 1800 s
+ * default, is the one the model sees. Claude Code 2.1.312 waits `MCP_TOOL_TIMEOUT` ms when set, which a person's
+ * environment may set lower, and otherwise 1e8 ms (read from its bundle); measured, `MCP_TOOL_TIMEOUT=3000` aborted an
+ * 8 s call and the model read `MCP server "sigma" tool "sleep" timed out after 3s`.
  */
 const MEMBER_TOOL_TIMEOUT_MS = 2_147_483_647
 
@@ -309,7 +310,7 @@ export const openProcess = (config: ProcessConfig, start: Start) =>
     }
     const toolSearch = member === undefined ? yield* toolSearchSettings(agent.cwd, settingSources, env) : undefined
     const cwd = member === undefined ? agent.cwd : member.folder.cwd
-    const append = member === undefined ? agent.instructions : member.append
+    const append = member === undefined ? agent.instructions : yield* member.append
     const messages = query({
       prompt: inbox,
       options: {

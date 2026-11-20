@@ -67,6 +67,8 @@ const open = (claude: Fake, reports: Array<unknown> = [], processes: ClaudeProce
     const tasks = claudeRunTasks({
       settings: (provider) => (provider === "claude" ? claude.settings : undefined),
       processes: yield* makeClaudeProcesses(processes),
+      // These conversations are all local, so none runs in member mode.
+      member: { folder: () => Effect.die("no target"), notice: () => Effect.succeed(undefined) },
     })
     registry.install(defineExtension({ name: "claude", tasks: tasks.tasks }))
     const harness = yield* Effect.acquireRelease(

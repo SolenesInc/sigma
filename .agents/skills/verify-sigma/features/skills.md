@@ -7,13 +7,15 @@ root, then under `SIGMA_HOME/skills`; the nearest skill of a name wins.
 `skills/list` answers which skills a conversation can name. A message that
 starts with `/name`, or holds `$name`, carries that skill's `SKILL.md` in its
 committed `sigma.user` entry, and every TUI shows `with <name>, ...` under the
-message. Claude Code reads its own `CLAUDE.md` files and skills, so Claude and
-scripted conversations list none and carry none.
+message. Claude Code reads its own `CLAUDE.md` files and skills, so local
+Claude and scripted conversations list none and carry none. A Claude
+conversation on a target runs in member mode and is told them as ChatGPT is
+([Targets](./targets.md), `target-member-mode`).
 
 ## Sub-features
 
 - `skills-list` answers a conversation's skills, sorted by name, each with its
-  `name`, `description` and `path`; `[]` for `claude` and `script`;
+  `name`, `description` and `path`; `[]` for `script` and a local `claude`;
   `NoSuchConversation` for an unknown id.
 - `skills-found` looks in `.agents/skills` and `.claude/skills` of each folder
   from the conversation's directory up to the folder holding `.git`, then in
@@ -169,7 +171,7 @@ Preconditions:
 
 ## Contexts
 
-- **Provider.** Claude Code reads its own `CLAUDE.md` files and skills. OpenAI is told the `AGENTS.md` files and skills.
+- **Provider.** Claude Code reads its own `CLAUDE.md` files and skills. OpenAI is told the `AGENTS.md` files and skills, and so is Claude Code on a target, in its system prompt's `append`, reading a skill with `mcp__sigma__read`.
 - **Script.** A script conversation is told no workspace section.
 
 ## Tests

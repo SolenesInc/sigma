@@ -148,7 +148,7 @@ lists when a change touches them.
   or refused, and sign-in failures.
 - [Instructions and skills](./skills.md) (people, agents): `skills/list`, `/name` and `$name`
   carry a skill's `SKILL.md` with a message; OpenAI is told the `AGENTS.md`
-  files and skills; Claude Code runs its own skills.
+  files and skills; Claude Code runs its own skills, but on a target is told them too.
 - [Code mode](./code-mode.md) (people, agents): ChatGPT's code-mode-only models get one
   `codemode` tool whose scripts call sigma's tools in a sandbox, asking like
   direct calls, and survive a server restart.

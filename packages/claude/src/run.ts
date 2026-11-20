@@ -44,8 +44,8 @@ import { JobLinks } from "./links.ts"
 import {
   type ClaudeProcessSettings,
   isMember,
-  openProcess,
   ownTools,
+  openProcess,
   type ProcessConfig,
   processKey,
   selectionOf,
@@ -55,7 +55,7 @@ import type { ClaudeProcesses, Openings } from "./processes.ts"
 import { history, INTERRUPTED, JOINING, type Said, textOf, unseen } from "./retell.ts"
 import type { ClaudeRunCheckpoint, Ended, RunContext } from "./serving.ts"
 import { ClaudeSessionDoc } from "./session.ts"
-import { expireApprovals, type Hosting, type Member } from "./transcript.ts"
+import { expireApprovals, type Hosting } from "./transcript.ts"
 
 export const CLAUDE_RUN_KIND = "claude.run"
 
@@ -74,8 +74,8 @@ export interface ClaudeRunOptions {
   readonly title?: (conversation: ConversationId) => Effect.Effect<string | undefined>
   /** The live processes the runs lease, from `makeClaudeProcesses`. */
   readonly processes: ClaudeProcesses
-  /** How a remote conversation's runs reach sigma in member mode (D9); without it they fail. */
-  readonly member?: MemberOptions
+  /** How a remote conversation's runs reach sigma in member mode (D9). */
+  readonly member: MemberOptions
 }
 
 export interface MemberOptions {
@@ -114,6 +114,18 @@ const interruptCalls = (tx: Tx, runtime: Runtime) =>
     }
     yield* expireApprovals(tx, runtime.conversationId, runtime.taskId)
     return live
+  })
+
+/**
+ * Ends the calls of sigma's own tools whose tool tasks still run though no Claude Code waits for them, as after its
+ * process exited or the server restarted, so each call has its one result, from its task, before the run goes on.
+ */
+const endOwnCalls = (runtime: Runtime) =>
+  Effect.gen(function* () {
+    const slots = (yield* runtime.snapshot(LiveDoc, runtime.conversationId))?.tools ?? []
+    for (const slot of slots) {
+      if (slot.taskId !== undefined && slot.entry === undefined) yield* runtime.abortOwned(slot.taskId)
+    }
   })
 
 /** The entries after `seen` in the task's conversation, oldest first. */
@@ -206,19 +218,21 @@ const fresh = (runtime: Runtime, api: TaskApi, title: Title) =>
     return { start, texts: joins ? [JOINING, ...told] : told }
   })
 
+/** What a run tells its process before `texts`, the opening it was given. */
+type Told = (texts: ReadonlyArray<Said>) => Effect.Effect<ReadonlyArray<Said>>
+
+/** Whether an opening is a compaction's: Claude Code reads a `/compact` prompt as its command. */
+const isCompaction = (texts: ReadonlyArray<Said>) => {
+  const last = texts.findLast((part) => typeof part === "string")
+  return last !== undefined && /^\/compact(\s|$)/.test(last)
+}
+
 /**
  * Serves the run with the conversation's live process, or a new one `openings` starts. A run that answers leaves the
  * process live, having seen every entry before the run's end, unless Claude Code still has background work (D6). A
  * stopped run leaves it live too, once Claude Code ended the turn it cut off (D5).
  */
-const converse = <E>(
-  shared: Shared,
-  config: ProcessConfig,
-  run: RunContext,
-  openings: Openings<E>,
-  prepare: (config: ProcessConfig) => Effect.Effect<ProcessConfig> = Effect.succeed,
-  told: ReadonlyArray<Said> = [],
-) =>
+const converse = <E>(shared: Shared, config: ProcessConfig, run: RunContext, openings: Openings<E>, told: Told) =>
   Effect.scoped(
     Effect.gen(function* () {
       const { runtime } = run
@@ -227,9 +241,9 @@ const converse = <E>(
         processKey(config),
         selectionOf(config.agent),
         openings,
-        (start) => Effect.flatMap(prepare(config), (prepared) => openProcess(prepared, start)),
+        (start) => openProcess(config, start),
       )
-      const ended = yield* lease.process.serve(run, [...told, ...lease.texts]).pipe(
+      const ended = yield* lease.process.serve(run, [...(yield* told(lease.texts)), ...lease.texts]).pipe(
         // The run's commits are refused from here, but it still reads.
         Effect.onInterrupt(() =>
           Effect.ignore(
@@ -239,6 +253,7 @@ const converse = <E>(
           ),
         ),
       )
+      yield* endOwnCalls(runtime)
       // Read before the run's end commits, which may start the next run with inputs the process has not seen.
       if (ended._tag === "answered" && !ended.turnLimit && !lease.process.busy) lease.keep(yield* newest(runtime))
       return { ended, live: lease.live }
@@ -303,34 +318,31 @@ const endCutOff = (ctx: RunCtx & { readonly runtime: Runtime }, task: Running) =
 
 type Title = NonNullable<ClaudeRunOptions["title"]>
 
+/** What Claude Code 2.1.312 ends a signed-out run with: `Not logged in · Please run /login`, or an API key's refusal. */
+const SIGNED_OUT = /Please run \/login/
+
+/** How a member-mode process is signed in where its target's folder holds none. */
+export const MEMBER_SIGN_IN =
+  "Claude Code on a target signs in from the server's environment: set CLAUDE_CODE_OAUTH_TOKEN, made with `claude setup-token`"
+
 type Shared = {
   readonly options: ClaudeRunOptions
   readonly hosting: Hosting
-  /** The sections each member-mode conversation's newest process was started with, kept when one fails to render. */
-  readonly shown: Map<ConversationId, Map<string, string>>
 }
 
 /**
  * The system prompt's `append` of a member-mode process: the conversation's sections, rendered through its env as
- * sigma's own loop renders them, so the model reads the target's instructions (D11). A section that fails keeps the
- * text the conversation's last process was started with.
+ * sigma's own loop renders them for the tools it offers, so the model reads the target's instructions (D11).
  */
-const appendOf = (shared: Shared, runtime: Runtime, api: TaskApi, agent: Agent) =>
+const appendOf = (runtime: Runtime, api: TaskApi, served: Agent) =>
   Effect.gen(function* () {
     const conversationId = runtime.conversationId
+    const agent = { ...served, tools: ownTools(served) }
     const env = yield* Effect.orElseSucceed(api.env, () => undefined)
-    const shown = shared.shown.get(conversationId) ?? new Map<string, string>()
-    const input = {
-      conversationId,
-      agent,
-      env,
-      shown: Object.fromEntries(shown),
-      read: { snapshot: runtime.snapshot },
-    }
-    const rendered = yield* renderSections(agent.sections, input as never, shown, (error) =>
+    const input = { conversationId, agent, env, shown: {}, read: { snapshot: runtime.snapshot } }
+    const rendered = yield* renderSections(agent.sections, input as never, new Map(), (error) =>
       api.report(error, { kind: "host", callback: "section" }),
     )
-    shared.shown.set(conversationId, rendered)
     return rendered.size === 0 ? undefined : [...rendered.values()].join("\n\n")
   })
 
@@ -346,7 +358,9 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
           const ctx = { runtime, api }
           if (cutOffTooOften(task, api.settings().restartLimit)) return yield* endCutOff(ctx, task)
           // A call the last invocation left without a result was cut off, whether by a crash or by a stop, which the
-          // kernel does not count as a restart; either ended its process.
+          // kernel does not count as a restart; either ended its process. A call of sigma's own tools gets its result
+          // from its tool task.
+          yield* endOwnCalls(runtime)
           const slots = yield* runtime.snapshot(LiveDoc, runtime.conversationId)
           if (slots?.generation !== undefined || slots?.tools?.some((slot) => slot.entry === undefined)) {
             yield* runtime.commit((tx) => Effect.as(interruptCalls(tx, runtime), undefined as never))
@@ -357,52 +371,43 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
           if (settings === undefined) {
             return yield* finish(ctx, { _tag: "failed", message: `Claude Code does not serve provider ${provider}` })
           }
-          const member = shared.options.member
-          if (isMember(agent) && member === undefined) {
-            return yield* finish(ctx, { _tag: "failed", message: `Claude Code cannot reach target ${agent.target}` })
-          }
+          const { member } = shared.options
           const target = isMember(agent) ? agent.target! : undefined
-          const folder = target === undefined ? undefined : yield* member!.folder(target)
+          const folder = target === undefined ? undefined : yield* member.folder(target)
           const config: ProcessConfig = {
             agent,
             settings,
             rootConversation: String(runtime.conversationId),
-            ...(folder === undefined ? {} : { member: { folder, append: undefined } }),
+            ...(folder === undefined ? {} : { member: { folder, append: appendOf(runtime, api, agent) } }),
           }
-          const notice: Member["notice"] | undefined =
-            target === undefined ? undefined : member!.notice(runtime.conversationId, target)
+          const notice = target === undefined ? undefined : member.notice(runtime.conversationId, target)
           const run: RunContext = {
             runtime,
             api,
             agent,
             hosting: shared.hosting,
-            ...(notice === undefined
-              ? {}
-              : { member: { own: new Set(ownTools(agent).map((tool) => tool.name)), notice } }),
+            ...(notice === undefined ? {} : { member: { notice } }),
           }
-          const prepare = (config: ProcessConfig) =>
-            config.member === undefined
-              ? Effect.succeed(config)
-              : Effect.map(appendOf(shared, runtime, api, agent), (append) => ({
-                  ...config,
-                  member: { ...config.member!, append },
-                }))
           const title: Title = shared.options.title ?? (() => Effect.succeed(undefined))
           const cold = () => opening(runtime, api, provider, title)
-          // The computer behind a remote conversation may have changed since its last run: it is told first.
-          const changed = notice === undefined ? undefined : yield* notice
-          const told = changed === undefined ? [] : [changed]
+          // The computer behind a remote conversation may have changed since its last run: it is told first, once for
+          // the run however many processes serve it. A compaction is not told, and reaches no target, so its
+          // `/compact` stays the whole prompt Claude Code reads as its command; the run after it is told.
+          const changed = notice === undefined ? undefined : yield* Effect.cached(notice)
+          const told: Told = (texts) =>
+            changed === undefined || isCompaction(texts)
+              ? Effect.succeed([])
+              : Effect.map(changed, (text) => (text === undefined ? [] : [text]))
           let { ended, live } = yield* converse(
             shared,
             config,
             run,
             { live: (seen) => afterSeen(runtime, provider, seen), cold },
-            prepare,
             told,
           )
           // A live process lost while it waited costs a cold start and nothing else (D1).
           if (ended._tag === "exited" && live) {
-            ended = (yield* converse(shared, config, run, { cold }, prepare, told)).ended
+            ended = (yield* converse(shared, config, run, { cold }, told)).ended
           }
           if (ended._tag === "gone") {
             // The session is gone, or no longer holds the position (F12): start over, told the conversation.
@@ -412,8 +417,11 @@ const makeRunTask = (shared: Shared): Task<Record<string, never>, ClaudeRunCheck
                 return undefined as never
               }),
             )
-            ended = (yield* converse(shared, config, run, { cold: () => fresh(runtime, api, title) }, prepare, told))
-              .ended
+            ended = (yield* converse(shared, config, run, { cold: () => fresh(runtime, api, title) }, told)).ended
+          }
+          // A target's own Claude Code folder holds no sign-in where Claude Code keeps it there, as on Linux (C45).
+          if (folder !== undefined && ended._tag === "failed" && SIGNED_OUT.test(ended.message)) {
+            ended = { ...ended, message: `${ended.message}. ${MEMBER_SIGN_IN}` }
           }
           return yield* finish(ctx, ended)
         }),
@@ -445,7 +453,7 @@ export function claudeRunTasks(options: ClaudeRunOptions): {
 } {
   const links = new JobLinks()
   const job = makeJobTask(links)
-  const run = makeRunTask({ options, hosting: { job, anchor: JobAnchor, links }, shown: new Map() })
+  const run = makeRunTask({ options, hosting: { job, anchor: JobAnchor, links } })
   return {
     tasks: [run, job, JobAnchor],
     runTasks: {

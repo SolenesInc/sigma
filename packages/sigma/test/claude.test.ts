@@ -1142,12 +1142,17 @@ test("claude-tool-search: tool search set to auto in the person's Claude Code se
 })
 
 /** A Claude conversation on the test target `box`, whose work folder holds `agents`, as its AGENTS.md. */
-const memberSession = async (claude: FakeClaude, targets: TestTargets, agents = "Run the tests with make check.") => {
+const memberSession = async (claude: FakeClaude, targets: TestTargets, cwd?: (work: string) => string) => {
   const work = targets.add("box", "box-1", "vol-1")
-  writeFileSync(join(work, "AGENTS.md"), agents)
+  writeFileSync(join(work, "AGENTS.md"), "Run the tests with make check.")
   const session = await conversationWith(
     claude,
-    { target: "box", cwd: work, approvals: "auto", instructions: "Report with attn when done." } as never,
+    {
+      target: "box",
+      cwd: cwd?.(work) ?? work,
+      approvals: "auto",
+      instructions: "Report with attn when done.",
+    } as never,
     { config: { target_connector: targets.connector } },
   )
   return { ...session, work }
@@ -1163,10 +1168,24 @@ const boxFolder = (home: string) => {
 const spawnLine = (claude: FakeClaude, spawn: number) =>
   claude.log().find((entry) => entry.spawn === spawn && entry.argv !== undefined)
 
-test("target-member-mode: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's AGENTS.md", async () => {
+test("target-member-mode: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's own folders, told the target's AGENTS.md, skills and agent types", async () => {
   using targets = new TestTargets()
   using claude = new FakeClaude("member_bash")
-  await using session = await memberSession(claude, targets)
+  // The conversation's folder is a repository on the target, and another at the same path on the home.
+  const cwd = (work: string) => {
+    mkdirSync(join(work, ".git"))
+    mkdirSync(join(work, ".agents", "skills", "deploy"), { recursive: true })
+    writeFileSync(join(work, ".agents", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy it\n---\n")
+    mkdirSync(join(work, ".claude", "agents"), { recursive: true })
+    writeFileSync(join(work, ".claude", "agents", "reviewer.md"), "---\nname: reviewer\ndescription: Reviews it\n---\n")
+    const home = join(work, "..", "home-repo")
+    mkdirSync(join(home, ".git"), { recursive: true })
+    writeFileSync(join(home, "AGENTS.md"), "Home rules.")
+    targets.map("box", home, work)
+    return home
+  }
+  await using session = await memberSession(claude, targets, cwd)
+  const repo = join(session.work, "..", "home-repo")
   await session.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
   await session.view.until(settled(1))
 
@@ -1192,19 +1211,42 @@ test("target-member-mode: a remote conversation's Claude Code has only sigma's t
   for (const tool of offered) expect(tool._meta).toEqual({ "anthropic/alwaysLoad": true })
   // The conversation's instructions, then what the target's folder holds, not the home's.
   expect(initialize.appendSystemPrompt).toContain("Report with attn when done.")
-  expect(initialize.appendSystemPrompt).toContain(`The working directory is ${session.work}.`)
+  expect(initialize.appendSystemPrompt).toContain(`The working directory is ${repo}.`)
   expect(initialize.appendSystemPrompt).toContain("Run the tests with make check.")
+  expect(initialize.appendSystemPrompt).not.toContain("Home rules.")
+  // Nor of code mode, which Claude Code is not offered.
+  expect(initialize.appendSystemPrompt).not.toContain("<codemode>")
+  // Its skills, read with sigma's read, which Claude Code knows by its MCP name.
+  expect(initialize.appendSystemPrompt).toContain("`mcp__sigma__read` its `SKILL.md`")
+  expect(initialize.appendSystemPrompt).toContain(
+    "The agent types `mcp__sigma__spawn_agent` takes as `agent_type`:\n- reviewer: Reviews it",
+  )
+  expect(initialize.appendSystemPrompt).toContain(
+    `- deploy: Deploy it (file: ${join(repo, ".agents", "skills", "deploy", "SKILL.md")})`,
+  )
 
-  // The call ran on the target, in its folder, and Claude Code read its result over MCP.
+  // The call ran on the target, in the folder its path names there, and Claude Code read its result over MCP.
   expect(readFileSync(join(session.work, "made"), "utf8")).toBe("box-1\n")
   const answered = claude.log().find((entry) => entry.received?.response?.response?.mcp_response)
   expect(answered.received.response.response.mcp_response.result).toEqual({
-    content: [{ type: "text", text: `${session.work}\n` }],
+    content: [{ type: "text", text: `${repo}\n` }],
     isError: false,
   })
-  expect(results(session.view.seen())).toEqual([expect.objectContaining({ text: `${session.work}\n`, isError: false })])
+  expect(results(session.view.seen())).toEqual([expect.objectContaining({ text: `${repo}\n`, isError: false })])
   expect(calls(session.view.seen()).map((call) => call.name)).toEqual(["bash"])
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: made", "run_end: answered"])
+})
+
+test("target-member-mode, claude-sign-in-error: a signed-out Claude Code on a target fails the run saying how a target's Claude Code signs in", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("auth_failed")
+  await using session = await memberSession(claude, targets)
+  await session.submit("hello")
+  await session.view.until(settled(1))
+  expect(transcript(session.view.seen())).toEqual([
+    "user: hello",
+    "run_end: failed (Invalid API key · Please run /login. Claude Code on a target signs in from the server's environment: set CLAUDE_CODE_OAUTH_TOKEN, made with `claude setup-token`)",
+  ])
 })
 
 test("target-member-mode: a local conversation's Claude Code keeps its own tools, settings and folder", async () => {
@@ -1214,9 +1256,11 @@ test("target-member-mode: a local conversation's Claude Code keeps its own tools
   await session.view.until(settled(1))
   const spawn = claude.spawns()[0]!
   expect(spawn["--setting-sources"]).toBe("user,project,local")
-  for (const flag of ["--tools", "--strict-mcp-config", "--mcp-config"]) expect(spawn[flag]).toBeUndefined()
+  for (const flag of ["--tools", "--strict-mcp-config"]) expect(spawn[flag]).toBeUndefined()
+  // No MCP server: sigma's tools are not offered, Claude Code's own act on the home.
+  expect(claude.log().find((entry) => entry.initialize)!.initialize.sdkMcpServers).toBeUndefined()
   expect(spawnLine(claude, 0).cwd).toBe(session.server.home.dir)
-  expect(spawnLine(claude, 0).env.CLAUDE_CONFIG_DIR ?? "").not.toContain(join(session.server.home.dir, "targets"))
+  expect(spawnLine(claude, 0).env.CLAUDE_CONFIG_DIR).toBeUndefined()
 })
 
 test("target-member-mode, claude-resume: a remote conversation's Claude Code resumes its session in the target's folders", async () => {
@@ -1276,6 +1320,28 @@ test("target-restarted, target-member-mode: Claude Code in member mode is told i
       .filter((entry) => entry.kind === "sigma.target_changed")
       .map((entry) => entry.data),
   ).toEqual([expect.objectContaining({ target: "box", filesKept: true })])
+})
+
+test("target-member-mode, target-server-restart: a call of sigma's tools cut off by a crashed server has one result, its tool task's", async () => {
+  using targets = new TestTargets()
+  using claude = new FakeClaude("member_sleep", "text")
+  const first = await memberSession(claude, targets)
+  await first.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
+  await first.view.until(() => calls(first.view.seen()).length === 1)
+  first.client.close()
+  await first.server.stop()
+
+  await using server = await runningServer([], {
+    home: first.server.home,
+    claude: claude.options,
+    config: { target_connector: targets.connector },
+  })
+  const client = await RawClient.connect(server.home.socket)
+  const view = watchView(client, first.conversation)
+  await view.until(settled(1))
+  expect(results(view.seen())).toEqual([expect.objectContaining({ isError: true })])
+  expect(results(view.seen())[0]!.text).toContain("Tool bash was")
+  client.close()
 })
 
 test("target-restarted, target-member-mode: a remote Claude conversation's next run is told first that its computer restarted while the server was down", async () => {

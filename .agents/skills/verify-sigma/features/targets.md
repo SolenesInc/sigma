@@ -163,3 +163,7 @@ Preconditions:
   a change found between those points waits for the next one.
 - In member mode Claude Code reads `AGENTS.md` and skills only as they were
   when its process started; an edit reaches it with its next process.
+- `$SIGMA_HOME/targets/<key>` holds the target's Claude Code sessions for the
+  life of the home; sigma does not remove it. Deleting it while no conversation
+  on that target runs costs their Claude Code sessions: their next runs start
+  fresh sessions, told the conversation.
