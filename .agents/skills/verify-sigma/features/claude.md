@@ -116,8 +116,8 @@ it into a run that serves Claude Code's own follow-up.
   its models, from Claude Code itself.
 - `claude-system-prompt` keeps Claude Code's own system prompt and appends the
   workers section (`worker-section` in [Workers](./workers.md)), then the
-  conversation's start instructions, to it; Claude Code's commands see
-  `SIGMA_ROOT_CONVERSATION`.
+  conversation's start instructions, to it; Claude Code's commands, its
+  subagents' too, see `SIGMA_ROOT_CONVERSATION` as the id the client chose.
 - `claude-offered-sections` [kernel] puts the prompt sections of the
   extensions Claude Code is offered as its own tools before the conversation's
   instructions. Sigma offers it the worker tools (`worker-claude-parent`), so
@@ -451,7 +451,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 Provider, `packages/sigma/test/claude.test.ts`:
 
 - claude-answer, provider-claude: Claude's answer through Claude Code is committed as sigma's message
-- claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation
+- claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation by the id its client chose
 - claude-approval: a command Claude wants to run waits for a person, and Claude Code hears the answer
 - claude-read: Claude reads files without asking and the read shows as a call and its result
 - claude-resume, claude-live: a Claude Code process that exits while it waits for the next run is replaced by one that resumes where sigma's transcript ends

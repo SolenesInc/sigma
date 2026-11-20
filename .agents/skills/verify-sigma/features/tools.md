@@ -51,7 +51,6 @@ Tools return separate channels for the model, programs and clients, are bounded 
 - `tool-grep` [kernel] `grep` searches file contents with a regular expression through the conversation's environment, skipping binary and git-ignored files.
 - `tool-glob` [kernel] `glob` lists files matching a glob, newest first, through the conversation's environment.
 - `tool-apply-patch` [kernel] `apply_patch` adds, updates, moves and deletes files from one patch in the Codex format, under the per-file mutation queue.
-- `tool-root-env-kernel` [kernel] `bash` with `rootConversationEnv` sets `SIGMA_ROOT_CONVERSATION` to the conversation people started, also in a conversation a task owns.
 
 ## How to get to it
 

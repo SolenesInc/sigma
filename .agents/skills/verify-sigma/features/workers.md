@@ -96,8 +96,9 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
   (`{"workers": [{"name", "status"}]}`, each `running`, `interrupted`,
   `completed` or `errored`), and stops one worker from its parent with
   `stop_worker`, answering its `previous_status`.
-- `worker-root-env` runs a worker's commands with
-  `SIGMA_ROOT_CONVERSATION` set to the conversation people started.
+- `worker-root-env` runs a worker's commands, on any provider, with
+  `SIGMA_ROOT_CONVERSATION` set to the id of the conversation people started,
+  as its client chose it.
 - `worker-answer` hands a worker's last message to its parent: a waiting
   `wait_worker` returns it as
   `{"timed_out": false, "received": [{"from": "/root/<name>", "kind": "final_answer", "text": ...}]}`
@@ -608,7 +609,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - worker-limits, child-tools: a follow-up task does not wake an idle worker while maxThreads workers work
 - child-tools, worker-message, worker-assign: a worker takes messages and follow-up tasks
 - child-tools, worker-list: interrupting a worker stops its turn and reports what it was doing
-- worker-root-env, tool-root-env: a worker's command knows the conversation people started
+- worker-root-env, tool-root-env: a worker's command knows the conversation people started by the id its client chose
 - worker-limits: a tree runs at most as many workers at once as config.toml allows
 - worker-limits: with max_threads 0 in config.toml the root conversation is not offered start_worker
 - worker-limits, child-tools: under the default config a worker starts a worker of its own, told only its own task
@@ -641,13 +642,13 @@ Provider, `packages/sigma/test/openai.test.ts`:
 
 Provider, `packages/sigma/test/claude.test.ts`:
 
-- worker-provider, worker-model: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone, and the agent's wait returns the worker's answer
+- worker-provider, worker-model, worker-root-env: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone and whose commands know the conversation people started, and the agent's wait returns the worker's answer
 - worker-interrupt, worker-approve: a Claude Code worker asks its own approval, and stopping its idle parent ends the worker's run and clears the approval
 - worker-claude-parent, worker-answer: a Claude Code parent starts a scripted worker with sigma's worker tools and reads its answer from wait_worker
 - worker-claude-parent, subagent-claude: a Claude subagent that calls sigma's worker tools is refused in its own conversation, so it neither starts workers its tree cannot see nor answers as /root
 - target-remote-hands, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them
 - target-remote-hands, worker-section: a remote conversation's Claude Code has only sigma's tools, acting on the target, in the target's working folder, told the target's platform, AGENTS.md, skills and agent types
-- claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation
+- claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation by the id its client chose
 - worker-claude-parent, worker-fork: a Claude Code parent's worker on Claude Code starts a session of its own from its brief, not a fork of the parent's
 
 Provider, `packages/sigma/test/agy.test.ts`:

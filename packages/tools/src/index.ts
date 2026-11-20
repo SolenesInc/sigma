@@ -32,7 +32,7 @@ export {
 export { createGlobTool, type GlobToolInput } from "./glob.ts"
 export { createGrepTool, type GrepToolInput } from "./grep.ts"
 export { createReadTool, type ReadToolDetails, type ReadToolInput, type ReadToolOptions } from "./read.ts"
-export { rootConversation, rootConversationEnv } from "./root.ts"
+export { rootConversation } from "./root.ts"
 export { rankDocuments, type SearchDocument, tokenize } from "./search.ts"
 export {
   createToolSearchExtension,

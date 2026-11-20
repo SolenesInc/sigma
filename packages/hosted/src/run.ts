@@ -77,6 +77,11 @@ export interface HostedRunOptions {
   readonly adapters: ReadonlyArray<Adapter>
   /** The conversation's title, which names a fresh session so the harness does not ask a model for one. */
   readonly title?: (conversation: ConversationId) => Effect.Effect<string | undefined>
+  /**
+   * The id clients name the conversation people started by, for a conversation under it or for it: what the
+   * harness's commands see as `SIGMA_ROOT_CONVERSATION`.
+   */
+  readonly rootConversation: (conversation: ConversationId) => Effect.Effect<string>
   /** The live processes the runs lease, from `makeHostedProcesses`. */
   readonly processes: HostedProcesses
   /**
@@ -459,7 +464,7 @@ const makeRunTask = (
           const config: ProcessConfig = {
             agent,
             settings,
-            rootConversation: String(runtime.conversationId),
+            rootConversation: yield* shared.options.rootConversation(runtime.conversationId),
             own,
             ...(instructions === undefined ? {} : { instructions }),
             ...(cwd === undefined ? {} : { remoteHands: { cwd, append: appendOf(runtime, api, agent, own) } }),

@@ -40,7 +40,9 @@ conversation was started with `--auto`, which runs every call without asking.
 - `tool-output-live` shows a command's output as it prints, under its call
   while the status reads `WORKING`, then commits it whole with the result.
 - `tool-root-env` runs every command with `SIGMA_ROOT_CONVERSATION` set to the
-  id of the conversation people started, in a subagent too.
+  id of the conversation people started, as its client chose it at
+  `conversation/start` (its number when the client chose none), in a subagent
+  too.
 
 ## How to get to it
 
@@ -103,10 +105,12 @@ Preconditions:
   never asks.
 - **Root conversation.** In a fresh run whose script is
   `[{"tool": {"name": "bash", "input": {"command": "echo root=$SIGMA_ROOT_CONVERSATION"}}}, {"text": "all done"}]`,
-  run `drive.ts r sigma exec --auto 'which conversation?'`, take the id from
-  `drive.ts r rpc conversation/list`, then `drive.ts r watch <id> --save root-env`:
-  the `pi.tool-result` is `root=<id>`. A subagent's commands get the same id, in
-  [Subagents](./workers.md).
+  run `drive.ts r sigma exec --auto --conversation 1e647688-9113-4df0-8e6c-b3d89966c4ed 'which conversation?'`,
+  then `drive.ts r watch 1e647688-9113-4df0-8e6c-b3d89966c4ed --save root-env`:
+  the `pi.tool-result` is `root=1e647688-9113-4df0-8e6c-b3d89966c4ed`, the id
+  the client chose, not the `number` `rpc conversation/list` shows. Without
+  `--conversation`, it is that number. A subagent's commands get the same id,
+  in [Subagents](./workers.md).
 - **Output streams live.** In a fresh run whose script is
 
   ```json
@@ -180,7 +184,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - approval-wire: a denied call is reported to the model as denied and does not run, and an unknown approval is refused by name
 - tool-read-only, approval-auto: reading calls and conversations started with auto approvals run without asking
 - child-tools, approval-auto: a subagent of a conversation that runs calls without asking does not ask either
-- worker-root-env, tool-root-env: a worker's command knows the conversation people started
+- worker-root-env, tool-root-env: a worker's command knows the conversation people started by the id its client chose
 - approval-restart, status-snapshot: a call waiting for approval across a restart asks again after it, and runs once allowed
 - approval-ask: a call that changes things waits for a person, and every client sees what it asks and that the tree waits
 - tool-output-live: a running command's output streams live and ends as its result

@@ -77,6 +77,7 @@ const open = (
       processes: yield* makeHostedProcesses(processes),
       ...(offered === undefined ? {} : { offered }),
       // These conversations are all local, so none runs with remote hands.
+      rootConversation: (conversation) => Effect.succeed(String(conversation)),
       remoteHands: {
         cwd: () => Effect.die("no target"),
         notice: () => Effect.succeed(undefined),

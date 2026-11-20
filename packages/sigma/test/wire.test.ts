@@ -1066,7 +1066,7 @@ const startAuto = async (client: RawClient, cwd: string, id?: string) =>
     })
   ).result.conversation as string
 
-test("worker-root-env, tool-root-env: a worker's command knows the conversation people started", async () => {
+test("worker-root-env, tool-root-env: a worker's command knows the conversation people started by the id its client chose", async () => {
   await using server = await runningServer([
     { tool: { name: "start_worker", input: { task_name: "envy", message: "show your root", fork_turns: "none" } } },
     { tool: { name: "wait_worker", input: { timeout_ms: 600000 } } },
@@ -1075,7 +1075,8 @@ test("worker-root-env, tool-root-env: a worker's command knows the conversation 
     { agent: "/root/envy", text: "shown" },
   ])
   const client = await RawClient.connect(server.home.socket)
-  const conversation = await startAuto(client, server.home.dir)
+  const conversation = await startAuto(client, server.home.dir, "chosen-root")
+  expect(conversation).toBe("chosen-root")
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate")
   await view.until(settled(1), 20_000)

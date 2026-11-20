@@ -2,7 +2,7 @@
 // a person first (D13), and code mode, which models that take only code mode are offered instead of them.
 import { CODEMODE_TOOL_NAME, createCodemodeExtension } from "@sigma/codemode"
 import type { CodemodeSandbox } from "@sigma/codemode/sandbox"
-import { defineExtension, type Extension, type ToolRegistration } from "@sigma/harness"
+import { defineExtension, type Extension, type Harness, type ToolRegistration } from "@sigma/harness"
 import {
   createApplyPatchTool,
   createBashTool,
@@ -12,16 +12,18 @@ import {
   createReadTool,
   createWriteTool,
   type ImageProcessor,
-  rootConversationEnv,
 } from "@sigma/tools"
+import { Effect } from "effect"
+import { rootName } from "../conversations.ts"
 
 const asking = <T extends ToolRegistration>(tool: T): T => ({ ...tool, asks: true })
 
 /**
  * Sigma's tools, where `read` prepares images with `images`, as attached ones are, and `bash` stops a command after
- * `bashTimeout` seconds unless its call says otherwise.
+ * `bashTimeout` seconds unless its call says otherwise. Every command runs with `SIGMA_ROOT_CONVERSATION` set to the
+ * id clients name the conversation people started by.
  */
-export const sigmaTools = (images: ImageProcessor, bashTimeout?: number) =>
+export const sigmaTools = (harness: () => Harness, images: ImageProcessor, bashTimeout?: number) =>
   defineExtension({
     name: "sigma-tools",
     tools: [
@@ -33,7 +35,10 @@ export const sigmaTools = (images: ImageProcessor, bashTimeout?: number) =>
       asking(createApplyPatchTool()),
       asking(
         createBashTool({
-          prepare: rootConversationEnv,
+          prepare: (execution, api) =>
+            Effect.map(rootName(harness(), api.conversationId), (root) => {
+              execution.env.SIGMA_ROOT_CONVERSATION = root
+            }),
           ...(bashTimeout === undefined ? {} : { defaultTimeout: bashTimeout }),
         }),
       ),

@@ -135,6 +135,7 @@ const open = () =>
     const tasks = hostedRunTasks({
       adapters: [scripted.adapter],
       processes,
+      rootConversation: (conversation) => Effect.succeed(String(conversation)),
       remoteHands: {
         cwd: () => Effect.die("no target"),
         notice: () => Effect.succeed(undefined),

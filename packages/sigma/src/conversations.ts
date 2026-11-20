@@ -27,6 +27,24 @@ export const wireId = (harness: Harness, id: ConversationId) =>
 const record = (harness: Harness, id: ConversationId) =>
   Effect.orDie(harness.session.read((storage) => storage.conversation(id)))
 
+/** The conversation at the top of `id`'s owners: `id` itself when no task owns it. */
+const rootOf = (harness: Harness, id: ConversationId) =>
+  Effect.gen(function* () {
+    let root = id
+    for (;;) {
+      const owner = (yield* record(harness, root))?.owner?.conversationId
+      if (owner === undefined) return root
+      root = owner
+    }
+  })
+
+/**
+ * The id clients name the conversation people started by, for a conversation under it: a subagent or a worker of
+ * it, or the conversation itself. It is what `SIGMA_ROOT_CONVERSATION` carries.
+ */
+export const rootName = (harness: Harness, id: ConversationId) =>
+  Effect.flatMap(rootOf(harness, id), (root) => wireId(harness, root))
+
 /**
  * Where a subagent came from, or `undefined` for a conversation no call started. Its parent is its owner's
  * conversation, and its root the conversation at the top of the owners.
@@ -36,15 +54,9 @@ export const lineageOf = (harness: Harness, id: ConversationId): Effect.Effect<L
     const origin = yield* Effect.orDie(harness.session.snapshot(SubagentOriginDoc, id))
     const parent = (yield* record(harness, id))?.owner?.conversationId
     if (origin === undefined || parent === undefined) return undefined
-    let root = parent
-    for (;;) {
-      const owner = (yield* record(harness, root))?.owner?.conversationId
-      if (owner === undefined) break
-      root = owner
-    }
     return {
       parent: yield* wireId(harness, parent),
-      root: yield* wireId(harness, root),
+      root: yield* wireId(harness, yield* rootOf(harness, parent)),
       call: origin.call,
       title: origin.title,
       ...(origin.task === undefined ? {} : { task: origin.task }),

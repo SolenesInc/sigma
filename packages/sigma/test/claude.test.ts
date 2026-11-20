@@ -112,9 +112,12 @@ test("claude-answer, provider-claude: Claude's answer through Claude Code is com
 /** The start of what a local Claude Code is told of sigma's workers, by the MCP name it calls start_worker by. */
 const CLAUDE_WORKERS = "Workers. This session can start workers with the mcp__sigma__start_worker tool."
 
-test("claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation", async () => {
+test("claude-system-prompt, worker-section: Claude Code keeps its own system prompt, adds sigma's workers section and the conversation's instructions, and its commands know the conversation by the id its client chose", async () => {
   using claude = new FakeClaude("text")
-  await using session = await conversationWith(claude, { instructions: "Report with attn when done." })
+  await using session = await conversationWith(claude, {
+    id: "chosen-root",
+    instructions: "Report with attn when done.",
+  })
   await session.submit("Reply with exactly: fixture text ok")
   await session.view.until(settled(1))
   const initialize = claude.log().find((entry) => entry.initialize)?.initialize
@@ -126,7 +129,8 @@ test("claude-system-prompt, worker-section: Claude Code keeps its own system pro
   // Its own Agent tool stays the one for a quick helper.
   expect(append).toContain("For a quick helper inside your own turn, use your own subagent tool if you have one")
   expect(append.endsWith("\n\nReport with attn when done.")).toBe(true)
-  expect(claude.log().find((entry) => entry.argv)?.rootConversation).toBe(session.conversation)
+  expect(session.conversation).toBe("chosen-root")
+  expect(claude.log().find((entry) => entry.argv)?.rootConversation).toBe("chosen-root")
 })
 
 test("claude-approval: a command Claude wants to run waits for a person, and Claude Code hears the answer", async () => {
@@ -1805,7 +1809,7 @@ const workerOf = (watch: ViewWatch, task: string) => {
   return details === undefined ? undefined : String(details.conversation)
 }
 
-test("worker-provider, worker-model: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone, and the agent's wait returns the worker's answer", async () => {
+test("worker-provider, worker-model, worker-root-env: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone and whose commands know the conversation people started, and the agent's wait returns the worker's answer", async () => {
   using claude = new FakeClaude("models", "text")
   await using session = await scriptedWith(
     claude,
@@ -1825,7 +1829,7 @@ test("worker-provider, worker-model: a scripted agent starts a worker on Claude 
       { tool: { name: "wait_worker", input: { timeout_ms: 600_000 } } },
       { text: "the poet answered" },
     ],
-    { approvals: "auto", instructions: "Answer in French." },
+    { id: "chosen-root", approvals: "auto", instructions: "Answer in French." },
   )
   await submit(session.client, session.conversation, "ask Claude for it")
   await session.view.until(settled(1), 20_000)
@@ -1848,6 +1852,8 @@ test("worker-provider, worker-model: a scripted agent starts a worker on Claude 
     effort: "high",
   })
   expect(claude.spawns()[0]!["--model"]).toBe("claude-opus-5-5")
+  // The worker's Claude Code runs its commands under the conversation people started, named as its client chose.
+  expect(claude.log().find((entry) => entry.argv && entry.probe === undefined)?.rootConversation).toBe("chosen-root")
   // Claude Code is told the brief and its task, beside the workers section, none of the parent's instructions or history.
   const append: string = claude.log().find((entry) => entry.initialize && entry.probe === undefined)
     ?.initialize.appendSystemPrompt

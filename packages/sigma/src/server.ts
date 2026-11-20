@@ -139,7 +139,7 @@ import {
   targetNotice,
   targetSection,
 } from "./targets.ts"
-import { lineageOf, listConversations, titleOf, wireId } from "./conversations.ts"
+import { lineageOf, listConversations, rootName, titleOf, wireId } from "./conversations.ts"
 import { readableNdJsonRpc } from "./wire-errors.ts"
 
 /**
@@ -269,7 +269,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           waitLimit,
           ...(live.clock === undefined ? {} : { clock: live.clock }),
         })
-        const base = [sigmaTools(images, bashTimeout), workers, codeModeTools(sandbox)]
+        const base = [sigmaTools(() => harness, images, bashTimeout), workers, codeModeTools(sandbox)]
         for (const extension of base) registry.install(extension)
         registry.install(
           workspaceInstructions(
@@ -293,6 +293,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           adapters,
           offered: offeredToHarness,
           title: (conversation) => titleOf(harness, conversation),
+          rootConversation: (conversation) => rootName(harness, conversation),
           processes,
           remoteHands: {
             cwd: (target) => targetLoop(home, target),

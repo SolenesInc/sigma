@@ -18,8 +18,7 @@ the conversation uses.
 
 - `edit`, `write` and `apply_patch` serialize their mutations of one file with `withFileMutationQueue`, keyed by the
   environment's `id` and the file's canonical path, so parallel calls on one file both land (spec 7.3).
-- `rootConversationEnv` is a `bash` `prepare` that sets `SIGMA_ROOT_CONVERSATION` to the conversation people started,
-  found through the owners of the calling conversation.
+- `rootConversation` finds the conversation people started from a calling conversation, through its owners.
 - Images: `@sigma/tools/images` has `createPhotonImages(wasm)`, Photon's WebAssembly preparing images on the calling
   thread; `@sigma/tools/images/node` has `createNodePhotonImages()`, which reads the WebAssembly from the installed
   package and prepares images in a worker thread. Photon runs under Bun, in the worker too. Without a processor, `read`
@@ -34,4 +33,4 @@ and `apply_patch` carry sigma's own tools over to the environment.
 
 The conformance suite (`packages/conformance`) runs upstream's tool, image and search tests through its adapter. `test/`
 holds package tests through a real Harness with a scripted model, for what no upstream row covers: two parallel edits
-of one file, `grep`, `glob`, `apply_patch`, `SIGMA_ROOT_CONVERSATION`, and images in user input and tool results.
+of one file, `grep`, `glob`, `apply_patch`, and images in user input and tool results.
