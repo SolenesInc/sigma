@@ -198,6 +198,7 @@ const waitClock = async (wait: Duration.Input) => {
       if (key === "sleep")
         return (duration: Duration.Duration) => {
           if (Duration.toMillis(duration) === millis) began.resolve()
+          // clock: a TestClock's sleep, which moves only when the test adjusts it
           return target.sleep(duration)
         }
       const value = Reflect.get(target, key)

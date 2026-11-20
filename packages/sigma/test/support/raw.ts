@@ -23,6 +23,7 @@ export const DEADLINE = 20_000
 export const deadline = <A>(promise: Promise<A>, ms: number, what: string) =>
   Promise.race([
     promise,
+    // clock: the tripwire every wait shares
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${ms}ms: ${what}`)), ms)),
   ])
 

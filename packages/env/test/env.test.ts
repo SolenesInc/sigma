@@ -94,6 +94,7 @@ for (const [id, make] of Object.entries(kinds)) {
 
   test(`${id}: an interrupted command's spill file holds all its output once the interrupt returns`, async () => {
     const local = env()
+    // clock: keeps the child alive in its own script; the test waits on its output
     const script = `process.stdout.write("a".repeat(${SPILLED_BYTES}) + "END"); setTimeout(() => {}, 60000)`
     const spill = await Effect.runPromise(
       Effect.gen(function* () {

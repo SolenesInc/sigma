@@ -858,6 +858,7 @@ test("server-cannot-start: an open TUI whose server cannot start shows why, star
     new Promise<void>((resolve) => {
       const check = () => {
         const count = refusals()
+        // clock: times the TUI's own one-second wait between servers; load only lengthens the gap
         if (count !== seen.at(-1)?.count) seen.push({ count, at: performance.now() })
         if (seen.length >= 3) resolve()
       }
@@ -900,9 +901,11 @@ test("idle-tui: the TUI draws nothing and uses no CPU while nothing changes", as
   session.type("hi\r")
   await session.waitFor((screen) => screen.includes("done") && screen.includes("READY"))
   // The second after an answer still settles, so the measure starts after it.
+  // clock: the second after an answer settles; idle CPU is measured over a window
   await Bun.sleep(1000)
   const drawn = session.output().length
   const before = cpuSeconds(session.pid)
+  // clock: the window idle CPU and drawing are measured over
   await Bun.sleep(3000)
   expect(session.output().length).toBe(drawn)
   // Drawing nothing is the promise; CPU only catches heavy work that draws nothing. Bun's GC runs in bursts

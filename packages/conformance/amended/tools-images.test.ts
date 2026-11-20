@@ -43,6 +43,7 @@ describe("createNodePhotonImages", () => {
 		// that is free while the image is prepared can run it.
 		const turnsWhilePreparing = async (images: ImageProcessor): Promise<boolean> => {
 			let turned = false;
+			// clock: a zero timer that fires only if the event loop turns while the image is prepared
 			const timer = setTimeout(() => {
 				turned = true;
 			}, 0);

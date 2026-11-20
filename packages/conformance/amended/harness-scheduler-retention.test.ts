@@ -107,6 +107,7 @@ describe("scheduler retention", () => {
 		);
 		gate("p").resolve();
 		// P holds for D: the scheduler loaded the chain from C up to P again.
+		// clock: polls event-loop turns; s-k4edez replaces it with the work's signal
 		await eventually(async () => (await status(harness, tree.p)).status === "completing");
 		gate("d").resolve();
 		expect((await harness.waitForTask(d, context)).state.outcome.status).toBe("completed");
@@ -131,6 +132,7 @@ describe("scheduler retention", () => {
 		await harness.waitForTask(tree.b, context);
 		// P cancels; its live child keeps it holding until its own abort ends.
 		const aborting = harness.abortTask(tree.p, context);
+		// clock: polls event-loop turns; s-k4edez replaces it with the work's signal
 		await eventually(async () => (await harness.getTask(tree.keep, context))!.abortRequested);
 		const c = (await harness.conversation(tree.c, context))!;
 		const late = await c.commit(
@@ -167,6 +169,7 @@ describe("scheduler retention", () => {
 		const queued = (await c.submit({ type: "input", content: "later" }, context)).id;
 		// P fails while its child runs: it holds the failed outcome, which is cancellation intent.
 		gate("p").resolve();
+		// clock: polls event-loop turns; s-k4edez replaces it with the work's signal
 		await eventually(
 			async () => (await (await harness.submission(queued, context))!.status(context)).status === "unanswered",
 		);

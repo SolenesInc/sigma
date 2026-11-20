@@ -41,6 +41,7 @@ if (argv[0] === "auth") {
       append({ authEnded: "SIGTERM" })
       process.exit(143)
     })
+    // clock: keeps the fake process alive until it is killed
     setInterval(() => undefined, 1 << 30)
     await new Promise<never>(() => undefined)
   } else {

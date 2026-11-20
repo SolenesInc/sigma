@@ -24,6 +24,7 @@ type Report = { readonly message: string; readonly info: ReportInfo };
 function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const late = new Promise<never>((_, reject) => {
+		// clock: the tripwire on a signal that never arrives
 		timer = setTimeout(() => reject(new Error(`${what} did not arrive within ${ms} ms`)), ms);
 	});
 	return Promise.race([promise, late]).finally(() => clearTimeout(timer));

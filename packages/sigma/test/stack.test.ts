@@ -114,8 +114,10 @@ test("idle-server: a server with no run in flight uses no CPU", async () => {
   // still settles (measured: 0.01 s in it, then 0.00 or 0.01 s in each of the next nine), so the measure starts after.
   // A busy machine stretches that settling: on CI's 3-core macOS runner, with the check's other parts beside it, a 1 s
   // wait let it reach the window and measured 3 ticks. The measure starts 3 s after the answer.
+  // clock: the settling before the idle window
   await Bun.sleep(3000)
   const before = cpuSeconds(server.pid)
+  // clock: the window idle CPU is measured over
   await Bun.sleep(3000)
   // The measuring tick is a hundredth of a second; two ticks in three seconds is flat.
   expect(Math.round((cpuSeconds(server.pid) - before) * 100)).toBeLessThanOrEqual(2)
@@ -291,6 +293,7 @@ test("codemode-stop: a script stuck in a long built-in stops when its run is int
   const before = cpuSeconds(server.pid)
   await deadline(
     (async () => {
+      // clock: the server's CPU is the one sign the worker searches, so this polls it
       while (cpuSeconds(server.pid) - before < 0.3) await Bun.sleep(50)
     })(),
     20_000,
@@ -924,9 +927,15 @@ test("server-restart: a server that starts while serve --restart replaces the ol
     Bun.spawnSync(["lsof", "-Fn", "-p", String(starting.pid)])
       .stdout.toString()
       .includes(homeAt(sigmaHome.dir).lock)
+  // The starter waits on the home for a second of its own, and lsof is the only sign that it does, so this polls. A
+  // starter that gave up before lsof saw it ends the poll too: then the restart begins after its wait, the case the
+  // other server-restart tests cover, and the outcome below is the same.
+  let exited = false
+  void starting.exited.then(() => (exited = true))
   await deadline(
     (async () => {
-      while (!waitsOnHome()) await Bun.sleep(10)
+      // clock: polls lsof, the one sign of the starter's wait, until it shows or the starter ends
+      while (!exited && !waitsOnHome()) await Bun.sleep(10)
     })(),
     DEADLINE,
     "the starting server waiting on the home",

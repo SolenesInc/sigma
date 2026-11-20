@@ -108,6 +108,7 @@ describe("task phases", () => {
 			context,
 		);
 		harness.resume();
+		// clock: polls event-loop turns; s-k4edez replaces it with the work's signal
 		await eventually(() => order.length === 3);
 		await waiting.promise;
 		expect(order.sort()).toEqual(["faulting", "first", "wait"]);

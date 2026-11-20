@@ -39,6 +39,7 @@ async function record(conversation: Conversation, window?: ConversationWindow) {
 	/** Resolves once `ready()` holds over the frames so far, checked again at each frame; fails after 5 seconds. */
 	const until = (ready: () => boolean, what: string): Promise<void> =>
 		new Promise((resolve, reject) => {
+			// clock: the tripwire on a frame that never arrives
 			const timer = setTimeout(() => {
 				waiters.delete(check);
 				reject(new Error(`${what} did not arrive within 5 seconds (${frames.length} frames)`));

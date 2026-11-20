@@ -177,6 +177,7 @@ export class FakeOpenAi {
       const pieces = reply.events.flatMap((event) => [`data: ${JSON.stringify(event)}\r\n\r`, "\n"])
       const split = new ReadableStream<Uint8Array>({
         pull: async (controller) => {
+          // clock: spaces the pieces so they reach sigma as separate reads; a slower machine only merges fewer
           await Bun.sleep(5)
           const piece = pieces.shift()
           if (piece === undefined) controller.close()

@@ -51,7 +51,15 @@ const parts: { name: string; cmd: string[]; cores: number; junit?: string }[] = 
   { name: "conformance", cores: 4, cmd: ["bun", "packages/conformance/check.ts"] },
   ...ALONE.map((f) => tests(f.slice(SIGMA.length + 1, -".test.ts".length), [f])),
   tests("sigma", sigmaRest),
-  { name: "static", cores: 2, cmd: ["sh", "-c", "tsc --noEmit && prettier --check . && bun scripts/boundaries.ts"] },
+  {
+    name: "static",
+    cores: 2,
+    cmd: [
+      "sh",
+      "-c",
+      "tsc --noEmit && prettier --check . && bun scripts/boundaries.ts && bun scripts/clock-free-tests.ts",
+    ],
+  },
   tests("packages", others),
 ]
 

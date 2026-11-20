@@ -68,8 +68,10 @@ const Work = defineTask<{ name: string; read?: number }, { phase: "run" }, null>
 });
 
 /** Background timers declined, as Cloudflare Workers do; foreground ones on `setTimeout`. */
+// clock: the host timer the Harness is given, under test
 const declineBackground: SetTimer = (callback, delayMs, { background }) => {
 	if (background) return undefined;
+	// clock: as above
 	const timer = setTimeout(callback, delayMs);
 	return () => clearTimeout(timer);
 };

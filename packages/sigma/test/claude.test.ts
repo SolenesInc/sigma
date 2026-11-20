@@ -508,6 +508,7 @@ test("claude-cut-off: a run cut off by a server stop resumes, and Claude Code is
   using claude = new FakeClaude("resume_after_kill")
   const first = await conversationWith(claude)
   await first.submit(
+    // clock: a command in the prompt the fake replays, not a wait in the test
     "Run the bash command `echo started > started.fifo && python3 -c 'import time; time.sleep(120)'` with the Bash tool. If the call is cut off or interrupted, do not run anything again; reply with exactly: resumed ok",
   )
   await first.answer(true)
@@ -536,6 +537,7 @@ test("claude-stop, claude-live: stopping a run mid-call interrupts Claude Code's
   using claude = new FakeClaude("stop_keeps_process")
   await using session = await conversationWith(claude, { approvals: "auto" })
   await session.submit(
+    // clock: a command in the prompt the fake replays, not a wait in the test
     "Run the bash command `echo started > started.txt && python3 -c 'import time; time.sleep(120)'` with the Bash tool. Then reply with exactly: slept",
   )
   // Claude Code is running the call once sigma answered its PreToolUse hook.
@@ -565,6 +567,7 @@ test("claude-stop, claude-resume: a Claude Code process that does not end its tu
   using claude = new FakeClaude("resume_after_kill")
   await using session = await conversationWith(claude, {}, { claudeStop: "100 millis" })
   await session.submit(
+    // clock: a command in the prompt the fake replays, not a wait in the test
     "Run the bash command `echo started > started.fifo && python3 -c 'import time; time.sleep(120)'` with the Bash tool. If the call is cut off or interrupted, do not run anything again; reply with exactly: resumed ok",
   )
   await session.answer(true)

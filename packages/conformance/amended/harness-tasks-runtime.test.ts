@@ -75,6 +75,7 @@ describe("task runtime", () => {
 		expect(seen).toEqual(["two", "one", 1, 2, 1234]);
 		expect(reports).toEqual([new Error("reported")]);
 		// The step after the phase ends the invocation; then every read through it fails.
+		// clock: polls event-loop turns; s-k4edez replaces it with the work's signal
 		await eventually(() => ended(() => captured!.snapshot(Notes, root.id, context)));
 		expect(await ended(() => captured!.context(root.id, context))).toBe(true);
 		await harness.close(context);
