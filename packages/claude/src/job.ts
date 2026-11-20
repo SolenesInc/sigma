@@ -167,6 +167,8 @@ export const makeJobTask = (links: JobLinks) =>
             Effect.gen(function* (): Generator<Effect.Effect<any, any, never>, JobNext, never> {
               const live = yield* tx.doc(LiveDoc, runtime.conversationId)
               links.forget(runtime.taskId)
+              // A subagent Claude Code stopped leaves its question unanswered: its result no longer reaches the job.
+              yield* expireApprovals(tx, runtime.conversationId, runtime.taskId)
               const parent = task.input.parent
               if (parent !== undefined) yield* endInParent(tx, idFromNumber(parent), job.task, ended, runtime.now())
               if (ended.status === "completed" && answer !== undefined) {
