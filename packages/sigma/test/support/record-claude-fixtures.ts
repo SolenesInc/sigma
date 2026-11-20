@@ -98,6 +98,15 @@ const journeys: Record<string, Journey> = {
       await s.settle()
     },
   },
+  bash_interrupted: {
+    play: async (s) => {
+      await s.submit("Run the bash command `touch made.txt` with the Bash tool, then reply with exactly: made")
+      // The person stops the run while the call waits on them.
+      await s.asked()
+      await s.interrupt()
+      await s.until(() => runEnds(s.seen()).length >= 1)
+    },
+  },
   bash_declined: {
     play: async (s) => {
       await s.submit(

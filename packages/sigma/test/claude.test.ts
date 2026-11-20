@@ -1872,7 +1872,8 @@ test("worker-provider, worker-model: a scripted agent starts a worker on Claude 
 })
 
 test("worker-interrupt, worker-approve: a Claude Code worker asks its own approval, and stopping its idle parent ends the worker's run and clears the approval", async () => {
-  using claude = new FakeClaude("models", "bash_allowed")
+  // Recorded with the stop landing while the call waits on a person, so Claude Code ends the turn as it does then.
+  using claude = new FakeClaude("models", "bash_interrupted")
   await using session = await scriptedWith(
     claude,
     [
@@ -1880,8 +1881,6 @@ test("worker-interrupt, worker-approve: a Claude Code worker asks its own approv
       { text: "started it" },
     ],
     { approvals: "ask" },
-    // The recording has no interrupt, so the worker's process is closed once the stop times out.
-    { claudeStop: "100 millis" },
   )
   await submit(session.client, session.conversation, "start a maker")
   await session.view.until(settled(1), 20_000)
