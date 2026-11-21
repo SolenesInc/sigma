@@ -1,15 +1,17 @@
 // The environment a harness plays a tape in: it reaches the model server and no account. This is the only place that
 // environment is built.
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 
 /**
  * Claude Code on the model server at `url`: a fresh configuration folder holding no sign-in, a fake API key, the
  * sign-in tokens blanked over any the server's own environment has, and the base URL on the model server. Its
  * telemetry, error reports and update checks are off: they reach the internet, and the live test's journey took 4 to
- * 7 s without them against 8 to 9 s with them.
+ * 7 s without them against 8 to 9 s with them. Its memory folder is in the configuration folder: by default Claude Code
+ * names it after the git repository above the working folder, so whatever another program left in `/tmp` changed it.
  */
 export const claudePlayEnv = (url: string) => {
   const config = mkdtempSync("/tmp/sigma-tape-claude-")
+  writeFileSync(`${config}/settings.json`, JSON.stringify({ autoMemoryDirectory: `${config}/memory` }))
   return {
     env: {
       ANTHROPIC_BASE_URL: url,
