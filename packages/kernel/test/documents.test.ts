@@ -440,8 +440,9 @@ describe("documents", () => {
       run(
         Effect.gen(function* () {
           // Receipts on an M-series Mac: a commit's median is 0.047 ms with or without a stalled watch, and 10,000 commits
-          // grow the heap about 0.1 MB with one, against 7.2 MB for an observer that keeps every change. The bounds sit
-          // past the healthy numbers and below the unbounded one.
+          // grow the heap about 0.1 MB with one, against 7.2 MB for an observer that keeps every change. On a 22-core Linux
+          // machine at load 60 to 85, the loop's 20,000 commits grew it 1.3 to 3.1 MB, and 8.2 to 8.8 MB with an observer
+          // that keeps every change. The bounds sit past the healthy numbers and below the unbounded one.
           // The two sessions' commits alternate, so a busy machine slows both alike and the ratio of their medians
           // holds under any load; measured in sequence, a load that rose between the two phases broke it.
           const commits = 10_000
@@ -480,7 +481,7 @@ describe("documents", () => {
           const grown = heapUsed() - before
 
           expect(median(watched)).toBeLessThan(2 * median(baseline) + 0.05)
-          expect(grown).toBeLessThan(2_000_000)
+          expect(grown).toBeLessThan(5_000_000)
 
           // Released, the consumer gets the newest value in one root replacement, then commits one by one again.
           yield* Deferred.succeed(gate, undefined)
