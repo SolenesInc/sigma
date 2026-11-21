@@ -521,6 +521,34 @@ const childState = (child: Followed | undefined): { label: string; tone: string 
   return { label: outcome === "interrupted" ? "interrupted" : "failed", tone: color.yellow }
 }
 
+/**
+ * What a subagent that ran to its end did: the answer its last run ended with, and the calls it made, counted only
+ * once the TUI holds its whole transcript. Undefined while it works, waits or has not run.
+ */
+const workOf = (child: Followed | undefined) => {
+  if (!child?.loaded() || statusOf(child.docs()) !== "idle") return undefined
+  const items = child.items()
+  const end = items.findLast((item) => item.kind === "entry" && item.entry.kind === RUN_END_KIND)
+  if (end?.kind !== "entry") return undefined
+  const answer = dataOf<RunEnd>(end.entry).answer
+  const answered =
+    answer === undefined ? undefined : items.find((item) => item.kind === "entry" && item.entry.id === answer)
+  const report = answered?.kind === "entry" ? textOf(messageOf(answered.entry)?.content) : ""
+  let calls: number | undefined = 0
+  for (const item of items) {
+    if (item.kind !== "entry") calls = undefined
+    else if (calls !== undefined && item.entry.kind === "pi.assistant") calls += callsOf(messageOf(item.entry)).length
+  }
+  return { report, calls }
+}
+
+/** The first entries, or a gap, a subagent's transcript does not hold yet: loaded once it has run to its end. */
+const loadWhole = (child: Followed) => {
+  const missing = child.items().find((item) => item.kind !== "entry")
+  if (missing?.kind === "earlier") child.loadEarlier(() => undefined)
+  else if (missing?.kind === "gap") child.fillGap(missing, () => undefined)
+}
+
 const SubagentCard = (props: {
   tree: Tree
   conversation: string
@@ -543,17 +571,45 @@ const SubagentCard = (props: {
     const [, request] = pending as [string, Approval & { tool?: string; arguments?: unknown }]
     return describeCall(request.tool ?? "", request.arguments)
   }
+  const work = createMemo(() => (asker() ? undefined : workOf(child())))
+  // Its calls are counted over its whole transcript, which a TUI that opened late, or fell behind, holds only in part.
+  createEffect(() => {
+    const done = work()
+    if (done !== undefined && done.calls === undefined) loadWhole(child()!)
+  })
+  const calls = () => work()?.calls
   return (
     <box flexDirection="column" marginTop={1} marginLeft={2}>
       <box flexDirection="row" gap={1}>
         <text fg={color.violet}>{`⧉ ${props.title}${props.agentType ? ` (${props.agentType})` : ""}`}</text>
         <text fg={state().tone}>{state().label}</text>
+        <Show when={calls() !== undefined}>
+          <text fg={color.dim}>{`· ${calls()} ${calls() === 1 ? "call" : "calls"}`}</text>
+        </Show>
       </box>
-      <Show when={child() && lastActivity(child()!)}>
-        {(activity) => (
-          <text fg={color.dim} marginLeft={2}>
-            {activity()}
-          </text>
+      <Show
+        when={work()}
+        fallback={
+          <Show when={child() && lastActivity(child()!)}>
+            {(activity) => (
+              <text fg={color.dim} marginLeft={2}>
+                {activity()}
+              </text>
+            )}
+          </Show>
+        }
+      >
+        {(done) => (
+          <>
+            <Show when={done().report.trim() !== ""}>
+              <text fg={color.dim} marginLeft={2}>
+                {head(done().report, RESULT_LINES)}
+              </text>
+            </Show>
+            <text fg={color.dim} marginLeft={2}>
+              {`open it: sigma --conversation ${props.conversation}`}
+            </text>
+          </>
         )}
       </Show>
       <Show when={asking()}>{(call) => <AskedLine call={call()} />}</Show>

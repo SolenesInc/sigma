@@ -81,9 +81,13 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
   `effort` its `start_worker` names, unchanged. A provider whose loop sigma
   runs must list the model, or the call fails; Claude Code takes any name.
 - `worker-card` shows the card's state: `working`, `waiting on you` with the
-  asked call and `allow <Tool(subject)>? · answer below`, `done` with its
-  last message, `interrupted` or `failed`; a Claude background subagent's
-  card reads `stopped` or `cut off` when its job ended so.
+  asked call and `allow <Tool(subject)>? · answer below`, `interrupted` or
+  `failed`; a Claude background subagent's card reads `stopped` or `cut off`
+  when its job ended so. While it works the card shows what it last did. Once
+  it has run to its end the card stays in the transcript and shows its work:
+  `· <n> calls` beside its state, counted over its whole transcript (the TUI
+  loads what it does not hold yet), the first lines of the answer its last run
+  ended with, and `open it: sigma --conversation <id>`.
 - `worker-approve` answers a worker's asked call with `^Y` or `^N` in the
   parent's TUI, from the `WAITING ON YOU` panel (`approval-panel` in
   [Tool calls and approvals](./tool-calls-and-approvals.md)), or

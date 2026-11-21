@@ -528,6 +528,29 @@ test("subagent-claude: a Claude subagent shows as a card in place of its call's 
   await quit(own)
 }, 40_000)
 
+test("subagent-claude, worker-card: a finished Claude subagent's card shows how many calls it made, the head of its report and the conversation to open", async () => {
+  const sigmaHome = home()
+  const extra = { FAKE_CLAUDE_FIXTURE: join(import.meta.dir, "../../../fixtures/claude/subagent.ndjson") }
+  const parent = await open([], ["--provider", "claude"], sigmaHome, extra)
+  await parent.waitFor((screen) => screen.includes("READY"))
+  parent.type("go\r")
+  const screen = await parent.waitFor(
+    (screen) => screen.includes("open it: sigma --conversation") && screen.includes("READY"),
+    20_000,
+  )
+  const client = await RawClient.connect(sigmaHome.socket)
+  const listed = (await client.call("conversation/list")).result as Array<{ id: string; lineage?: unknown }>
+  client.close()
+  const child = listed.find((conversation) => conversation.lineage !== undefined)!
+  const card = rowsFrom(screen, "⧉ Locate gnome in notes.txt")
+  expect(card[0]).toMatch(/⧉ Locate gnome in notes\.txt \(general-purpose\) +done +· 1 call\b/)
+  // The subagent's own answer, without the hand-back frame Claude Code wraps it in for its parent.
+  expect(card[1]).toContain("The gnome lives under the floor. The file")
+  expect(card.join("\n")).toContain(`open it: sigma --conversation ${child.id}`)
+  expect(screen).not.toContain("Subagent hand-back")
+  await quit(parent)
+}, 40_000)
+
 const BACKGROUND_WAKE =
   "Use the Bash tool with run_in_background set to true to run: sleep 8; echo done. Do not wait for it. Reply with exactly: started"
 const BACKGROUND_SLEEP =
