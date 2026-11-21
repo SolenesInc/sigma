@@ -17,7 +17,8 @@ import type { ClaudeProcessSettings } from "@sigma/claude"
 import { REPORT_KIND } from "@sigma/hosted"
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { Clock, Console, type Duration, Effect, Exit, Layer, Logger, Scope } from "effect"
+import { Clock, Console, Duration, Effect, Exit, Layer, Logger, Scope } from "effect"
+import { TestClock } from "effect/testing"
 import type { HomeConfig } from "../../src/config.ts"
 import { homeAt, type Home } from "../../src/home.ts"
 import { openAiOptions, type OpenAiOptions, type ProviderOptions } from "../../src/providers.ts"
@@ -167,6 +168,41 @@ export const servingUntilIdle = async (
   )
   await Promise.race([listening.promise, exited])
   return { exited, printed: stderr.printed }
+}
+
+/**
+ * A clock that moves only when the test moves it, and says when waits of `wait` begin: `began(n)` settles once `n` of
+ * them have, and the test moves the clock then, so no wait can begin after the move and miss it.
+ */
+export const waitClock = async (wait: Duration.Input) => {
+  const clock = await Effect.runPromise(Effect.scoped(TestClock.make()))
+  const millis = Duration.toMillis(Duration.fromInputUnsafe(wait))
+  let begun = 0
+  const waiters = new Set<{ count: number; resolve: () => void }>()
+  const watched = new Proxy(clock, {
+    get: (target, key) => {
+      if (key === "sleep")
+        return (duration: Duration.Duration) => {
+          if (Duration.toMillis(duration) === millis) {
+            begun++
+            for (const waiter of waiters) if (begun >= waiter.count) waiter.resolve()
+          }
+          // clock: a TestClock's sleep, which moves only when the test adjusts it
+          return target.sleep(duration)
+        }
+      const value = Reflect.get(target, key)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
+  const began = (count = 1) =>
+    begun >= count
+      ? Promise.resolve()
+      : deadline(
+          new Promise<void>((resolve) => waiters.add({ count, resolve })),
+          DEADLINE,
+          `${count} waits of ${millis} ms`,
+        )
+  return { clock: watched, began, advance: () => Effect.runPromise(clock.adjust(wait)) }
 }
 
 /**

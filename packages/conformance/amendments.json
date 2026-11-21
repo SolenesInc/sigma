@@ -1311,8 +1311,8 @@
  {
   "test": "upstream/test/harness-ownership.test.ts :: ownership > tracks ownership chains deeper than the call stack",
   "owner": "harness-run-core",
-  "spec": "5.4",
-  "rewrite": "The same 20,000-task chain and checks, waiting on the task graph's call for the top task's completing status instead of polling 500 times 5 ms apart, with a 240 s limit instead of 60 s. Receipt: beside scripts/under-load.ts's 44 spinners on 22 cores (load 102-155) the test took 33.4-58.1 s over three runs.",
+  "spec": "5.5",
+  "rewrite": "The same 20,000-task chain and checks, waiting on the top task's ending commit, then reading its completing status once, instead of polling 500 times 5 ms apart, with a 240 s limit instead of 60 s. Receipt: beside scripts/under-load.ts's 44 spinners on 22 cores (load 102-155) the test took 33.4-58.1 s over three runs.",
   "private": "timing: a 2.5 s poll and a 60 s limit that the chain's own work reaches when the machine is loaded"
  },
  {

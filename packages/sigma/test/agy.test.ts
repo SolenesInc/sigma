@@ -1,8 +1,6 @@
 // Gemini through agy: a real server in process, driven as a raw JSON-RPC client, with agy played by the fake `agy`
 // replaying a recorded `agy acp` process per spawn (fixtures/agy, recorded with Gemini 4 Hydrogen at low thinking).
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { Duration, Effect } from "effect"
-import { TestClock } from "effect/testing"
 import type { ScriptStep } from "@sigma/models"
 import type { EntryRecord, ProviderModels, ProviderSnapshot } from "@sigma/protocol"
 import { readdirSync } from "node:fs"
@@ -20,6 +18,7 @@ import {
   type ViewWatch,
   watchView,
   type ServerOptions,
+  waitClock,
 } from "./support/server.ts"
 
 setDefaultTimeout(TEST_TIMEOUT)
@@ -187,29 +186,6 @@ test("worker-gemini-parent, worker-answer: Gemini starts a worker through sigma'
   expect(readdirSync(join(session.server.home.dir, "bridges"))).toEqual([])
 })
 
-/**
- * A clock that moves only when the test moves it, and says when a wait of `wait` begins: the test moves it then, so
- * the wait cannot begin after the move and miss it.
- */
-const waitClock = async (wait: Duration.Input) => {
-  const clock = await Effect.runPromise(Effect.scoped(TestClock.make()))
-  const began = Promise.withResolvers<void>()
-  const millis = Duration.toMillis(Duration.fromInputUnsafe(wait))
-  const watched = new Proxy(clock, {
-    get: (target, key) => {
-      if (key === "sleep")
-        return (duration: Duration.Duration) => {
-          if (Duration.toMillis(duration) === millis) began.resolve()
-          // clock: a TestClock's sleep, which moves only when the test adjusts it
-          return target.sleep(duration)
-        }
-      const value = Reflect.get(target, key)
-      return typeof value === "function" ? value.bind(target) : value
-    },
-  })
-  return { clock: watched, began: began.promise, advance: () => Effect.runPromise(clock.adjust(wait)) }
-}
-
 test("worker-gemini-parent, worker-wait: a Gemini parent's wait returns timed out within 150 s, before agy would cut the call, saying to wait again", async () => {
   using agy = new FakeAgy("worker_wait_limit")
   const wait = await waitClock("150 seconds")
@@ -220,7 +196,7 @@ test("worker-gemini-parent, worker-wait: a Gemini parent's wait returns timed ou
   await session.submit(
     "Use the mcp_sigma_start_worker tool with task_name slow, provider script and message: Make it. Then call mcp_sigma_wait_worker once with timeout_ms 600000, and reply with exactly what it returned, without calling it again.",
   )
-  await wait.began
+  await wait.began()
   await wait.advance()
   await session.view.until(settled(1))
   const entries = session.view.view().entries

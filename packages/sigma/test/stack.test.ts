@@ -273,14 +273,17 @@ test("codemode-replay: a script whose server is killed during a nested call resu
 
 test("codemode-stop: a script stuck in a long built-in stops when its run is interrupted, and the server then exits at once", async () => {
   const sigmaHome = home()
-  // A naive search QuickJS runs without checking for an interrupt: about 40 s on an M-series Mac (receipt: half the
-  // string took 19 s after its abort). A worker in it survives `terminate()` (F19).
+  // A naive search QuickJS runs without checking for an interrupt, and a worker in it survives `terminate()` (F19).
+  // With a needle of 1 << 12 it took about 40 s on an M-series Mac, and 135 s on a busy 22-core Linux box, where
+  // 1 << 13 took 212 s: about 1.6 times per doubling. 1 << 18 searches for about ten minutes on the Mac, past
+  // TEST_TIMEOUT, so the server's exit is the only way the test ends in time and DEADLINE only catches a hang.
   const code = [
     `await tools.bash({ command: "true" })`,
     `const haystack = "a".repeat(1 << 23)`,
-    `text(haystack.indexOf("a".repeat(1 << 12) + "b"))`,
+    `text(haystack.indexOf("a".repeat(1 << 18) + "b"))`,
   ].join("\n")
-  const server = await serving(await scriptEnv(sigmaHome, [{ tool: { name: "codemode", input: { code } } }]))
+  // Disposed, a server that outlived the test is killed, with its search.
+  await using server = await serving(await scriptEnv(sigmaHome, [{ tool: { name: "codemode", input: { code } } }]))
   const client = await RawClient.connect(sigmaHome.socket)
   const conversation = await codeModeConversation(client, sigmaHome.dir)
   const view = watchView(client, conversation)
@@ -1235,7 +1238,7 @@ test("server-cannot-start: each sigma exec whose server cannot come back says wh
       each.said += new TextDecoder().decode(value)
     }
   }
-  // Long enough for each to see several servers refuse; each refusal takes up to 4.7 s under load.
+  // Each sees several servers refuse, each refusal up to 4.7 s under load, inside DEADLINE.
   await deadline(
     new Promise<void>((resolve) => {
       const watcher = watch(sigmaHome.dir, () => {

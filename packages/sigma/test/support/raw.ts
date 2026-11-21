@@ -22,7 +22,8 @@ export interface Watch<A> {
 export const DEADLINE = 90_000
 
 // A tripwire on a whole test, past DEADLINE so a hang fails on its wait and names it. In that same check the slowest
-// test took 41.5 s (target-cli); a test makes several waits, and 240 s leaves each room.
+// test in any package took 41.5 s (target-cli), apart from one with its own measured limit; a test makes several
+// waits, and 240 s leaves each room. Check gives it to every package's tests.
 export const TEST_TIMEOUT = 240_000
 
 export const deadline = <A>(promise: Promise<A>, ms: number, what: string) =>

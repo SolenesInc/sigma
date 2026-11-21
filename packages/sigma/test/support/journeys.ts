@@ -5,13 +5,11 @@ import { existsSync, watch, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ClaudeProcessSettings } from "@sigma/claude"
 import type { EntryRecord } from "@sigma/protocol"
-import { deadline, RawClient } from "./raw.ts"
+import { DEADLINE, deadline, RawClient } from "./raw.ts"
 import { person, runEnds, runningServer, settled, submit, tempHome, type ViewWatch, watchView } from "./server.ts"
 import type { ModelServer } from "./model-server.ts"
 
 export const MODEL = "claude-haiku-5-5"
-/** A real Claude Code turn on the model server took 1.6 s, these subagent journeys 3 to 5 s; only a stuck one gets here. */
-const TURN = 60_000
 
 export interface Journey {
   readonly harnesses: ReadonlyArray<"claude">
@@ -104,13 +102,13 @@ export const openSession = async (journey: Journey, claude: ClaudeProcessSetting
       submitted = runEnds(view.seen()).length + 1
       return submit(client, conversation, text, crypto.randomUUID(), person("ada"))
     },
-    settle: () => view.until(settled(submitted), TURN),
-    until: (predicate) => view.until(predicate, TURN),
+    settle: () => view.until(settled(submitted)),
+    until: (predicate) => view.until(predicate),
     seen: () => view.seen(),
     release: (gate) => model.release(gate),
-    asked: (lane, turn) => deadline(model.asked(lane, turn), TURN, `lane ${lane} to ask at turn ${turn}`),
+    asked: (lane, turn) => deadline(model.asked(lane, turn), DEADLINE, `lane ${lane} to ask at turn ${turn}`),
     subagent: async () => {
-      await view.until((watch) => watch.seen().some((entry) => entry.kind === "sigma.subagent"), TURN)
+      await view.until((watch) => watch.seen().some((entry) => entry.kind === "sigma.subagent"))
       const entry = view.seen().find((entry) => entry.kind === "sigma.subagent")!
       return watchView(client, String((entry.data as { conversation: number }).conversation))
     },
@@ -133,7 +131,7 @@ const appears = (path: string) => {
       watcher = watch(join(path, ".."), check)
       check()
     }),
-    TURN,
+    DEADLINE,
     `${path} to appear`,
   ).finally(() => watcher?.close())
 }

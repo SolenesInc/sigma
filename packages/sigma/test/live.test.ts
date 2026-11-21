@@ -1,8 +1,8 @@
 // Live: a journey played on the real Claude Code, the one `bun install` brings, whose model is the model server playing
 // the journey's tape. No account is reached (harness-env.ts). The run fails when Claude Code asked something the tape
 // did not expect, or left an exchange of the tape unasked.
-import { TEST_TIMEOUT } from "./support/raw.ts"
 import { expect, setDefaultTimeout, test } from "bun:test"
+import { TEST_TIMEOUT } from "./support/raw.ts"
 import { claudePlayEnv } from "./support/harness-env.ts"
 import { journeys, openSession, STOPPED_AT_END_PROMPT } from "./support/journeys.ts"
 import { ModelServer } from "./support/model-server.ts"

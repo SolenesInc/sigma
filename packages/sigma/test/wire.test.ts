@@ -18,6 +18,7 @@ import {
   submit,
   transcript,
   type ViewWatch,
+  waitClock,
   watchView,
   tempHome,
 } from "./support/server.ts"
@@ -1005,22 +1006,30 @@ test("worker-wait: a wait that nothing reaches in time returns timed out, with t
 })
 
 test("worker-wait: two waits at once never both return the same answer: one returns it, the other times out", async () => {
-  await using server = await runningServer([
-    call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
-    {
-      tools: [
-        { name: "wait_worker", input: { timeout_ms: 10_000 } },
-        { name: "wait_worker", input: { timeout_ms: 10_000 } },
-      ],
-    },
-    { text: "the note is written", agent: "/root/writer" },
-    { text: "done waiting" },
-  ])
+  // The waits keep time on a clock that moves only once the answer is in, so a slow writer cannot time out both.
+  const wait = await waitClock("10 seconds")
+  await using server = await runningServer(
+    [
+      call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
+      {
+        tools: [
+          { name: "wait_worker", input: { timeout_ms: 10_000 } },
+          { name: "wait_worker", input: { timeout_ms: 10_000 } },
+        ],
+      },
+      { text: "the note is written", agent: "/root/writer" },
+      { text: "done waiting" },
+    ],
+    { clock: wait.clock },
+  )
   const client = await RawClient.connect(server.home.socket)
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate it")
-  await view.until(settled(1), DEADLINE)
+  await wait.began(2)
+  await view.until((watch) => toolResults(watch).some((result) => result.text.includes("the note is written")))
+  await wait.advance()
+  await view.until(settled(1))
   const waits = toolResults(view)
     .slice(1)
     .map((result) => JSON.parse(result.text))

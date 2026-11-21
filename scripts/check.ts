@@ -11,6 +11,7 @@
 import { mkdirSync, readdirSync, rmSync } from "node:fs"
 import { availableParallelism } from "node:os"
 import { join } from "node:path"
+// Every package's tests share sigma's test limit, which keeps its receipt beside its wait deadline.
 import { TEST_TIMEOUT } from "../packages/sigma/test/support/raw.ts"
 
 const JUNIT = "node_modules/.cache/junit"

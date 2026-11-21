@@ -1,5 +1,5 @@
 // Amends upstream/test/harness-ownership.test.ts > "ownership > tracks ownership chains deeper than the call stack"
-// (spec 5.4, amendments.json): the same 20,000-task chain and checks, waiting on the top task's ending commit and with a limit
+// (spec 5.5, amendments.json): the same 20,000-task chain and checks, waiting on the top task's ending commit and with a limit
 // measured on Bun. Upstream polls for the top task's `completing` status 500 times 5 ms apart, about 2.5 s of wall
 // clock, and gives the test 60 s. Beside `scripts/under-load.ts`'s 44 spinners on 22 cores (load 102 to 155) the test
 // took 33.4-58.1 s over three runs, all of it the chain's own work, so upstream's limit is reached by load alone and
@@ -13,8 +13,8 @@ import { aborted, type Deferred, deferred, openTasks } from "../upstream/test/ta
 
 /** A tripwire past the slowest run measured under load; see the header. */
 const LIMIT_MS = 240_000;
-/** The wait's own tripwire, under the test's so a hang names what it waited on. */
-const WAIT_MS = 200_000;
+/** The wait's own tripwire, under the test's by more than the slowest run, so a hang names what it waited on. */
+const WAIT_MS = 150_000;
 
 type Ending = "completed" | "failed";
 const gates = new Map<string, Deferred<Ending>>();
