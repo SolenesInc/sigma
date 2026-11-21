@@ -102,16 +102,20 @@ const processFixture = (journey: string, recording: string, tape: ModelServer["t
       if (states.get(pid) === line.frame.state) continue
       states.set(pid, line.frame.state)
     }
-    // Sigma's answer to a control request races Claude Code's streamed events: it goes before them, right after the
-    // last frame that is not one, so every run places it alike. The fake waits for it there and plays them after.
+    // Sigma's answer to a control request races everything Claude Code writes after the request, so it goes right after
+    // the request, and what raced it follows: every run places it alike. The fake waits there for the answer by its
+    // request id, then plays on.
     let at = segment.length
-    if (line.type === "expect_outbound" && line.frame.type === "control_response")
-      while (
-        at > 0 &&
-        segment[at - 1]!.type === "emit_inbound" &&
-        (segment[at - 1]!.frame as any).type === "stream_event"
-      )
-        at--
+    if (line.type === "expect_outbound" && line.frame.type === "control_response") {
+      const answering = line.frame.response.request_id
+      at =
+        segment.findIndex(
+          (earlier) =>
+            earlier.type === "emit_inbound" &&
+            (earlier.frame as { type: string; request_id?: string }).type === "control_request" &&
+            (earlier.frame as { request_id?: string }).request_id === answering,
+        ) + 1 || segment.length
+    }
     segment.splice(at, 0, line)
   }
   const header = {
