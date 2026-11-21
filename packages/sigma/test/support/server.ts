@@ -249,9 +249,8 @@ export const serving = async (env: Record<string, string | undefined>, cwd?: str
       printed += new TextDecoder().decode(value)
     }
   }
-  // A tripwire for a server that never listens: a start, `--restart` included, took 0.3 s idle, 0.9 s at load ~50
-  // and 2.4 s at load ~69 on 10 cores.
-  await deadline(listening(), 20_000, "server listening").catch((error) => {
+  // A tripwire for a server that never listens, raw.ts's DEADLINE, whose receipt counts starts.
+  await deadline(listening(), DEADLINE, "server listening").catch((error) => {
     throw new Error(`${error.message}; sigma ${args.join(" ")} printed: ${JSON.stringify(printed)}`)
   })
   log.releaseLock()

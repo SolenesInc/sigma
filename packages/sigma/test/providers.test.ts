@@ -1,13 +1,15 @@
 // A home's providers: a real server in process, driven as a raw JSON-RPC client
 // over its socket, with ChatGPT and Claude Code played by their fakes.
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import type { AuthState, ProviderModels, ProviderSnapshot } from "@sigma/protocol"
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
 import { EMAIL, FakeOpenAi, matches, signIn } from "./support/openai.ts"
-import { errorTag, RawClient } from "./support/raw.ts"
+import { errorTag, RawClient, TEST_TIMEOUT } from "./support/raw.ts"
 import { person, runningServer, settled, submit, watchView, tempHome } from "./support/server.ts"
+
+setDefaultTimeout(TEST_TIMEOUT)
 
 const startWith = async (client: RawClient, ask: Record<string, string> = {}) => {
   const reply = await client.call("conversation/start", { author: person("ada"), cwd: "/work", ...ask })
@@ -85,7 +87,7 @@ test("provider-config, signin-status, model-list: two instances of one provider 
     thinkingLevel: "high",
   })
   client.close()
-}, 20_000)
+})
 
 test("model-default: a new conversation takes the project's default model, else the home's, else the one chosen last, across a restart", async () => {
   const project = mkdtempSync("/tmp/sigma-work-")
@@ -181,7 +183,7 @@ test("signin-device-code, signout: one instance signs in and out on its own, and
     "a provider with nothing to sign in to",
   ).toBe("CannotSignIn")
   client.close()
-}, 20_000)
+})
 
 test("provider-binary: a Claude provider whose binary is missing is unavailable, saying where it looked", async () => {
   const missing = "/tmp/sigma-no-claude-here"

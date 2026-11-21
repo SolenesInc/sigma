@@ -1,6 +1,6 @@
 import { Terminal } from "@xterm/headless"
 import { join } from "node:path"
-import { deadline, RawClient } from "./raw.ts"
+import { DEADLINE, deadline, RawClient } from "./raw.ts"
 import type { tempHome } from "./server.ts"
 
 const MAIN = join(import.meta.dir, "../../src/main.ts")
@@ -56,9 +56,8 @@ export const screenSession = (args: Array<string>, env: Record<string, string | 
       (_, row) => buffer.getLine(row)?.translateToString(true, 0, terminal.cols) ?? "",
     ).join("\n")
   }
-  // A tripwire for a TUI that stopped drawing: at load ~50 on 10 cores the slowest of 317 waits took 5.2 s. The suite's
-  // 30 s test timeout stays the larger, so a hang shows its screen.
-  const waitFor = (predicate: (screen: string) => boolean, ms = 20_000) =>
+  // A tripwire for a TUI that stopped drawing, raw.ts's DEADLINE, whose receipt is a screen condition.
+  const waitFor = (predicate: (screen: string) => boolean, ms = DEADLINE) =>
     deadline(
       new Promise<string>((resolve) => {
         const check = () => {

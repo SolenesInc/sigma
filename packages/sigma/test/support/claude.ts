@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ClaudeProcessSettings as ClaudeOptions } from "@sigma/claude"
-import { deadline } from "./raw.ts"
+import { DEADLINE, deadline } from "./raw.ts"
 
 const FIXTURES = join(import.meta.dir, "../../../../fixtures/claude")
 const EXECUTABLE = join(import.meta.dir, "fake-claude")
@@ -143,7 +143,7 @@ export class FakeClaude {
     for (const waiter of this.#waiters) waiter()
   }
 
-  logged(predicate: (fake: FakeClaude) => boolean, ms = 10_000) {
+  logged(predicate: (fake: FakeClaude) => boolean, ms = DEADLINE) {
     let check = () => {}
     return deadline(
       new Promise<void>((resolve) => {

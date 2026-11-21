@@ -184,8 +184,14 @@ enter where those consumers enter:
   `test("queue-show: ...")`. `bun run coverage` fails on a test that names no
   use case or an unknown one. A new feature adds its id and its test in the
   same change; see the feature map's README.
-- Wait on events with a deadline, never sleep. A flaky test is a bug: fix it,
-  never retry it.
+- Wait on events with a deadline, never sleep. To hold a scripted answer
+  mid-run, give its step a `hold` (`hold()` in `test/support/server.ts`) and
+  release it when the test is ready. `scripts/clock-free-tests.ts`, part of the
+  check, refuses a test line that sleeps, polls or paces itself unless a
+  `// clock:` comment says why. The shared deadline and test limit
+  (`DEADLINE`, `TEST_TIMEOUT` in `test/support/raw.ts`) are tripwires set past
+  the slowest wait measured under `scripts/under-load.ts`; raise one only with
+  a new measurement. A flaky test is a bug: fix it, never retry it.
 - Each test gets its own `SIGMA_HOME` under `/tmp` (a socket path must stay
   under 108 bytes) and stops any server it started.
 - Don't test what the compiler guarantees, don't assert on your own fakes, and

@@ -11,6 +11,7 @@
 import { mkdirSync, readdirSync, rmSync } from "node:fs"
 import { availableParallelism } from "node:os"
 import { join } from "node:path"
+import { TEST_TIMEOUT } from "../packages/sigma/test/support/raw.ts"
 
 const JUNIT = "node_modules/.cache/junit"
 const SIGMA = "packages/sigma/test"
@@ -42,7 +43,7 @@ const others = files.filter((f) => !f.startsWith(`${SIGMA}/`))
 
 function tests(name: string, paths: string[]) {
   const junit = join(JUNIT, `${name}.xml`)
-  const cmd = ["bun", "test", "--timeout", "30000", "--reporter=junit", `--reporter-outfile=${junit}`]
+  const cmd = ["bun", "test", "--timeout", String(TEST_TIMEOUT), "--reporter=junit", `--reporter-outfile=${junit}`]
   return { name, junit, cores: 1, cmd: [...cmd, ...paths.map((p) => `./${p}`)] }
 }
 

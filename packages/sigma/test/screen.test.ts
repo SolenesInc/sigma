@@ -1,5 +1,5 @@
 // The TUI: the real TUI in a PTY on an @xterm/headless screen, typed into, against a real server.
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { readFileSync, rmSync, watch, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ScriptStep } from "@sigma/models"
@@ -8,7 +8,7 @@ import { FakeAgy } from "./support/agy.ts"
 import { FakeClaude } from "./support/claude.ts"
 import { TestTargets } from "./support/targets.ts"
 import { FakeOpenAi, signIn } from "./support/openai.ts"
-import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, RawClient, TEST_TIMEOUT } from "./support/raw.ts"
 import {
   hold,
   scriptEnv,
@@ -22,6 +22,8 @@ import {
 } from "./support/server.ts"
 import { png } from "./support/png.ts"
 import { screenSession, stopServer } from "./support/terminal.ts"
+
+setDefaultTimeout(TEST_TIMEOUT)
 
 const homes: Array<ReturnType<typeof tempHome>> = []
 const home = () => {
@@ -376,7 +378,7 @@ test("model-list, model-status: /model lists every provider's models, enter swit
   expect(screen).not.toContain("claude · Sonnet ‹")
   expect(screen).toContain("claude · sonnet · low  sigma")
   await quit(session)
-}, 20_000)
+})
 
 const signInFixture = join(import.meta.dir, "../../../fixtures/claude/terminal_sign_in.ndjson")
 
@@ -384,11 +386,11 @@ test("signin-terminal: ^L signs in to a signed-out Claude by running its own sig
   const session = await open([], [], home(), { FAKE_CLAUDE_FIXTURE: signInFixture })
   await session.waitFor((screen) => /○ claude +signed out/.test(screen))
   session.type("\x0c")
-  const screen = await session.waitFor((screen) => /● claude +person@example\.com · Claude Max/.test(screen), 30_000)
+  const screen = await session.waitFor((screen) => /● claude +person@example\.com · Claude Max/.test(screen), DEADLINE)
   expect(session.output()).toContain("fake claude auth login done")
   expect(screen).not.toContain("SIGN IN")
   await quit(session)
-}, 40_000)
+})
 
 test("signin-cancel: a sign-in cancelled from another connection stops Claude's sign-in in the terminal", async () => {
   const sigmaHome = home()
@@ -420,7 +422,7 @@ test("signin-cancel: a sign-in cancelled from another connection stops Claude's 
   ).finally(() => watcher.close())
   session.type("\x03")
   await session.exited
-}, 40_000)
+})
 
 test("signin-shared: an open TUI shows a sign-in another connection finished", async () => {
   const sigmaHome = home()
@@ -437,11 +439,11 @@ test("signin-shared: an open TUI shows a sign-in another connection finished", a
     response: { _tag: "terminal_exited", success: true },
   })
   expect(answered.result).toEqual({ accepted: true })
-  await auth.until((states) => states.at(-1)?.phase === "succeeded", 30_000)
+  await auth.until((states) => states.at(-1)?.phase === "succeeded", DEADLINE)
   other.close()
   await session.waitFor((screen) => /● claude +person@example\.com · Claude Max/.test(screen))
   await quit(session)
-}, 40_000)
+})
 
 test("worker-card: a worker shows as a card under its parent, and ctrl+y answers the call it asks about", async () => {
   const session = await open([
@@ -468,7 +470,7 @@ test("worker-card: a worker shows as a card under its parent, and ctrl+y answers
   expect(lines[lines.findIndex((line) => line.includes("/root/scribe")) + 1]).toContain("wrote it")
   expect(screen).not.toContain("Payload:")
   await quit(session)
-}, 30_000)
+})
 
 test("worker-card, codemode-nested-policy: a worker a script started shows as a card under the script, and ctrl+y answers the call it asks about", async () => {
   const spawn = 'await tools.start_worker({ task_name: "scribe", message: "write it down", fork_turns: "none" })'
@@ -516,7 +518,7 @@ test("worker-approve: a call a worker's worker asks about shows on the card abov
   session.type("\x19")
   await session.waitFor((screen) => screen.includes("the lead is done") && screen.includes("READY"))
   await quit(session)
-}, 30_000)
+})
 
 test("subagent-claude: a Claude subagent shows as a card in place of its call's result, and its own screen sends input to its parent", async () => {
   const sigmaHome = home()
@@ -529,7 +531,7 @@ test("subagent-claude: a Claude subagent shows as a card in place of its call's 
       /⧉ Locate gnome in notes\.txt \(general-purpose\) +done/.test(screen) &&
       screen.includes("The gnome lives under the floor.") &&
       screen.includes("READY"),
-    20_000,
+    DEADLINE,
   )
   expect(screen).not.toContain("Subagent hand-back")
   expect(screen.match(/⧉/g)).toHaveLength(1)
@@ -543,7 +545,7 @@ test("subagent-claude: a Claude subagent shows as a card in place of its call's 
   const opened = await own.waitFor((screen) => screen.includes("INPUT GOES THROUGH ITS PARENT"))
   expect(opened).toContain("the gnome lives under the floor")
   await quit(own)
-}, 40_000)
+})
 
 const BACKGROUND_WAKE =
   "Use the Bash tool with run_in_background set to true to run: sleep 8; echo done. Do not wait for it. Reply with exactly: started"
@@ -563,7 +565,7 @@ test("claude-job-card, background-count: a background command's card reads runni
   session.type(`${BACKGROUND_WAKE}\r`)
   const running = await session.waitFor(
     (screen) => screen.includes("READY") && screen.includes("started") && claude.holding(),
-    20_000,
+    DEADLINE,
   )
   expect(running).toContain("▸ Bash(sleep 8; echo done) in background · running")
   expect(running).toMatch(/READY +⧉ 1 in background/)
@@ -574,7 +576,7 @@ test("claude-job-card, background-count: a background command's card reads runni
   claude.release()
   const done = await session.waitFor(
     (screen) => screen.includes("finished with exit code 0") && screen.includes("READY"),
-    20_000,
+    DEADLINE,
   )
   expect(done).toContain("▸ Bash(sleep 8; echo done) in background · done")
   expect(done).not.toContain("in background · running")
@@ -585,7 +587,7 @@ test("claude-job-card, background-count: a background command's card reads runni
   expect(rows[1]).toContain('Background command "Start background sleep-then-echo command" completed (exit code 0)')
   expect(rows.findIndex((row) => row.includes("SIGMA"))).toBeGreaterThan(1)
   await quit(session)
-}, 40_000)
+})
 
 test("claude-job-card: a background command cut off by a server stop reads cut off on its card, and a line under its name says so", async () => {
   using claude = new FakeClaude("bash_background_cut_off")
@@ -597,14 +599,14 @@ test("claude-job-card: a background command cut off by a server stop reads cut o
   session.type(`${BACKGROUND_SLEEP}\r`)
   await session.waitFor(
     (screen) => screen.includes("in background · running") && screen.includes("READY") && screen.includes("started"),
-    20_000,
+    DEADLINE,
   )
   server.kill("SIGKILL")
   await server.exited
   // The TUI brings a server back, which cuts off the job its last one held.
   const screen = await session.waitFor(
     (screen) => screen.includes("in background · cut off") && screen.includes("was cut off"),
-    20_000,
+    DEADLINE,
   )
   // The line wraps at the screen's edge.
   expect(screen.replace(/\s+/g, " ")).toContain("Sleep 600 seconds in background ─")
@@ -613,7 +615,7 @@ test("claude-job-card: a background command cut off by a server stop reads cut o
   )
   expect(screen).not.toContain("⧉ 1 in background")
   await quit(session)
-}, 40_000)
+})
 
 test("approval-panel: with the conversation and two subagents asking, the panel lists every ask in its own rows, its own first, and ctrl+y answers them in that order", async () => {
   const session = await open([
@@ -667,7 +669,7 @@ test("approval-panel: with the conversation and two subagents asking, the panel 
   session.type("\x19")
   await session.waitFor((screen) => !screen.includes("WAITING ON YOU") && screen.includes("the parent is done"))
   await quit(session)
-}, 40_000)
+})
 
 test("approval-panel: a split terminal keeps the active approval visible while later approvals scroll", async () => {
   const workers = ["docs", "deps", "tests", "types"]
@@ -731,7 +733,7 @@ test("approval-panel: a split terminal keeps the active approval visible while l
   } finally {
     await quit(session)
   }
-}, 40_000)
+})
 
 test("skills-tui: a message that names a skill shows which skills came with it, also after a reopen", async () => {
   await using fake = new FakeOpenAi()
@@ -813,11 +815,11 @@ test("crash-tui: the open TUI finishes the answer after the server is killed mid
   // The TUI brings a server back; the run picks up where it was cut off and answers once.
   const screen = await session.waitFor(
     (screen) => screen.includes("one two three four five six seven eight nine ten") && screen.includes("READY"),
-    20_000,
+    DEADLINE,
   )
   expect(screen).not.toContain("missing messages")
   await quit(session)
-}, 30_000)
+})
 
 test("crash-tui: quitting while the server cannot come back ends sigma, though a typed prompt waits to be sent", async () => {
   const sigmaHome = home()
@@ -831,7 +833,7 @@ test("crash-tui: quitting while the server cannot come back ends sigma, though a
   await server.exited
   session.type("never sent\r")
   await quit(session)
-}, 30_000)
+})
 
 test("server-cannot-start: an open TUI whose server cannot start shows why, starts one at most once a second, and carries on once it can", async () => {
   const sigmaHome = home()
@@ -847,7 +849,7 @@ test("server-cannot-start: an open TUI whose server cannot start shows why, star
   // starts at load average 30): each wait here allows several of them.
   await session.waitFor(
     (screen) => screen.includes("sigma's server cannot start") && screen.includes("TOML Parse error"),
-    20_000,
+    DEADLINE,
   )
   // Each server the TUI starts writes its refusal to the home's log as it exits, and the TUI waits a second after it
   // before starting the next: the gap between two refusals is more than that second.
@@ -865,7 +867,7 @@ test("server-cannot-start: an open TUI whose server cannot start shows why, star
       watcher.on("change", check)
       check()
     }),
-    20_000,
+    DEADLINE,
     "three refusals in the home's log",
   ).finally(() => watcher.close())
   expect(seen.map(({ count }) => count - seen[0]!.count)).toEqual([0, 1, 2])
@@ -882,18 +884,18 @@ test("server-cannot-start: an open TUI whose server cannot start shows why, star
       after.on("change", check)
       check()
     }),
-    20_000,
+    DEADLINE,
     "a refusal after the prompt",
   ).finally(() => after.close())
-  await session.waitFor((screen) => screen.includes("type a message") && screen.includes("cannot start"), 20_000)
+  await session.waitFor((screen) => screen.includes("type a message") && screen.includes("cannot start"), DEADLINE)
   // The config fixed, the next server starts, the notice goes and the prompt is answered.
   rmSync(config)
   await session.waitFor(
     (screen) => screen.includes("back again") && screen.includes("READY") && !screen.includes("cannot start"),
-    20_000,
+    DEADLINE,
   )
   await quit(session)
-}, 90_000)
+})
 
 test("idle-tui: the TUI draws nothing and uses no CPU while nothing changes", async () => {
   const session = await open([{ text: "done" }])
@@ -914,7 +916,7 @@ test("idle-tui: the TUI draws nothing and uses no CPU while nothing changes", as
   // relayout on every frame, not for timers.
   expect(Math.round((cpuSeconds(session.pid) - before) * 100)).toBeLessThanOrEqual(50)
   await quit(session)
-}, 20_000)
+})
 
 test("answer-scroll, tui-load-earlier: a conversation longer than the window scrolls back to its first message, loading earlier entries on the way, and a reconnect leaves no gap", async () => {
   const sigmaHome = home()
@@ -943,11 +945,11 @@ test("answer-scroll, tui-load-earlier: a conversation longer than the window scr
   await Bun.write(join(sigmaHome.dir, "script.json"), JSON.stringify([{ text: "answer 41" }]))
   session.type("prompt 41\r")
   await scrollDownUntil(session, (screen) => screen.includes("answer 41"))
-  await session.waitFor((screen) => screen.includes("answer 41") && screen.includes("READY"), 20_000)
+  await session.waitFor((screen) => screen.includes("answer 41") && screen.includes("READY"), DEADLINE)
   const back = await scrollUpUntil(session, (screen) => /^ +prompt 1 *$/m.test(screen))
   expect(back).not.toContain("missing messages")
   await quit(session)
-}, 120_000)
+})
 
 test("tui-fill-gap: a TUI that fell behind marks where entries are missing, and loads them once scrolled to", async () => {
   const sigmaHome = home()
@@ -961,14 +963,14 @@ test("tui-fill-gap: a TUI that fell behind marks where entries are missing, and 
   session.pause()
   await converse(client, conversation, 40, 3)
   session.resume()
-  await session.waitFor((screen) => screen.includes("answer 42") && screen.includes("READY"), 20_000)
+  await session.waitFor((screen) => screen.includes("answer 42") && screen.includes("READY"), DEADLINE)
   await scrollUpUntil(session, (screen) => screen.includes("missing messages") || /^ +answer 3 *$/m.test(screen))
   const filled = await scrollUpUntil(session, (screen) => /^ +answer 2 *$/m.test(screen))
   expect(filled).not.toContain("missing messages")
   expect(filled).toMatch(/^ +prompt 3 *$/m)
   client.close()
   await quit(session)
-}, 120_000)
+})
 
 /** A process's CPU time in seconds, user and system, to the hundredth. */
 const cpuSeconds = (pid: number) => {
@@ -1157,7 +1159,7 @@ test("queue-edit: up on an empty prompt opens your newest pending prompt, up aga
   expect(screen.indexOf("third")).toBeLessThan(screen.indexOf("all done"))
   expect(screen.indexOf("all done")).toBeLessThan(screen.indexOf("You said: second please"))
   await quit(session)
-}, 20_000)
+})
 
 test("queue-edit: emptying the prompt you opened withdraws it, esc closes an edit unsaved, and an edit saved after the prompt went stays in the composer to send anew", async () => {
   const session = await open([call("bash", { command: "echo hi" }), { text: "all done" }])
@@ -1197,7 +1199,7 @@ test("queue-edit: emptying the prompt you opened withdraws it, esc closes an edi
   session.type("\r")
   await session.waitFor((screen) => screen.includes("You said: second again"))
   await quit(session)
-}, 20_000)
+})
 
 test("interrupt-restore: escape mid-run gives the text of your pending prompts back to the composer, oldest first, before what you were typing", async () => {
   // Held until escape ends it.
@@ -1226,7 +1228,7 @@ test("interrupt-restore: escape mid-run gives the text of your pending prompts b
   session.type("\r")
   await session.waitFor((screen) => /You said: go left\s+then right\s+half typed/.test(screen))
   await quit(session)
-}, 20_000)
+})
 
 test("configure-rpc, run-turn-limit: /max-turns shows who set the limit, and a looping run ends naming it", async () => {
   const echo = call("bash", { command: "echo again" })
@@ -1349,7 +1351,7 @@ test("server-restart, serve-read-only: an open TUI keeps drawing while sigma ser
   writer.kill()
   await writer.exited
   // Two restarts and two runs took at most 17.3 s at load ~105 on 10 cores.
-}, 60_000)
+})
 
 test("gemini-approval: agy's permission request shows the command it would run on the approval card, and ^Y lets it run", async () => {
   using agy = new FakeAgy("approval_allowed")

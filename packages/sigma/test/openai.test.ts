@@ -1,6 +1,6 @@
 // ChatGPT: a real server in process, driven as a raw JSON-RPC client over its
 // socket, with ChatGPT played by the fake OpenAI server replaying the recorded exchanges in `fixtures/openai`.
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { type EntryRecord, RUN_END_KIND } from "@sigma/protocol"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -10,7 +10,7 @@ import { TestTargets } from "./support/targets.ts"
 import { FakeClaude } from "./support/claude.ts"
 import type { ClaudeProcessSettings } from "@sigma/claude"
 import { accessToken, ACCOUNT, FakeOpenAi, matches, personalSkills, signIn } from "./support/openai.ts"
-import { DEADLINE, deadline, errorTag, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, errorTag, RawClient, TEST_TIMEOUT } from "./support/raw.ts"
 import {
   person,
   runEnds,
@@ -25,6 +25,8 @@ import {
 import { png } from "./support/png.ts"
 import { ECHO_TOOL, FakeMcpServer, WAIT_TOOL } from "./support/mcp.ts"
 import { imageDimensions } from "@sigma/tools"
+
+setDefaultTimeout(TEST_TIMEOUT)
 
 // sigma's tools are named in lower case; the recordings were made when they were capitalized.
 const TOOL_NAMES = { Bash: "bash" }
@@ -440,7 +442,7 @@ test("cache-fresh-worker: a worker started without its parent's history keeps it
   fake.play("fresh_subagent_tool_call")
   await using session = await conversationWith(fake)
   await session.submit("Ask a scout what echo prints.")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   const [parent, child, childAgain, parentAgain] = sentBodies(fake)
   expect(sentBodies(fake)).toHaveLength(4)
   expect(child!.input).toHaveLength(1)
@@ -456,7 +458,7 @@ test("cache-conversation-fork: a start_worker fork and a conversation/fork send 
   fake.play("fresh_subagent_tool_call")
   await using session = await conversationWith(fake)
   await session.submit("Ask a scout where the gnome lives.")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   const at = session.view.seen().find((entry) => entry.kind === RUN_END_KIND)!.id
   const forked = await session.client.call("conversation/fork", {
     author: person("ada"),
@@ -468,7 +470,7 @@ test("cache-conversation-fork: a start_worker fork and a conversation/fork send 
   await forkView.until(() => true)
   const before = runEnds(forkView.seen()).length
   await submit(session.client, fork, "Ask a scout what echo prints.")
-  await forkView.until(settled(before + 1), 20_000)
+  await forkView.until(settled(before + 1), DEADLINE)
   // The parent's first request, its start_worker fork's, the fork's three, then conversation/fork's four: its own, its
   // fresh subagent's two, and its own again.
   const sent = fake.responses()
@@ -498,7 +500,7 @@ test("cache-fork-worker: a forked worker of a type sends its parent's cache key,
     },
   })
   await session.submit("Get the diff reviewed.")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   expectRequests(fake, expected)
   const [parent, child] = sentBodies(fake)
   expectCacheKept(parent!, child!)
@@ -520,7 +522,7 @@ test("worker-fork: a started agent's last answer reaches the parent", async () =
   const expected = fake.play("subagent")
   await using session = await conversationWith(fake)
   await session.submit("Ask a scout where the gnome lives.")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   expectRequests(fake, expected)
   const [, , parentAgain] = fake.responses().map((request) => JSON.parse(request.body))
   expect(JSON.stringify(parentAgain.input)).toContain("Under the floor.")
@@ -804,7 +806,7 @@ test("start-instructions: ChatGPT is told the instructions its conversation star
   const expected = fake.play("subagent")
   await using session = await conversationWith(fake, { cwd: project, instructions: "Report with attn when done." })
   await session.submit("Ask a scout where the gnome lives.")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   expectRequests(fake, expected)
   const parent = instructionsOf(fake, 0)
   expect(parent).toEndWith("\n\n<instructions>\nReport with attn when done.\n</instructions>")
@@ -833,7 +835,7 @@ test("worker-types, cache-fork-worker: an agent of a type gets its parent's inst
     },
   })
   await session.submit("Get the diff reviewed.")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   // The type names a model ChatGPT lists, so the reviewer runs on it.
   expectRequests(fake, expected.with(1, { ...(expected[1] as object), model: "gpt-6-luna" }))
 
@@ -869,7 +871,7 @@ test("worker-types, code-mode-models: a code-mode model that can start workers i
     },
   })
   await session.submit("Get the diff reviewed.")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   expectRequests(fake, expected)
   const [parent, child] = [instructionsOf(fake, 0), instructionsOf(fake, 1)]
   expect(parent).toContain(
@@ -902,7 +904,7 @@ test("worker-provider, worker-types, worker-section, codemode-tool: an advertise
       },
     })
     await session.submit("Ask Claude to use the reviewer type and reply with: fixture text ok")
-    await session.view.until(settled(1), 20_000)
+    await session.view.until(settled(1), DEADLINE)
     expectRequests(fake, expected)
     const parent = instructionsOf(fake, 0)
     expect(parent).toContain(

@@ -15,10 +15,15 @@ export interface Watch<A> {
   readonly until: (predicate: (items: ReadonlyArray<A>) => boolean, ms?: number) => Promise<void>
 }
 
-// A tripwire: a healthy wait on a busy machine stays under it, and a hang still fails before bun's 30 s test timeout,
-// naming the condition. wire-dropped's 200 runs took up to 17 s on a 10-core M5 at load average 40 to 70, and about
-// 1 s on CI; at 5 s, waits failed whenever other sessions loaded the machine.
-export const DEADLINE = 20_000
+// A tripwire every wait shares: a healthy wait on a busy machine stays under it, and a hang fails naming the condition.
+// In a full `bun run check` beside `scripts/under-load.ts`'s 44 spinners on 22 cores (load 85 to 151), the slowest of
+// 2713 waits took 25.4 s (a TUI's screen condition) and the slowest server start 12 s; 15 starts at load 161 took up to
+// 26 s. 90 s is past three times either.
+export const DEADLINE = 90_000
+
+// A tripwire on a whole test, past DEADLINE so a hang fails on its wait and names it. In that same check the slowest
+// test took 41.5 s (target-cli); a test makes several waits, and 240 s leaves each room.
+export const TEST_TIMEOUT = 240_000
 
 export const deadline = <A>(promise: Promise<A>, ms: number, what: string) =>
   Promise.race([

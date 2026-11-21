@@ -1,6 +1,6 @@
 // Gemini through agy: a real server in process, driven as a raw JSON-RPC client, with agy played by the fake `agy`
 // replaying a recorded `agy acp` process per spawn (fixtures/agy, recorded with Gemini 4 Hydrogen at low thinking).
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { Duration, Effect } from "effect"
 import { TestClock } from "effect/testing"
 import type { ScriptStep } from "@sigma/models"
@@ -9,7 +9,7 @@ import { readdirSync } from "node:fs"
 import { join } from "node:path"
 import { FakeAgy } from "./support/agy.ts"
 import { TestTargets } from "./support/targets.ts"
-import { RawClient } from "./support/raw.ts"
+import { RawClient, TEST_TIMEOUT } from "./support/raw.ts"
 import {
   person,
   runEnds,
@@ -21,6 +21,8 @@ import {
   watchView,
   type ServerOptions,
 } from "./support/server.ts"
+
+setDefaultTimeout(TEST_TIMEOUT)
 
 const MODEL = "gemini-4-hydrogen"
 

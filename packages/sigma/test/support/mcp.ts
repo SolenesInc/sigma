@@ -2,7 +2,7 @@
 // over a server-sent stream for `wait`, offers no GET stream, and logs every request with its headers, so a test judges
 // what sigma sent it. It ends a `wait` call its client cancels. Each server process has its own session id and refuses any other with 404, as a restarted real
 // server forgets the sessions of the one before.
-import { deadline } from "./raw.ts"
+import { DEADLINE, deadline } from "./raw.ts"
 
 /** The tool the fake serves by default: it answers with the text it was given, as text and as structured content. */
 export const ECHO_TOOL = {
@@ -170,7 +170,7 @@ export class FakeMcpServer {
     return this.requests.filter((request) => request.method === "tools/call")
   }
 
-  until(predicate: (server: FakeMcpServer) => boolean, what: string, ms = 10_000) {
+  until(predicate: (server: FakeMcpServer) => boolean, what: string, ms = DEADLINE) {
     let check = () => {}
     return deadline(
       new Promise<void>((resolve) => {

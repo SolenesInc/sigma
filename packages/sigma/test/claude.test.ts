@@ -1,6 +1,6 @@
 // Claude Code: a real server in process, driven as a raw JSON-RPC client, with
 // Claude Code played by the fake `claude` replaying a recorded process per spawn.
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -15,7 +15,7 @@ import {
   USER_KIND,
 } from "@sigma/protocol"
 import { ECHO_TOOL, FAKE_INSTRUCTIONS, FakeMcpServer } from "./support/mcp.ts"
-import { DEADLINE, deadline, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, RawClient, TEST_TIMEOUT } from "./support/raw.ts"
 import { TestTargets } from "./support/targets.ts"
 import {
   person,
@@ -34,6 +34,8 @@ import {
 } from "./support/server.ts"
 import type { ScriptStep } from "@sigma/models"
 import { BACKGROUND_OUTLIVES_PROMPT, STOPPED_AT_END_PROMPT } from "./support/journeys.ts"
+
+setDefaultTimeout(TEST_TIMEOUT)
 
 type Approvals = { requests: Record<string, { tool: string }> }
 const approvalsOf = (watch: ViewWatch) => watch.view().docs["sigma.approvals"] as Approvals | undefined
@@ -532,7 +534,7 @@ test("claude-cut-off: a run cut off by a server stop resumes, and Claude Code is
   expect(calls(view.seen())).toHaveLength(1)
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: resumed ok", "run_end: answered"])
   client.close()
-}, 20_000)
+})
 
 test("claude-stop, claude-live: stopping a run mid-call interrupts Claude Code's turn, and the next prompt goes to the same process, told only that prompt", async () => {
   using claude = new FakeClaude("stop_keeps_process")
@@ -781,7 +783,7 @@ test("claude-sign-in: signing in to Claude runs Claude Code's own sign-in in a t
     flow: started.flow,
     response: { _tag: "terminal_exited", success: true },
   })
-  await auth.until((states) => states.at(-1)?.phase === "succeeded", 30_000)
+  await auth.until((states) => states.at(-1)?.phase === "succeeded", DEADLINE)
   client.close()
 
   expect(before.health).toMatchObject({ status: "signed_out", message: "not signed in to Claude Code" })
@@ -791,7 +793,7 @@ test("claude-sign-in: signing in to Claude runs Claude Code's own sign-in in a t
     env: claude.options.env!,
   })
   expect(auth.items.at(-1)?.message).toBe("person@example.com · Claude Max")
-}, 40_000)
+})
 
 test("claude-compact, claude-session-gone: a resume at a position Claude Code compacted away starts a fresh session told the conversation", async () => {
   using claude = new FakeClaude("compaction_resume")
@@ -1223,7 +1225,7 @@ test("claude-switch: retelling a long conversation to Claude keeps its first pro
 
   const told = claude.userTexts(0)[0]!
   expect(told.slice(1)).toEqual([long("first"), "(5 entries left out here)", asked])
-}, 20_000)
+})
 
 test("subagent-claude: a Claude subagent that hands back its report answers with the report, not Claude Code's placeholder", async () => {
   using claude = new FakeClaude("subagent_own_tool")
@@ -2024,7 +2026,7 @@ test("worker-provider, worker-model, worker-root-env: a scripted agent starts a 
     { id: "chosen-root", approvals: "auto", instructions: "Answer in French." },
   )
   await submit(session.client, session.conversation, "ask Claude for it")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   const [started, waited] = results(session.view.seen())
   expect(JSON.parse(started!.text)).toEqual({ task_name: "/root/poet" })
   expect(JSON.parse(waited!.text)).toEqual({
@@ -2068,7 +2070,7 @@ test("worker-interrupt, worker-approve: a Claude Code worker asks its own approv
     { approvals: "ask" },
   )
   await submit(session.client, session.conversation, "start a maker")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   const maker = await session.worker("/root/maker")
   // The call waits on a person in the worker's own conversation, not its parent's.
   await maker.until((watch) => Object.keys(approvalsOf(watch)?.requests ?? {}).length > 0)
@@ -2178,7 +2180,7 @@ test("worker-wake-mail: a Claude Code worker whose run ends with a job working m
     { approvals: "auto" },
   )
   await submit(session.client, session.conversation, "start a runner")
-  await session.view.until(settled(1), 20_000)
+  await session.view.until(settled(1), DEADLINE)
   const [, waited] = results(session.view.seen())
   expect(JSON.parse(waited!.text)).toEqual({
     timed_out: false,
@@ -2207,7 +2209,7 @@ test("worker-wake-mail: a Claude Code worker's wake run, after its job ends, mai
   await submit(session.client, session.conversation, "start a runner")
   await session.view.until(
     (watch) => mailOf(watch, "message").length > 0 && mailOf(watch, "final_answer").length > 0,
-    20_000,
+    DEADLINE,
   )
   expect(mailOf(session.view, "message")).toEqual([
     "The background command finished with exit code 0. Its output was `done`.",

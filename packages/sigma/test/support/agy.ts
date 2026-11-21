@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import type { AgySettings } from "@sigma/agy"
-import { deadline } from "./raw.ts"
+import { DEADLINE, deadline } from "./raw.ts"
 
 const FIXTURES = join(import.meta.dir, "../../../../fixtures/agy")
 const EXECUTABLE = join(import.meta.dir, "fake-agy")
@@ -83,7 +83,7 @@ export class FakeAgy {
     for (const waiter of this.#waiters) waiter()
   }
 
-  logged(predicate: (fake: FakeAgy) => boolean, ms = 10_000) {
+  logged(predicate: (fake: FakeAgy) => boolean, ms = DEADLINE) {
     let check = () => {}
     return deadline(
       new Promise<void>((resolve) => {

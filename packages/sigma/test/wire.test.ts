@@ -1,10 +1,10 @@
 // The wire: a real server in process, driven as a raw JSON-RPC client over its socket.
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { TestTargets } from "./support/targets.ts"
 import type { ScriptStep } from "@sigma/models"
-import { DEADLINE, deadline, errorTag, hangUpMidAnswer, RawClient } from "./support/raw.ts"
+import { DEADLINE, deadline, errorTag, hangUpMidAnswer, RawClient, TEST_TIMEOUT } from "./support/raw.ts"
 import {
   hold,
   idleGrace,
@@ -26,6 +26,8 @@ import { DEFAULT_MAX_BYTES } from "@sigma/env/truncate"
 import { type EntryRecord, PROTOCOL_VERSION, RUN_END_KIND, USER_KIND, type View } from "@sigma/protocol"
 import { VERSION } from "../src/version.ts"
 import { ECHO_TOOL, FAKE_INSTRUCTIONS, FakeMcpServer, WAIT_TOOL } from "./support/mcp.ts"
+
+setDefaultTimeout(TEST_TIMEOUT)
 
 type Tree = { _tag: "tree"; conversation: string; seq: number; status: string; ended?: Record<string, string> }
 type Trees = { _tag: "trees"; seq: number; trees: Array<Tree> } | Tree
@@ -395,7 +397,7 @@ test("server-stop, child-tools: stopping the server lets a working subagent fini
   expect(mails(after)).toEqual([{ kind: "final_answer", task: "/root", sender: "/root/writer" }])
   client.close()
   rmSync(home.dir, { recursive: true, force: true })
-}, 30_000)
+})
 
 test("server-stop: stopping the server answers the caller, then the server exits", async () => {
   const home = tempHome()
@@ -815,9 +817,9 @@ test("mcp-openai, mcp-start: a forked and a fresh subagent each call their root'
     [{ name: "echo", arguments: { text: "forked" } }, "Bearer s3cret", "talk"],
     [{ name: "echo", arguments: { text: "fresh" } }, "Bearer s3cret", "talk"],
   ])
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   client.close()
-}, 30_000)
+})
 
 test("mcp-cancel: interrupting a run cancels the server's call it waits on", async () => {
   using mcp = new FakeMcpServer([ECHO_TOOL, WAIT_TOOL])
@@ -933,7 +935,7 @@ test("child-tools, worker-answer: the model starts a worker, and the wait return
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate it")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const results = toolResults(view).map((result) => JSON.parse(result.text))
   expect(results[0]).toEqual({ task_name: "/root/writer" })
   expect(results[1]).toEqual({
@@ -951,7 +953,7 @@ test("child-tools, worker-answer: the model starts a worker, and the wait return
   expect((view.view().docs["pi.inbox"] as { items: unknown[] } | undefined)?.items ?? []).toEqual([])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: writer finished", "run_end: answered"])
   client.close()
-}, 30_000)
+})
 
 test("worker-provider: start_worker refuses a provider the home does not have and one that is not ready, naming the ready ones, and a fork onto another provider", async () => {
   await using server = await runningServer([
@@ -964,7 +966,7 @@ test("worker-provider: start_worker refuses a provider the home does not have an
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "start them")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   // The test home's ChatGPT is not signed in; its fake Claude Code and agy are.
   expect(toolResults(view)).toEqual([
     { text: "no provider gemini; the ready providers are script, claude, agy", isError: true },
@@ -976,7 +978,7 @@ test("worker-provider: start_worker refuses a provider the home does not have an
   ])
   expect((await client.call("conversation/list")).result).toHaveLength(1)
   client.close()
-}, 30_000)
+})
 
 test("worker-wait: a wait that nothing reaches in time returns timed out, with the minimum it was clamped to, and the worker keeps working", async () => {
   await using server = await runningServer([
@@ -990,7 +992,7 @@ test("worker-wait: a wait that nothing reaches in time returns timed out, with t
   const view = watchView(client, conversation)
   await submit(client, conversation, "start a slow one")
   // The worker holds on its approval, so the wait reaches its minimum of 10 s.
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   expect(JSON.parse(toolResults(view)[1]!.text)).toEqual({
     timed_out: true,
     received: [],
@@ -1000,7 +1002,7 @@ test("worker-wait: a wait that nothing reaches in time returns timed out, with t
   await waitingApproval(slow)
   expect(runEnds(slow.seen())).toEqual([])
   client.close()
-}, 30_000)
+})
 
 test("worker-wait: two waits at once never both return the same answer: one returns it, the other times out", async () => {
   await using server = await runningServer([
@@ -1018,7 +1020,7 @@ test("worker-wait: two waits at once never both return the same answer: one retu
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate it")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const waits = toolResults(view)
     .slice(1)
     .map((result) => JSON.parse(result.text))
@@ -1028,7 +1030,7 @@ test("worker-wait: two waits at once never both return the same answer: one retu
   expect(waits.map((wait) => wait.timed_out).sort()).toEqual([false, true])
   expect(mails(view)).toEqual([])
   client.close()
-}, 30_000)
+})
 
 test("worker-person: a person's message to a worker is answered in the worker's conversation, and its parent is told nothing", async () => {
   await using server = await runningServer([
@@ -1042,19 +1044,19 @@ test("worker-person: a person's message to a worker is answered in the worker's 
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate it")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const helper = watchView(client, spawned(view, "/root/helper"))
-  await helper.until(settled(1), 20_000)
+  await helper.until(settled(1), DEADLINE)
 
   await submit(client, spawned(view, "/root/helper"), "hi helper")
-  await helper.until(settled(2), 20_000)
+  await helper.until(settled(2), DEADLINE)
   expect(transcript(helper.seen()).slice(-3)).toEqual(["user: hi helper", "assistant: hello ada", "run_end: answered"])
   // Nothing reaches the parent: no mail, nothing queued, no run.
   expect(mails(view)).toEqual([])
   expect((view.view().docs["pi.inbox"] as { items: unknown[] }).items).toEqual([])
   expect(runEnds(view.seen())).toHaveLength(1)
   client.close()
-}, 30_000)
+})
 
 /** The conversation of the subagent a start_worker call started, from its result's details. */
 const spawned = (watch: ViewWatch, task: string) => {
@@ -1085,7 +1087,7 @@ test("child-tools: a prompt queued while the model waits on a subagent does not 
   const approval = await waitingApproval(writer)
   await submit(client, conversation, "and then this")
   await client.call("approval/resolve", { conversation: child, approval, author: person("ada"), allow: true })
-  await view.until(settled(2), 20_000)
+  await view.until(settled(2), DEADLINE)
   expect(JSON.parse(toolResults(view)[1]!.text)).toEqual({
     timed_out: false,
     received: [{ from: "/root/writer", kind: "final_answer", text: "the note is written" }],
@@ -1098,7 +1100,7 @@ test("child-tools: a prompt queued while the model waits on a subagent does not 
     "run_end: answered",
   ])
   client.close()
-}, 30_000)
+})
 
 test("child-tools, approval-auto: a subagent of a conversation that runs calls without asking does not ask either", async () => {
   await using server = await runningServer([
@@ -1114,7 +1116,7 @@ test("child-tools, approval-auto: a subagent of a conversation that runs calls w
   ).result.conversation as string
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate it")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   expect(JSON.parse(toolResults(view)[1]!.text).received).toEqual([
     { from: "/root/writer", kind: "final_answer", text: "the note is written" },
   ])
@@ -1122,7 +1124,7 @@ test("child-tools, approval-auto: a subagent of a conversation that runs calls w
   await writer.until(() => true)
   expect(toolResults(writer)).toEqual([{ text: "noted\n", isError: false }])
   client.close()
-}, 30_000)
+})
 
 test("worker-types: starting an agent of a type sigma doesn't know is refused, naming it", async () => {
   await using server = await runningServer([
@@ -1158,12 +1160,12 @@ test("worker-limits, child-tools: start_worker calls in one response start at mo
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "fan out")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const results = toolResults(view)
   expect(results.filter((result) => result.isError)).toEqual([{ text: MAX_THREADS, isError: true }])
   expect(results.filter((result) => !result.isError)).toHaveLength(6)
   client.close()
-}, 30_000)
+})
 
 test("worker-limits, child-tools: a follow-up task does not wake an idle worker while maxThreads workers work", async () => {
   await using server = await runningServer([
@@ -1179,12 +1181,12 @@ test("worker-limits, child-tools: a follow-up task does not wake an idle worker 
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "fan out")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const results = toolResults(view)
   expect(results.slice(2, 8).every((result) => !result.isError)).toBe(true)
   expect(results[8]).toEqual({ text: MAX_THREADS, isError: true })
   client.close()
-}, 30_000)
+})
 
 test("child-tools: a subagent's answer that waits in its parent's queue still reaches it when the person stops the parent", async () => {
   await using server = await runningServer([
@@ -1208,7 +1210,7 @@ test("child-tools: a subagent's answer that waits in its parent's queue still re
   expect(mails(view)).toEqual([{ kind: "final_answer", task: "/root", sender: "/root/writer" }])
   expect(runEnds(view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   client.close()
-}, 30_000)
+})
 
 test("child-tools: a follow-up task reaches a working subagent at its next step, in the same run", async () => {
   await using server = await runningServer([
@@ -1229,12 +1231,12 @@ test("child-tools: a follow-up task reaches a working subagent at its next step,
   // The follow-up waits in the writer's queue while its call holds on the approval.
   await writer.until((current) => ((current.view().docs["pi.inbox"] as { items?: unknown[] })?.items ?? []).length > 0)
   await client.call("approval/resolve", { conversation: child, approval, author: person("ada"), allow: true })
-  await writer.until(settled(1), 20_000)
+  await writer.until(settled(1), DEADLINE)
   expect(mails(writer).map((mail) => mail.kind)).toEqual(["new_task", "new_task"])
   expect(transcript(writer.seen()).slice(-2)).toEqual(["assistant: written and signed", "run_end: answered"])
   expect(runEnds(writer.seen())).toHaveLength(1)
   client.close()
-}, 30_000)
+})
 
 test("child-tools, worker-message, worker-assign: a worker takes messages and follow-up tasks", async () => {
   await using server = await runningServer([
@@ -1251,9 +1253,9 @@ test("child-tools, worker-message, worker-assign: a worker takes messages and fo
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate it")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const helper = watchView(client, spawned(view, "/root/helper"))
-  await helper.until(settled(2), 20_000)
+  await helper.until(settled(2), DEADLINE)
   // Each answer came back through a wait, so none was delivered as a message too.
   expect(mails(view)).toEqual([])
   expect(
@@ -1275,7 +1277,7 @@ test("child-tools, worker-message, worker-assign: a worker takes messages and fo
   ])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: all done", "run_end: answered"])
   client.close()
-}, 30_000)
+})
 
 test("child-tools, worker-list: interrupting a worker stops its turn and reports what it was doing", async () => {
   await using server = await runningServer([
@@ -1295,8 +1297,8 @@ test("child-tools, worker-list: interrupting a worker stops its turn and reports
   const slow = watchView(client, spawned(view, "/root/slow"))
   await waitingApproval(slow)
   await client.call("approval/resolve", { conversation, approval: rootApproval, author: person("ada"), allow: true })
-  await view.until(settled(1), 20_000)
-  await slow.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
+  await slow.until(settled(1), DEADLINE)
   const results = toolResults(view).map((result) => result.text)
   expect(JSON.parse(results[2]!)).toEqual({ previous_status: "running" })
   expect(JSON.parse(results[3]!).workers).toEqual([
@@ -1307,7 +1309,7 @@ test("child-tools, worker-list: interrupting a worker stops its turn and reports
   expect(approvalsOf(slow)!.requests).toEqual({})
   expect(await Bun.file(`${server.home.dir}/made`).exists()).toBe(false)
   client.close()
-}, 30_000)
+})
 
 /** What the people in a conversation see of its calls: each call and each result, in order. */
 const callsAndResults = (watch: ViewWatch) =>
@@ -1348,12 +1350,12 @@ test("worker-root-env, tool-root-env: a worker's command knows the conversation 
   expect(conversation).toBe("chosen-root")
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const child = watchView(client, spawned(view, "/root/envy"))
   await child.until(() => toolResults(child).length > 0)
   expect(toolResults(child).map((result) => result.text)).toEqual([`root=${conversation}\n`])
   client.close()
-}, 30_000)
+})
 test("approval-restart, status-snapshot: a call waiting for approval across a restart asks again after it, and runs once allowed", async () => {
   const home = tempHome()
   let conversation: string
@@ -1430,7 +1432,7 @@ test("status-subagent, status-snapshot: a subagent waiting on a person shows as 
   await watch.until((items) => items.length > 0)
   const conversation = await start(client, server.home.dir)
   await submit(client, conversation, "have someone write a note")
-  await watch.until((items) => treesOf(items, conversation).at(-1)?.status === "waiting", 20_000)
+  await watch.until((items) => treesOf(items, conversation).at(-1)?.status === "waiting", DEADLINE)
 
   const late = await RawClient.connect(server.home.socket)
   const lateWatch = late.watch<Trees>("status/watch")
@@ -1442,15 +1444,15 @@ test("status-subagent, status-snapshot: a subagent waiting on a person shows as 
   expect(treesOf(watch.items, conversation).map((tree) => tree.status)).toEqual(["working", "waiting"])
   // An interrupt of the root's run leaves its subagent waiting; a second, on the idle root, stops the subagent too.
   await client.call("conversation/interrupt", { author: person("ada"), conversation })
-  await watch.until((items) => treesOf(items, conversation).some((tree) => tree.ended), 20_000)
+  await watch.until((items) => treesOf(items, conversation).some((tree) => tree.ended), DEADLINE)
   expect(treesOf(watch.items, conversation).at(-1)?.status).toBe("waiting")
   await client.call("conversation/interrupt", { author: person("ada"), conversation })
-  await watch.until((items) => treesOf(items, conversation).at(-1)?.status === "idle", 20_000)
+  await watch.until((items) => treesOf(items, conversation).at(-1)?.status === "idle", DEADLINE)
   const ended = treesOf(watch.items, conversation).filter((tree) => tree.ended)
   expect(ended.map((tree) => tree.ended)).toEqual([{ outcome: "interrupted", message: "aborted" }])
   client.close()
   late.close()
-}, 30_000)
+})
 
 test("submit-author, queue-shared: every client sees who wrote each prompt, while it waits and once it runs", async () => {
   using held = hold()
@@ -1483,13 +1485,13 @@ test("worker-limits: a tree runs at most as many workers at once as config.toml 
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "fan out")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const results = toolResults(view)
   expect(results.filter((result) => !result.isError)).toHaveLength(2)
   expect(results.filter((result) => result.isError)).toHaveLength(5)
   expect(results.find((result) => result.isError)?.text).toContain("at most 2 workers work at once (max_threads)")
   client.close()
-}, 30_000)
+})
 
 test("worker-limits: with max_threads 0 in config.toml the root conversation is not offered start_worker", async () => {
   await using server = await runningServer(
@@ -1500,14 +1502,14 @@ test("worker-limits: with max_threads 0 in config.toml the root conversation is 
   const conversation = await start(client, server.home.dir)
   const view = watchView(client, conversation)
   await submit(client, conversation, "send a scout")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   expect(toolResults(view)).toEqual([
     { text: expect.stringContaining("Tool start_worker is not available"), isError: true },
   ])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: alone then", "run_end: answered"])
   expect((await client.call("conversation/list")).result).toHaveLength(1)
   client.close()
-}, 30_000)
+})
 
 test("worker-limits, child-tools: under the default config a worker starts a worker of its own, told only its own task", async () => {
   await using server = await runningServer([
@@ -1529,11 +1531,11 @@ test("worker-limits, child-tools: under the default config a worker starts a wor
   ).result.conversation as string
   const view = watchView(client, conversation)
   await submit(client, conversation, "send a helper")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const helper = watchView(client, spawned(view, "/root/helper"))
-  await helper.until(settled(1), 20_000)
+  await helper.until(settled(1), DEADLINE)
   const deeper = watchView(client, spawned(helper, "/root/helper/deeper"))
-  await deeper.until(settled(1), 20_000)
+  await deeper.until(settled(1), DEADLINE)
   // The deeper agent keeps what the helper inherited, not the helper's own notice.
   expect((deeper.view().docs["pi.agent"] as { instructions?: string }).instructions).toBe(
     "Report with attn when done.\n\nYour task name is /root/helper/deeper. You are a worker; your final answer goes to /root/helper.",
@@ -1544,7 +1546,7 @@ test("worker-limits, child-tools: under the default config a worker starts a wor
   expect(transcript(deeper.seen()).slice(-2)).toEqual(["assistant: dug", "run_end: answered"])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: all done", "run_end: answered"])
   client.close()
-}, 30_000)
+})
 
 const idle = (watch: ViewWatch) => (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run === undefined
 
@@ -1586,7 +1588,7 @@ test("worker-interrupt, interrupt-idle: interrupting a conversation's run leaves
 
   // The subagent stays in the tree, and takes a new task.
   await submit(client, conversation, "go on")
-  await view.until(settled(2), 20_000)
+  await view.until(settled(2), DEADLINE)
   expect(JSON.parse(toolResults(view).at(-3)!.text).workers).toEqual([
     { name: "/root", status: "running" },
     { name: "/root/slow", status: "interrupted" },
@@ -1597,7 +1599,7 @@ test("worker-interrupt, interrupt-idle: interrupting a conversation's run leaves
   ])
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: slow is done", "run_end: answered"])
   client.close()
-}, 30_000)
+})
 
 type Listed = {
   id: string
@@ -1637,11 +1639,11 @@ test("worker-start, worker-model: conversation/list shows each worker with its l
   ).result.conversation as string
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const same = watchView(client, spawned(view, "/root/same"))
   const other = watchView(client, spawned(view, "/root/other"))
-  await same.until(settled(1), 20_000)
-  await other.until(settled(1), 20_000)
+  await same.until(settled(1), DEADLINE)
+  await other.until(settled(1), DEADLINE)
   expect(toolResults(view)[2]).toEqual({
     text: expect.stringContaining("no model no-such-model on script"),
     isError: true,
@@ -1689,7 +1691,7 @@ test("worker-start, worker-model: conversation/list shows each worker with its l
     },
   ])
   client.close()
-}, 30_000)
+})
 
 test("model-switch, model-switch-provider: switching a conversation's model is recorded with who switched it, and the next run answers on it", async () => {
   await using server = await runningServer([{ text: "first" }, { text: "second" }])
@@ -2132,7 +2134,7 @@ test("worker-answer: a worker's answer reaches its idle parent as input that sta
   expect(transcript(view.seen()).slice(-2)).toEqual(["assistant: the kid says all quiet", "run_end: answered"])
   expect(runEnds(view.seen())).toHaveLength(2)
   client.close()
-}, 30_000)
+})
 
 /** The text of each message of `conversation`'s context the model is sent, system messages left out. */
 const contextOf = async (client: RawClient, conversation: string) => {
@@ -2937,7 +2939,7 @@ test("target-worker-fork: a worker's calls and a fork's calls act on their paren
   const conversation = (await startOn(client, "box", work)).result.conversation as string
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate")
-  await view.until(settled(1), 20_000)
+  await view.until(settled(1), DEADLINE)
   const helper = watchView(client, spawned(view, "/root/helper"))
   await helper.until(settled(1))
   expect(toolResults(helper)).toEqual([{ text: `box-1 ${work}\n`, isError: false }])
@@ -2952,4 +2954,4 @@ test("target-worker-fork: a worker's calls and a fork's calls act on their paren
   const targetOf = async (id: string) => (await listed(client)).find((each) => each.id === id)!.target
   expect([await targetOf(spawned(view, "/root/helper")), await targetOf(fork)]).toEqual(["box", "box"])
   client.close()
-}, 30_000)
+})
