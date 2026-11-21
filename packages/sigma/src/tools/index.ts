@@ -15,6 +15,7 @@ import {
 } from "@sigma/tools"
 import { Effect } from "effect"
 import { rootName } from "../conversations.ts"
+import { mcpNamespaces } from "./mcp.ts"
 
 const asking = <T extends ToolRegistration>(tool: T): T => ({ ...tool, asks: true })
 
@@ -50,7 +51,7 @@ export const sigmaTools = (harness: () => Harness, images: ImageProcessor, bashT
  * other; its scripts call the conversation's other tools, each a nested call that asks like a direct one.
  */
 export const codeModeTools = (sandbox: CodemodeSandbox): Extension => {
-  const extension = createCodemodeExtension({ sandbox })
+  const extension = createCodemodeExtension({ sandbox, namespaces: mcpNamespaces })
   return {
     ...extension,
     tools: extension.tools!.map((tool) => (tool.name === CODEMODE_TOOL_NAME ? { ...tool, codeMode: true } : tool)),

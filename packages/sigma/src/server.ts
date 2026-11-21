@@ -78,6 +78,7 @@ import {
   USER_KIND,
   type Author,
   STARTED_KIND,
+  MCP_UNLISTED_KIND,
   FORKED_KIND,
   INTERRUPTED_KIND,
   CONTINUED_KIND,
@@ -117,6 +118,8 @@ import { countStops, restartLimitMessage } from "./restarts.ts"
 import { endRun, LastRunEndDoc, switchModel, writeRunEnd } from "./run-end.ts"
 import { committedSignIns } from "./sign-ins.ts"
 import { codeModeTools, sigmaTools } from "./tools/index.ts"
+import { MCP_EXTENSION, mcpTools } from "./tools/mcp.ts"
+import type { McpListed } from "./mcp.ts"
 import { attachedImages } from "./images.ts"
 import { agentTools, type AgentTypes, interrupt, offeredToHarness, wakeWorker } from "./agents.ts"
 import { followTreeStatus, type TreeStatuses } from "./status.ts"
@@ -276,7 +279,12 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           waitLimit,
           ...(live.clock === undefined ? {} : { clock: live.clock }),
         })
-        const base = [sigmaTools(() => harness, images, bashTimeout), workers, codeModeTools(sandbox)]
+        const base = [
+          sigmaTools(() => harness, images, bashTimeout),
+          workers,
+          codeModeTools(sandbox),
+          mcpTools(mcpServers, () => harness),
+        ]
         for (const extension of base) registry.install(extension)
         registry.install(
           workspaceInstructions(
@@ -303,6 +311,7 @@ export class KernelHarness extends Context.Service<KernelHarness, KernelHarnessS
           rootConversation: (conversation) => rootName(harness, conversation),
           processes,
           mcp: (agent, root) => mcpServers.offers(agent.mcpServers ?? [], root),
+          elsewhere: [MCP_EXTENSION],
           remoteHands: {
             cwd: (target) => targetLoop(home, target),
             notice: targetNotice(targets, () => harness),
@@ -586,7 +595,9 @@ const Handlers = SigmaRpcs.toLayer(
       id: string | undefined,
       approvals: "ask" | "auto" | undefined,
       instructions: string | undefined,
-      mcpServers: ReadonlyArray<McpServerRef> | undefined,
+      servers: ReadonlyArray<McpServerRef> | undefined,
+      /** What `servers` listed, for a start whose id the client chose; one it did not lists once it is created. */
+      listed: McpListed | undefined,
       ask: ModelAsk,
       author: Author,
     ) =>
@@ -607,7 +618,6 @@ const Handlers = SigmaRpcs.toLayer(
             ownership: { kind: "ownerless" },
             agent: { ...model, cwd, ...(instructions === undefined ? {} : { instructions }) },
             ...(remote === undefined ? {} : { target: remote }),
-            ...(mcpServers === undefined ? {} : { mcpServers }),
             init: (tx, created) =>
               Effect.gen(function* () {
                 started = created
@@ -616,10 +626,29 @@ const Handlers = SigmaRpcs.toLayer(
                 if (id !== undefined) (yield* tx.doc(ConversationIdsDoc)).ids[id] = Number(created)
                 ;(yield* tx.doc(LastModelDoc)).selection = { ...selection }
                 yield* tx.appendEntry(created, { kind: STARTED_KIND, data: { author } })
+                if (listed !== undefined) yield* recordMcpServers(tx, created, listed)
               }),
           }),
         )
-        return { conversation: id ?? String(started ?? conversation.id), model: selectionOf(model) }
+        const name = id ?? String(started ?? conversation.id)
+        // Its number names it only once it exists. No client knows it before this call answers.
+        if (listed === undefined && servers !== undefined && servers.length > 0) {
+          const late = yield* mcpServers.list(servers, name)
+          yield* Effect.orDie(conversation.commit((tx) => recordMcpServers(tx, conversation.id, late)))
+        }
+        return { conversation: name, model: selectionOf(model) }
+      })
+
+    /**
+     * Gives a new conversation the MCP servers it starts with, as they listed, before anyone can send it input: their
+     * tools are fixed from its first request (D22 of the attn plot s-ct56cj). A server that did not list offers it
+     * none, and an entry tells its clients why.
+     */
+    const recordMcpServers = (tx: Tx, conversation: ConversationId, listed: McpListed) =>
+      Effect.gen(function* () {
+        ;(yield* tx.doc(AgentDoc, conversation)).mcpServers = structuredClone([...listed.servers])
+        for (const { server, reason } of listed.unlisted)
+          yield* tx.appendEntry(conversation, { kind: MCP_UNLISTED_KIND, data: { server, reason } })
       })
 
     /**
@@ -741,9 +770,12 @@ const Handlers = SigmaRpcs.toLayer(
           const own = servers?.find((server) => server.name === OWN_MCP_SERVER)
           if (own !== undefined)
             return yield* new InvalidMcpServer({ name: own.name, message: `${OWN_MCP_SERVER} names sigma's own tools` })
-          const start = (id: string | undefined, reached: Parameters<typeof startConversation>[1]) =>
-            startConversation(cwd, reached, id, approvals, instructions, servers, ask, author)
-          if (id === undefined) return yield* start(undefined, yield* reach(target))
+          const start = (
+            id: string | undefined,
+            reached: Parameters<typeof startConversation>[1],
+            listed: McpListed | undefined,
+          ) => startConversation(cwd, reached, id, approvals, instructions, servers, listed, ask, author)
+          if (id === undefined) return yield* start(undefined, yield* reach(target), undefined)
           // A conversation's number opens it, as its chosen id does, and answers with the id every other call names it
           // by; a number that names none is refused below.
           const numbered = kernelNumber(id)
@@ -761,14 +793,15 @@ const Handlers = SigmaRpcs.toLayer(
             const agent = yield* Effect.orDie(harness.resolveAgent(idFromNumber<ConversationId>(existing)))
             return { conversation: id, model: selectionOf(agent) }
           })
-          // An id that names a conversation keeps it, whatever its target's state. A new one's target is reached
-          // outside the permit, so a target slow to answer holds up no other start.
+          // An id that names a conversation keeps it, whatever its target's state. A new one's target is reached, and
+          // its MCP servers listed, outside the permit, so a target or a server slow to answer holds up no other start.
           const found = yield* chosen
           if (found !== undefined) return found
           const reached = yield* reach(target)
+          const listed = servers === undefined || servers.length === 0 ? undefined : yield* mcpServers.list(servers, id)
           return yield* choosing.withPermits(1)(
             Effect.gen(function* () {
-              return (yield* chosen) ?? (yield* start(id, reached))
+              return (yield* chosen) ?? (yield* start(id, reached, listed))
             }),
           )
         }),

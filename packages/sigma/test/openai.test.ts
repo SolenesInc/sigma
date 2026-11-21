@@ -23,6 +23,7 @@ import {
   tempHome,
 } from "./support/server.ts"
 import { png } from "./support/png.ts"
+import { ECHO_TOOL, FakeMcpServer, WAIT_TOOL } from "./support/mcp.ts"
 import { imageDimensions } from "@sigma/tools"
 
 // sigma's tools are named in lower case; the recordings were made when they were capitalized.
@@ -43,6 +44,8 @@ const conversationWith = async (
     target?: string
     config?: HomeConfig
     claude?: ClaudeProcessSettings
+    /** Registered as `fake` before the conversation starts with it. */
+    mcp?: FakeMcpServer
   } = {},
 ) => {
   const server = await runningServer([], {
@@ -53,6 +56,10 @@ const conversationWith = async (
   })
   if (options.signedIn ?? true) await signIn(server.home)
   const client = await RawClient.connect(server.home.socket)
+  if (options.mcp !== undefined) {
+    const registered = client.watch("mcp/register", { name: "fake", url: options.mcp.url })
+    await registered.until((items) => items.length > 0)
+  }
   const started = await client.call("conversation/start", {
     author: person("ada"),
     cwd: options.cwd?.(server.home.dir) ?? server.home.dir,
@@ -62,6 +69,7 @@ const conversationWith = async (
     approvals: options.approvals ?? "auto",
     model: options.model ?? RECORDED_MODEL,
     ...(options.effort === undefined ? {} : { effort: options.effort }),
+    ...(options.mcp === undefined ? {} : { mcpServers: [{ name: "fake", description: "Echoes text" }] }),
   })
   const conversation = started.result.conversation as string
   const view = watchView(client, conversation)
@@ -366,6 +374,33 @@ test("cache-turns: each ChatGPT request of a conversation, within a run and acro
   expect(sentBodies(fake)).toHaveLength(3)
   expectCacheKept(first!, second!)
   expectCacheKept(second!, third!)
+})
+
+test("mcp-openai, cache-mcp: ChatGPT is told of a server's namespace and its always-loaded tool from the first request, and every request keeps the instructions and tools it started with", async () => {
+  using mcp = new FakeMcpServer([ECHO_TOOL, WAIT_TOOL])
+  await using fake = new FakeOpenAi()
+  const expected = fake.play("mcp_code_mode")
+  fake.play("text_answer")
+  await using session = await conversationWith(fake, { model: "gpt-6.1-sol", mcp })
+  await session.submit("what does echo say?")
+  await session.view.until(settled(1))
+  await session.submit("hello")
+  await session.view.until(settled(2))
+  expectRequests(fake, [...expected, "<any>"])
+  const [first, second, third] = sentBodies(fake)
+  // The namespace, with the description the conversation started with, and the always-loaded tool's declaration with
+  // the type its outputSchema gives; the deferred tool is found with searchTools().
+  expect(first!.instructions).toContain("## mcp__fake (some tools not listed)\nEchoes text")
+  expect(first!.instructions).toContain("mcp__fake__echo")
+  expect(first!.instructions).toContain("echoed: string")
+  expect(first!.instructions).not.toContain("mcp__fake__wait")
+  expectCacheKept(first!, second!)
+  expectCacheKept(second!, third!)
+  const output = (second!.input as Array<{ type: string; output?: string }>).find(
+    (item) => item.type === "custom_tool_call_output",
+  )?.output
+  expect(output).toMatch(/Output:\n\nhi$/)
+  expect(mcp.calls().map((call) => call.body.params)).toEqual([{ name: "echo", arguments: { text: "hi" } }])
 })
 
 test("cache-instructions-change, section-deltas: an AGENTS.md changed between two prompts reaches ChatGPT after the history, and the request keeps the instructions it started with", async () => {

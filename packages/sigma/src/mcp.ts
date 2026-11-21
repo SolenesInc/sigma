@@ -5,8 +5,14 @@
 // `Sigma-Root-Conversation`, over one connection per root conversation. The client is pi-mcp, which sigma's own loop
 // uses too (D19 of the attn plot s-ct56cj); the in-process server Claude Code reaches is the MCP SDK's
 // (`@sigma/claude`), the Agent SDK's own.
-import { type CallToolResult, McpClient, StreamableHttpTransport, type Tool } from "@earendil-works/pi-mcp"
-import type { McpServerRef } from "@sigma/harness"
+import {
+  type CallToolResult,
+  McpClient,
+  McpError,
+  McpSessionExpiredError,
+  StreamableHttpTransport,
+} from "@earendil-works/pi-mcp"
+import type { McpListing, McpServer, McpServerRef } from "@sigma/harness"
 import type { McpObject, McpOffer } from "@sigma/hosted"
 import { InvalidMcpServer, OWN_MCP_SERVER } from "@sigma/protocol"
 import { Effect } from "effect"
@@ -15,23 +21,21 @@ import { VERSION } from "./version.ts"
 /** The header that names the root conversation of every request, as the client chose its id. */
 export const ROOT_HEADER = "Sigma-Root-Conversation"
 
-/** What a server said of itself when sigma first listed it: its instructions and its tools. */
-type Listing = { readonly instructions?: string; readonly tools: ReadonlyArray<Tool> }
-
 /** One registration of a name, live while the stream that made it lasts. */
 type Registration = {
   readonly url: string
   readonly headers: Readonly<Record<string, string>>
   /** The connection of each root conversation, opened by its first request. */
   readonly clients: Map<string, Promise<McpClient>>
-  /**
-   * Its listing, made once, by the first conversation that offers it. A server that did not answer offers no tools
-   * until it is registered again, so it holds up one run, not each.
-   */
-  listing?: Promise<Listing | undefined>
 }
 
+/** Why a server a conversation names offers it no tools, as the conversation's notice says. */
+export type Unlisted = { readonly server: string; readonly reason: string }
+
 export type McpServers = ReturnType<typeof makeMcpServers>
+
+/** What the servers a conversation starts with listed: each with its listing, and why each that did not offers none. */
+export type McpListed = { readonly servers: ReadonlyArray<McpServer>; readonly unlisted: ReadonlyArray<Unlisted> }
 
 /** A failure's message, which says what went wrong without the request's headers. */
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -42,13 +46,6 @@ const refusal = (text: string): McpObject => ({ content: [{ type: "text", text }
 export const makeMcpServers = () => {
   /** Each name's live registrations, newest last: the newest answers. */
   const registered = new Map<string, Registration[]>()
-  /**
-   * Each name's newest listing, kept after its registration ends: a conversation offered its tools keeps them, so its
-   * process key holds and each call is refused by name (C24 of s-h55463), and a client that registers again does
-   * not restart the processes that use it.
-   */
-  const listed = new Map<string, Listing>()
-
   const current = (name: string) => registered.get(name)?.at(-1)
 
   /** The connection of `root` to the registration, opened at its first use; a failed one is opened again next time. */
@@ -75,39 +72,60 @@ export const makeMcpServers = () => {
     return opening
   }
 
-  /**
-   * The registration's tools and instructions, listed once, through `root`'s connection. pi-mcp's 30 s request limit
-   * bounds each request; a server on loopback answers both in milliseconds.
-   */
-  const listingOf = (name: string, registration: Registration, root: string) =>
-    (registration.listing ??= (async () => {
-      try {
-        const client = await connection(registration, root)
-        const tools = await client.listTools()
-        const listing = { tools, ...(client.instructions === undefined ? {} : { instructions: client.instructions }) }
-        if (current(name) === registration) listed.set(name, listing)
-        return listing
-      } catch (error) {
-        console.error(`sigma: the MCP server ${name} did not list its tools: ${reason(error)}`)
-        return undefined
-      }
-    })())
+  /** Closes `root`'s connection to the registration, so its next request opens a new one. */
+  const drop = (registration: Registration, root: string, client: Promise<McpClient>) => {
+    if (registration.clients.get(root) === client) registration.clients.delete(root)
+    void client.then((open) => open.close()).catch(() => undefined)
+  }
 
-  /** Calls `tool` of the server registered as `name` now, as `root`. */
-  const call = async (name: string, root: string, tool: string, args: McpObject, signal?: AbortSignal) => {
+  /**
+   * Lists the server registered as `name` now, as `root`. pi-mcp's 30 s request limit bounds each request; a server on
+   * loopback answers both in milliseconds.
+   */
+  const list = async (name: string, root: string): Promise<McpListing | Unlisted> => {
+    const registration = current(name)
+    if (registration === undefined) return { server: name, reason: "no client connected to sigma registers it" }
+    const client = connection(registration, root)
+    try {
+      const open = await client
+      const tools = (await open.listTools()) as unknown as McpListing["tools"]
+      return { tools, ...(open.instructions === undefined ? {} : { instructions: open.instructions }) }
+    } catch (error) {
+      drop(registration, root, client)
+      return { server: name, reason: `it did not list its tools: ${reason(error)}` }
+    }
+  }
+
+  /**
+   * Calls `tool` of the server registered as `name` now, as `root`. A request that failed on the way, not by the
+   * server's answer, closes the connection, so the next call reaches a server that restarted; one whose session the
+   * server no longer knows, as after a restart, never reached the tool, and goes again once on a new connection.
+   */
+  const call = async (
+    name: string,
+    root: string,
+    tool: string,
+    args: McpObject,
+    signal?: AbortSignal,
+    again = true,
+  ): Promise<McpObject> => {
     const registration = current(name)
     if (registration === undefined)
       return refusal(`The MCP server ${name} is not available: no client connected to sigma registers it now.`)
+    const client = connection(registration, root)
     try {
-      const client = await connection(registration, root)
       // The harness that made the call limits how long it waits, and its signal ends the call.
-      const result: CallToolResult = await client.callTool(tool, args as Record<string, unknown>, {
+      const result: CallToolResult = await (
+        await client
+      ).callTool(tool, args as Record<string, unknown>, {
         ...(signal === undefined ? {} : { signal }),
         timeoutMs: 0,
       })
       return result as unknown as McpObject
     } catch (error) {
       if (signal?.aborted) throw error
+      if (!(error instanceof McpError)) drop(registration, root, client)
+      if (again && error instanceof McpSessionExpiredError) return call(name, root, tool, args, signal, false)
       return refusal(`The MCP server ${name} failed: ${reason(error)}`)
     }
   }
@@ -139,24 +157,40 @@ export const makeMcpServers = () => {
         )
       }),
     /**
-     * The servers of `servers` as a conversation of `root` is offered them: each registered one's tools as it listed
-     * them, or, for one no client registers now, the tools it listed last. A server with no listing offers nothing.
+     * What each of `servers` lists now, as a conversation of `root` starts with it: each one's listing, and why each
+     * that did not list offers no tools.
      */
-    offers: (servers: ReadonlyArray<McpServerRef>, root: string): Effect.Effect<ReadonlyArray<McpOffer>> =>
+    list: (servers: ReadonlyArray<McpServerRef>, root: string): Effect.Effect<McpListed> =>
       Effect.promise(async () => {
-        const offers: McpOffer[] = []
-        for (const { name } of servers) {
-          const registration = current(name)
-          const listing = (registration && (await listingOf(name, registration, root))) ?? listed.get(name)
-          if (listing === undefined) continue
-          offers.push({
-            name,
-            ...(listing.instructions === undefined ? {} : { instructions: listing.instructions }),
-            tools: listing.tools as unknown as McpOffer["tools"],
-            call: (tool, args, signal) => call(name, root, tool, args, signal),
-          })
+        const listings = await Promise.all(servers.map(({ name }) => list(name, root)))
+        const unlisted = listings.filter((listing): listing is Unlisted => "reason" in listing)
+        return {
+          servers: servers.map(({ name, description }, at) => {
+            const listing = listings[at]!
+            return { name, description, ...("reason" in listing ? {} : { listed: listing }) }
+          }),
+          unlisted,
         }
-        return offers
       }),
+    /** Calls `tool` of the server registered as `name` now, as `root`; see `call`. */
+    call: (name: string, root: string, tool: string, args: McpObject, signal?: AbortSignal) =>
+      call(name, root, tool, args, signal),
+    /**
+     * The servers of `servers` as a harness of a conversation of `root` is offered them: each one's tools as it listed
+     * them when the conversation started. A server that did not list then offers nothing.
+     */
+    offers: (servers: ReadonlyArray<McpServer>, root: string): ReadonlyArray<McpOffer> =>
+      servers.flatMap(({ name, listed }) =>
+        listed === undefined
+          ? []
+          : [
+              {
+                name,
+                ...(listed.instructions === undefined ? {} : { instructions: listed.instructions }),
+                tools: listed.tools,
+                call: (tool: string, args: McpObject, signal?: AbortSignal) => call(name, root, tool, args, signal),
+              },
+            ],
+      ),
   }
 }

@@ -39,8 +39,9 @@ const usage = `usage: drive.ts <run> <command> [args]
   serve [sigma serve args...]      start the run's server in the foreground of a tmux window,
                                    e.g. serve --read-only, or --restart to replace the running one
   fake-mcp <name> [header=value...]
-                                   serve a fake MCP server with one tool, echo, and register it with the
-                                   running server as <name>, with these headers, while its window runs;
+                                   serve a fake MCP server with echo, always loaded, and wait, deferred and
+                                   never answered, and register it with the running server as <name>, with
+                                   these headers, while its window runs;
                                    each request it receives goes to evidence/fake-mcp-<name>.ndjson
   fake-mcp-stop <name>             close that window, which ends the registration
   kill-server                      SIGKILL the server that holds the run's home lock

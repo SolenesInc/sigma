@@ -306,6 +306,12 @@ export const McpServerRef = Schema.Struct({
 })
 export type McpServerRef = typeof McpServerRef.Type
 
+/**
+ * An entry `{ server, reason }`, after a conversation's first: an MCP server it started with did not list its tools
+ * then, as `reason` says, so it offers the conversation none, for its whole life.
+ */
+export const MCP_UNLISTED_KIND = "sigma.mcp_unlisted"
+
 /** The name sigma's own tools are served under, which no MCP server can take. */
 export const OWN_MCP_SERVER = "sigma"
 
@@ -367,8 +373,7 @@ export const StartConversation = Rpc.make("conversation/start", {
     ),
     mcpServers: Schema.optionalKey(
       Schema.Array(McpServerRef).annotate({
-        description:
-          "The MCP servers whose tools it is offered, each by the name a client registers it with (mcp/register). Fixed for the conversation's life; its forks and subagents use them too. A name no client has registered offers no tools, or the tools it listed last, and each call is refused.",
+        description: `The MCP servers whose tools it is offered, each by the name a client registers it with (mcp/register). Sigma lists each one's tools now, and they are fixed for the conversation's life; its forks and subagents use them too. A server that does not list now, such as a name no client registers, offers no tools, and a ${"sigma.mcp_unlisted"} entry says why. A call of a server no client registers later is refused.`,
       }),
     ),
     author: Author.annotate({

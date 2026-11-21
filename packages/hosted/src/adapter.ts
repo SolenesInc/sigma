@@ -94,13 +94,16 @@ export const usesRemoteHands = (agent: Agent) => agent.target !== undefined && a
 
 /**
  * The tools sigma offers a harness (`ProcessConfig.own`): with remote hands the conversation's, but code mode, which a
- * harness takes no part in; otherwise those of the extensions `offered`, beside the harness's own (D17).
+ * harness takes no part in, and those of the extensions `elsewhere`, which it reaches another way; otherwise those of
+ * the extensions `offered`, beside the harness's own (D17).
  */
-export const ownTools = (agent: Agent, offered: ReadonlyArray<Extension>) => {
+export const ownTools = (agent: Agent, offered: ReadonlyArray<Extension>, elsewhere: ReadonlyArray<string> = []) => {
   const names = new Set(offered.map((extension) => extension.name))
-  return agent.tools.filter(
-    (tool) => tool.codeMode !== true && (usesRemoteHands(agent) || names.has(toolExtension(agent, tool.name) ?? "")),
-  )
+  const other = new Set(elsewhere)
+  return agent.tools.filter((tool) => {
+    const extension = toolExtension(agent, tool.name) ?? ""
+    return tool.codeMode !== true && (usesRemoteHands(agent) ? !other.has(extension) : names.has(extension))
+  })
 }
 
 /** Where a process starts in its harness's session. */

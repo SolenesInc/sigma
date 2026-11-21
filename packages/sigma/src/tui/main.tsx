@@ -27,6 +27,7 @@ import {
   type Outcome,
   LOCAL_TARGET,
   TARGET_CHANGED_KIND,
+  MCP_UNLISTED_KIND,
   PROTOCOL_VERSION,
   RESET_KIND,
   RUN_END_KIND,
@@ -54,7 +55,7 @@ import { VERSION } from "../version.ts"
 import { mailPayload } from "../agents.ts"
 import { Client, serverRefusal, type StartOptions } from "../client.ts"
 import { attachmentsIn, imagesIn } from "../attach.ts"
-import { describeCall, describeTargetChange, receivedOf } from "./calls.ts"
+import { describeCall, describeMcpUnlisted, describeTargetChange, receivedOf } from "./calls.ts"
 import {
   type Ask,
   clip,
@@ -359,6 +360,7 @@ const DRAWN = new Set([
   CONTINUED_KIND,
   WITHDRAWN_KIND,
   TARGET_CHANGED_KIND,
+  MCP_UNLISTED_KIND,
 ])
 
 /** What the entry of each act that has no other row says its author did. */
@@ -822,6 +824,13 @@ const EntryView = (props: {
       return (
         <text fg={color.yellow} marginTop={1} marginLeft={2}>
           {describeTargetChange(dataOf<Parameters<typeof describeTargetChange>[0]>(entry))}
+        </text>
+      )
+    }
+    case MCP_UNLISTED_KIND: {
+      return (
+        <text fg={color.yellow} marginTop={1} marginLeft={2}>
+          {describeMcpUnlisted(dataOf<Parameters<typeof describeMcpUnlisted>[0]>(entry))}
         </text>
       )
     }

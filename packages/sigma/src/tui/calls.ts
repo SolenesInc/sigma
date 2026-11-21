@@ -38,6 +38,10 @@ export const describeTargetChange = (data: {
     ? `◆ ${data.target} restarted as ${data.to.instance}: files kept, processes gone`
     : `◆ ${data.target} was replaced by ${data.to.instance}: files, processes and changes from before are gone`
 
+/** A `sigma.mcp_unlisted` entry in one line, as the TUI draws it. */
+export const describeMcpUnlisted = (data: { readonly server: string; readonly reason: string }) =>
+  `◆ the MCP server ${data.server} offers this conversation no tools: ${data.reason}`
+
 /** What a worker sent, as a `wait_worker` result returns it. */
 export type Received = { readonly from: string; readonly text: string }
 

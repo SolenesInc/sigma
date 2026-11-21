@@ -16,7 +16,8 @@ So far it holds the shell; running a model turn comes with the next steps of the
   conversation handles. Every operation ends with the invocation.
 - `src/agent.ts`: `pi.agent` and `configure` (spec 7.1): a conversation stores names, not objects, so a selection
   survives uninstall and restart. `resolveAgent` binds the names to a registry snapshot: extension selection, tools in
-  place, wraps, the tools filter, who may call each tool, sections and the instructions section.
+  place, wraps, the tools filter, who may call each tool, sections and the instructions section. An extension's
+  `stateTools` adds the tools that follow from the stored agent, such as its MCP servers' listed tools.
 - `src/registry.ts`: `createRegistry` and the extension helpers. Installing replaces an extension of the same name in
   place and publishes a new immutable snapshot; running work keeps the snapshot it started with (spec 7.5).
 - `src/prompt.ts`: system prompt sections as Effects, rendered in order, and the positional `pi.system` entries that

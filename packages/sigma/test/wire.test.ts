@@ -25,6 +25,7 @@ import { applyImmutable, type Op } from "@sigma/delta"
 import { DEFAULT_MAX_BYTES } from "@sigma/env/truncate"
 import { type EntryRecord, PROTOCOL_VERSION, RUN_END_KIND, USER_KIND, type View } from "@sigma/protocol"
 import { VERSION } from "../src/version.ts"
+import { ECHO_TOOL, FAKE_INSTRUCTIONS, FakeMcpServer, WAIT_TOOL } from "./support/mcp.ts"
 
 type Tree = { _tag: "tree"; conversation: string; seq: number; status: string; ended?: Record<string, string> }
 type Trees = { _tag: "trees"; seq: number; trees: Array<Tree> } | Tree
@@ -701,6 +702,195 @@ test("mcp-start: a conversation keeps the MCP servers it started with, and a for
     without: undefined,
     forked: servers,
   })
+  client.close()
+})
+
+/** Registers `mcp` as `fake` from `client`, with a secret Authorization; it lasts while the client is connected. */
+const registerFake = async (client: RawClient, mcp: FakeMcpServer, url = mcp.url) => {
+  const registered = client.watch<{ name: string }>("mcp/register", {
+    name: "fake",
+    url,
+    headers: { Authorization: "Bearer s3cret" },
+  })
+  await registered.until((items) => items.length > 0)
+}
+
+/** Starts the conversation `talk` with `fake` on `model`, watched. */
+const talkWithFake = async (client: RawClient, cwd: string, model = "script") => {
+  await client.call("conversation/start", {
+    author: person("ada"),
+    id: "talk",
+    cwd,
+    model,
+    approvals: "auto",
+    mcpServers: [{ name: "fake", description: "Echoes text" }],
+  })
+  const view = watchView(client, "talk")
+  await view.until(() => true)
+  return view
+}
+
+/** What the fake's calls asked for, with the Authorization and root each carried. */
+const fakeCalls = (mcp: FakeMcpServer) =>
+  mcp.calls().map((call) => [call.body.params, call.headers.authorization, call.headers["sigma-root-conversation"]])
+
+test("mcp-openai, mcp-typed: a code mode script calls a server's tool by its namespaced name and gets the result its outputSchema types, and describeNamespace() answers with the server's instructions", async () => {
+  using mcp = new FakeMcpServer([ECHO_TOOL, WAIT_TOOL])
+  const code = [
+    'const said = await tools.mcp__fake__echo({ text: "hi" })',
+    'text(typeof said + " " + said.echoed)',
+    'text(JSON.stringify(await describeNamespace("mcp__fake")))',
+  ].join("\n")
+  await using server = await runningServer([{ tool: { name: "codemode", input: { code } } }, { text: "done" }])
+  const client = await RawClient.connect(server.home.socket)
+  await registerFake(client, mcp)
+  const view = await talkWithFake(client, server.home.dir, "script-code-mode")
+  await submit(client, "talk", "echo hi")
+  await view.until(settled(1))
+  const result = toolResults(view)[0]!
+  expect(result.isError).toBe(false)
+  expect(result.text).toContain("object hi")
+  expect(result.text).toContain(
+    JSON.stringify({
+      name: "mcp__fake",
+      description: "Echoes text",
+      instructions: FAKE_INSTRUCTIONS,
+      tools: ["mcp__fake__echo", "mcp__fake__wait"],
+    }),
+  )
+  expect(fakeCalls(mcp)).toEqual([[{ name: "echo", arguments: { text: "hi" } }, "Bearer s3cret", "talk"]])
+  client.close()
+})
+
+test("mcp-openai: a model that takes tools directly is offered an always-loaded tool, and calls a deferred one only once tool_search loaded it, over a stream the server holds open", async () => {
+  using mcp = new FakeMcpServer([ECHO_TOOL, WAIT_TOOL])
+  await using server = await runningServer([
+    call("mcp__fake__echo", { text: "first" }),
+    call("mcp__fake__wait", { text: "early" }),
+    call("tool_search", { query: "wait for a signal from the operator" }),
+    call("mcp__fake__wait", { text: "later" }),
+    { text: "done" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  await registerFake(client, mcp)
+  const view = await talkWithFake(client, server.home.dir)
+  await submit(client, "talk", "wait for it")
+  await mcp.until((fake) => fake.waiting().includes("later"), "the wait call to reach the server")
+  mcp.release("later")
+  await view.until(settled(1))
+  const [echo, early, search, later] = toolResults(view)
+  expect(echo).toEqual({ text: "first", isError: false })
+  expect(early!.isError).toBe(true)
+  expect(search).toEqual({
+    text: expect.stringContaining("- mcp__fake__wait: Waits for a signal from the operator"),
+    isError: false,
+  })
+  expect(later).toEqual({ text: "later", isError: false })
+  expect(fakeCalls(mcp).map(([params]) => params)).toEqual([
+    { name: "echo", arguments: { text: "first" } },
+    { name: "wait", arguments: { text: "later" } },
+  ])
+  client.close()
+})
+
+test("mcp-openai, mcp-start: a forked and a fresh subagent each call their root's server, naming the root", async () => {
+  using mcp = new FakeMcpServer()
+  await using server = await runningServer([
+    call("start_worker", { task_name: "forked", message: "echo forked" }),
+    call("start_worker", { task_name: "fresh", message: "echo fresh", fork_turns: "none" }),
+    call("mcp__fake__echo", { text: "forked" }, "/root/forked"),
+    { text: "echoed", agent: "/root/forked" },
+    call("mcp__fake__echo", { text: "fresh" }, "/root/fresh"),
+    { text: "echoed", agent: "/root/fresh" },
+    call("wait_worker", { timeout_ms: 600_000 }),
+    call("wait_worker", { timeout_ms: 600_000 }),
+    { text: "both echoed" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  await registerFake(client, mcp)
+  const view = await talkWithFake(client, server.home.dir)
+  await submit(client, "talk", "have two subagents echo")
+  await mcp.until((fake) => fake.calls().length === 2, "both subagents to call the server")
+  expect(fakeCalls(mcp).sort()).toEqual([
+    [{ name: "echo", arguments: { text: "forked" } }, "Bearer s3cret", "talk"],
+    [{ name: "echo", arguments: { text: "fresh" } }, "Bearer s3cret", "talk"],
+  ])
+  await view.until(settled(1), 20_000)
+  client.close()
+}, 30_000)
+
+test("mcp-cancel: interrupting a run cancels the server's call it waits on", async () => {
+  using mcp = new FakeMcpServer([ECHO_TOOL, WAIT_TOOL])
+  const code = 'text(JSON.stringify(await tools.mcp__fake__wait({ text: "held" })))'
+  await using server = await runningServer([{ tool: { name: "codemode", input: { code } } }])
+  const client = await RawClient.connect(server.home.socket)
+  await registerFake(client, mcp)
+  const view = await talkWithFake(client, server.home.dir, "script-code-mode")
+  await submit(client, "talk", "wait")
+  await mcp.until((fake) => fake.waiting().includes("held"), "the wait call to reach the server")
+  await client.call("conversation/interrupt", { author: person("ada"), conversation: "talk" })
+  await mcp.until((fake) => fake.cancelled.includes("held"), "sigma to cancel the call it waited on")
+  await view.until(settled(1))
+  expect(runEnds(view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
+  client.close()
+})
+
+test("mcp-reconnect: after the server restarts on its address, the next call reaches it", async () => {
+  using mcp = new FakeMcpServer()
+  await using server = await runningServer([
+    call("mcp__fake__echo", { text: "before" }),
+    { text: "one" },
+    call("mcp__fake__echo", { text: "after" }),
+    { text: "two" },
+  ])
+  const client = await RawClient.connect(server.home.socket)
+  await registerFake(client, mcp)
+  const view = await talkWithFake(client, server.home.dir)
+  await submit(client, "talk", "echo before")
+  await view.until(settled(1))
+  await mcp.restart()
+  await submit(client, "talk", "echo after")
+  await view.until(settled(2))
+  expect(toolResults(view)).toEqual([
+    { text: "before", isError: false },
+    { text: "after", isError: false },
+  ])
+  client.close()
+})
+
+test("mcp-unlisted: a server no client registers, or one that does not answer, offers no tools, and the conversation says why", async () => {
+  using gone = new FakeMcpServer()
+  const url = gone.url
+  gone[Symbol.dispose]()
+  await using server = await runningServer([{ text: "hello" }])
+  const client = await RawClient.connect(server.home.socket)
+  await registerFake(client, gone, url)
+  await client.call("conversation/start", {
+    author: person("ada"),
+    id: "talk",
+    cwd: server.home.dir,
+    mcpServers: [
+      { name: "fake", description: "Echoes text" },
+      { name: "ghost", description: "Never registered" },
+    ],
+  })
+  const view = watchView(client, "talk")
+  await view.until((watch) => watch.seen().filter((entry) => entry.kind === "sigma.mcp_unlisted").length === 2)
+  expect(
+    view
+      .seen()
+      .filter((entry) => entry.kind === "sigma.mcp_unlisted")
+      .map((entry) => entry.data),
+  ).toEqual([
+    { server: "fake", reason: expect.stringMatching(/^it did not list its tools: /) },
+    { server: "ghost", reason: "no client connected to sigma registers it" },
+  ])
+  // The conversation still lists both, as it started with them.
+  const listed = (await client.call("conversation/list")).result as Array<{ id: string; mcpServers?: unknown }>
+  expect(listed.find((info) => info.id === "talk")?.mcpServers).toEqual([
+    { name: "fake", description: "Echoes text" },
+    { name: "ghost", description: "Never registered" },
+  ])
   client.close()
 })
 

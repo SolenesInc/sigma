@@ -126,6 +126,11 @@ export interface Extension<T extends ToolRegistration = ToolRegistration> {
   readonly wraps?: readonly Wrap<T>[]
   /** Resolved by name for every task, whichever conversations select this extension. */
   readonly tasks?: readonly AnyTask<TaskServices>[]
+  /**
+   * Tools that follow from the conversation's stored agent, such as those of the MCP servers it started with, offered
+   * after `tools`. A resolved agent's extension holds both in `tools`.
+   */
+  readonly stateTools?: (state: Readonly<AgentState>) => readonly T[]
 }
 
 /** One published registry state; never changes. */
@@ -172,6 +177,19 @@ export type CompactionSettings = Partial<CompactionPolicy> & {
  */
 export type McpServerRef = { readonly name: string; readonly description: string }
 
+/** What an MCP server said of itself when a conversation started: its `initialize` instructions and its tools. */
+export type McpListing = {
+  instructions?: string
+  /** Its `tools/list`, each tool as the server sent it. */
+  tools: (JsonObject & { name: string })[]
+}
+
+/**
+ * An MCP server as a conversation uses it: what it listed when the conversation started, fixed from then on so the
+ * tools the model is offered never change (D22 of the attn plot s-ct56cj); no `listed` when it did not list then.
+ */
+export type McpServer = { name: string; description: string; listed?: McpListing }
+
 /** A conversation's stored choices: names, not objects. Unset fields follow the host. */
 export type AgentState = {
   model?: ModelRef
@@ -188,8 +206,8 @@ export type AgentState = {
   cwd?: string
   /** The computer its tools act on: set when the conversation is created, never changed; absent for `local`. */
   target?: string
-  /** The MCP servers it uses, by name: set when the conversation is created, never changed. */
-  mcpServers?: McpServerRef[]
+  /** The MCP servers it uses, with what each listed: set when the conversation is created, never changed. */
+  mcpServers?: McpServer[]
   /** Tool rounds one run takes at most. */
   maxTurns?: number
   compaction?: CompactionSettings
@@ -235,8 +253,8 @@ export type Agent<T extends ToolRegistration = ToolRegistration> = {
   readonly cwd?: string
   /** Absent for `local`. */
   readonly target?: string
-  /** The MCP servers it uses; absent for none. */
-  readonly mcpServers?: readonly McpServerRef[]
+  /** The MCP servers it uses, with what each listed; absent for none. */
+  readonly mcpServers?: readonly McpServer[]
   readonly maxTurns?: number
   readonly compaction?: CompactionSettings
 }

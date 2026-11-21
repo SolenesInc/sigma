@@ -242,7 +242,12 @@ export function resolveAgent<T extends ToolRegistration>(
   /** Gets a wrapper's failure with the name of the wrapper's extension. */
   report: (error: unknown, extension: string) => void,
 ): Agent<T> {
-  const extensions = selectExtensions(state?.extensions, snapshot, settings)
+  // An extension's tools of this agent join its own, so whatever asks which extension runs a tool finds it.
+  const extensions = selectExtensions(state?.extensions, snapshot, settings).map((extension) =>
+    extension.stateTools === undefined
+      ? extension
+      : { ...extension, tools: [...(extension.tools ?? []), ...extension.stateTools(state ?? {})] },
+  )
 
   const composed = new Map<string, T>()
   for (const extension of extensions) for (const tool of extension.tools ?? []) composed.set(tool.name, tool)

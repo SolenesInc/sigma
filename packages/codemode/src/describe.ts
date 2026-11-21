@@ -115,23 +115,30 @@ function selectCatalog(groups: readonly CatalogGroup[], budget: number): Set<str
 
 /**
  * The `codemode` section: the tools scripts can call, grouped by namespace, with their declarations as far as the
- * budget allows. `undefined` without callable tools.
+ * budget allows. `deferred` tools are never declared, and count as tools not listed, so a namespace of only deferred
+ * tools is still named. `undefined` without callable tools.
  */
 export function codemodeSection(
   tools: readonly ToolRegistration[],
   namespaces: readonly CodemodeNamespace[],
   budget: number,
+  deferred: readonly ToolRegistration[] = [],
 ): string | undefined {
-  if (tools.length === 0) return undefined
+  if (tools.length + deferred.length === 0) return undefined
   const groups = new Map<string, CatalogGroup>([["", { namespace: undefined, entries: [] }]])
-  for (const tool of tools) {
+  const add = (tool: ToolRegistration, section: string, cost: number) => {
     const namespace = namespaceOf(tool.name, namespaces)
     const key = namespace ? `ns:${namespace.name}` : ""
     const group = groups.get(key) ?? { namespace, entries: [] }
     groups.set(key, group)
-    const section = renderToolSection(tool)
-    group.entries.push({ name: tool.name, section, cost: Math.ceil(section.length / CHARS_PER_TOKEN) })
+    group.entries.push({ name: tool.name, section, cost })
   }
+  for (const tool of tools) {
+    const section = renderToolSection(tool)
+    add(tool, section, Math.ceil(section.length / CHARS_PER_TOKEN))
+  }
+  // Never shown, so never rendered.
+  for (const tool of deferred) add(tool, "", Number.POSITIVE_INFINITY)
   const ordered = [...groups.values()].sort((a, b) =>
     a.namespace === undefined ? -1 : b.namespace === undefined ? 1 : a.namespace.name.localeCompare(b.namespace.name),
   )

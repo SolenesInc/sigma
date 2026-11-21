@@ -37,6 +37,7 @@
 import { ownedSlice } from "@sigma/delta"
 import { copyJson } from "@sigma/delta/json"
 import {
+  type Agent,
   defineExtension,
   defineTool,
   type Extension,
@@ -213,8 +214,11 @@ export type CodemodeToolInput = Static<typeof codemodeSchema>
 export type CodemodeToolOptions = {
   /** Runs the scripts: `CodemodeSandbox` runs each in a worker thread. */
   readonly sandbox: CodemodeSandboxBase
-  /** Groups of tools by name prefix, such as MCP servers, for the `codemode` section and tool search. */
-  readonly namespaces?: readonly CodemodeNamespace[]
+  /**
+   * Groups of tools by name prefix, such as MCP servers, for the `codemode` section and tool search; or the groups of
+   * each conversation's agent, such as the MCP servers it started with.
+   */
+  readonly namespaces?: readonly CodemodeNamespace[] | ((agent: Agent) => readonly CodemodeNamespace[])
   /** Estimated tokens the tool declarations in the `codemode` section may use. Default 3000. */
   readonly inlineBudget?: number
   /** Give scripts `models.*`: the model catalog, classifiers, and image generation. Default true. */
@@ -222,6 +226,13 @@ export type CodemodeToolOptions = {
   /** Host functions scripts call as globals. */
   readonly globals?: readonly CodemodeGlobal[]
 }
+
+/** The tools `agent`'s scripts can call by name; the internal ones they reach through globals. */
+const scriptTools = (agent: Agent) => agent.callable.filter((tool) => !tool.name.startsWith(CODEMODE_INTERNAL_PREFIX))
+
+/** The namespaces `agent`'s scripts see. */
+const namespacesOf = (options: CodemodeToolOptions, agent: Agent): readonly CodemodeNamespace[] =>
+  typeof options.namespaces === "function" ? options.namespaces(agent) : (options.namespaces ?? [])
 
 /** Outputs bounded by the script's own token budget; the Harness's limits only stop a runaway. */
 const OUTPUT_LIMITS = { maxBytes: 4 * 1024 * 1024, maxLines: 100_000 } as const
@@ -268,12 +279,11 @@ export function createCodemodeExtension(options: CodemodeToolOptions): Extension
           !input.agent.tools.some((tool) => tool.name === CODEMODE_TOOL_NAME)
             ? undefined
             : codemodeSection(
-                // Deferred tools are found with `searchTools()`.
-                input.agent.callable.filter(
-                  (tool) => !tool.name.startsWith(CODEMODE_INTERNAL_PREFIX) && tool.deferred !== true,
-                ),
-                options.namespaces ?? [],
+                scriptTools(input.agent).filter((tool) => tool.deferred !== true),
+                namespacesOf(options, input.agent),
                 options.inlineBudget ?? DEFAULT_CODEMODE_INLINE_BUDGET,
+                // Deferred tools are found with `searchTools()`.
+                scriptTools(input.agent).filter((tool) => tool.deferred === true),
               ),
         ),
       ),
@@ -399,8 +409,9 @@ class CodemodeCall {
         ...(self.options.globals ?? []).map((global) => ({ name: global.name, spread: global.spread === true })),
       ]
       const namespaces: Start["namespaces"] = []
+      const declared = namespacesOf(self.options, agent)
       for (const tool of callable) {
-        const namespace = namespaceOf(tool.name, self.options.namespaces ?? [])
+        const namespace = namespaceOf(tool.name, declared)
         if (namespace === undefined) continue
         let entry = namespaces.find((candidate) => candidate.name === namespace.name)
         if (entry === undefined) {

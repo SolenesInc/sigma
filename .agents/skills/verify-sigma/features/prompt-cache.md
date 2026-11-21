@@ -35,6 +35,10 @@ with what the last one had. A person sees the result in `/usage`, whose
   inherited followed by the line naming its task and its agent type's body. Those reach ChatGPT
   after the inherited history, as an update of the `instructions` section.
   A `fork_turns: "none"` subagent is told the same in its `instructions`.
+- `cache-mcp` sends a ChatGPT conversation with MCP servers the same
+  `instructions` and `tools` in its first request as in its later ones: sigma
+  lists the servers when the conversation starts, so nothing joins the prompt
+  after its first request ([MCP servers](./mcp-servers.md)).
 - `cache-shown` shows cached input per model in `/usage`, as
   `<total> (<n> in, <n> cached, <n> out)`, with `<n> cache write` before `out`
   when the provider charged for writing to its cache; `usage/get` returns it
@@ -213,6 +217,7 @@ Provider, `packages/sigma/test/openai.test.ts`:
 - cache-conversation-fork: a start_worker fork and a conversation/fork send their parent's cache key and session, and a fresh subagent its own
 - cache-fork-worker: a forked worker of a type sends its parent's cache key, instructions and tools, and gets its notice and type after the inherited history
 - worker-types, cache-fork-worker: an agent of a type gets its parent's instructions, its notice, its type's instructions and its model, and fork_turns none leaves the parent's history out
+- mcp-openai, cache-mcp: ChatGPT is told of a server's namespace and its always-loaded tool from the first request, and every request keeps the instructions and tools it started with
 
 Provider, `packages/sigma/test/claude.test.ts`:
 

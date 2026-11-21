@@ -1253,8 +1253,8 @@ const registerFake = async (client: RawClient, mcp: FakeMcpServer) => {
   expect(registered.items).toEqual([{ name: "fake" }])
 }
 
-/** Starts a Claude conversation named `id` that uses `fake`, runs mcp_tool's prompt in it, and waits for its end. */
-const runWithFake = async (client: RawClient, cwd: string, id: string) => {
+/** Starts a Claude conversation named `id` that uses `fake`. */
+const startWithFake = async (client: RawClient, cwd: string, id: string) => {
   const started = await client.call("conversation/start", {
     author: person("ada"),
     cwd,
@@ -1264,6 +1264,11 @@ const runWithFake = async (client: RawClient, cwd: string, id: string) => {
     mcpServers: FAKE_SERVERS,
   })
   expect(started.result.conversation).toBe(id)
+}
+
+/** Starts the conversation `id` with `fake` unless it was, runs mcp_tool's prompt in it, and waits for its end. */
+const runWithFake = async (client: RawClient, cwd: string, id: string) => {
+  await startWithFake(client, cwd, id)
   const view = watchView(client, id)
   await view.until(() => true)
   await submit(client, id, "echo root, then have a subagent echo sub")
@@ -1342,6 +1347,8 @@ test("mcp-gone: once the client that registered a server disconnects, each call 
   const client = await RawClient.connect(server.home.socket)
   try {
     await registerFake(registering, mcp)
+    // Both start while the server is registered, so both are offered its tools.
+    await startWithFake(client, server.home.dir, "two")
     await runWithFake(client, server.home.dir, "one")
     registering.close()
     // Sigma ends its session with the server once the registration is gone.

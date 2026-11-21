@@ -96,7 +96,12 @@ export interface HostedRunOptions {
    * The MCP servers a conversation's harness is offered, for the root conversation `root`, which every request names.
    * Default none.
    */
-  readonly mcp?: (agent: Agent, root: string) => Effect.Effect<ReadonlyArray<McpOffer>>
+  readonly mcp?: (agent: Agent, root: string) => ReadonlyArray<McpOffer>
+  /**
+   * The extensions, by name, whose tools a harness with remote hands is not offered among the conversation's, as it
+   * reaches them another way, such as sigma's own loop's tools of the MCP servers in `mcp`. Default none.
+   */
+  readonly elsewhere?: ReadonlyArray<string>
 }
 
 export interface RemoteHandsOptions {
@@ -466,7 +471,7 @@ const makeRunTask = (
           const cwd = target === undefined ? undefined : yield* remoteHands.cwd(target)
           const offered = shared.options.offered?.(agent) ?? []
           const instructions = yield* instructionsOf(runtime, api, agent, offered)
-          const own = ownTools(agent, offered)
+          const own = ownTools(agent, offered, shared.options.elsewhere)
           const draft: Omit<ProcessConfig, "mcp"> = {
             agent,
             settings,
@@ -476,10 +481,7 @@ const makeRunTask = (
             ...(cwd === undefined ? {} : { remoteHands: { cwd, append: appendOf(runtime, api, agent, own) } }),
           }
           // The servers' requests name the conversation's root.
-          const mcp =
-            adapter.takesMcp === true
-              ? yield* shared.options.mcp?.(agent, draft.rootConversation) ?? Effect.succeed([])
-              : []
+          const mcp = adapter.takesMcp === true ? (shared.options.mcp?.(agent, draft.rootConversation) ?? []) : []
           const config: ProcessConfig = { ...draft, mcp }
           const notice = target === undefined ? undefined : remoteHands.notice(runtime.conversationId, target, "run")
           const run: RunContext = {
