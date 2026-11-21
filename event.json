@@ -1,0 +1,8 @@
+{
+  "kind": "finding",
+  "state": "fail",
+  "title": "P1: Plain sigma exec hides why a requested MCP server offered no tools",
+  "at": "2026-11-21T16:19:49.546Z",
+  "url": "https://github.com/SolenesInc/sigma/issues/152",
+  "detail": "`packages/sigma/src/exec.ts:264`\n\nRun `sigma exec --mcp-server 'ghost=Never registered' 'hello'` in a home where `ghost` is unregistered. Plain exec prints the model's answer, emits no diagnostic and exits successfully. Sigma commits the reason in `sigma.mcp_unlisted`, but plain exec discards it. The caller cannot tell why the requested tool was unavailable.\n\nPrint the committed reason on stderr as a startup diagnostic. Keep the normal answer on stdout.\n"
+}
