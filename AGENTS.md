@@ -24,94 +24,10 @@ map, and are proven by package tests or pi-durable's own suite.
 
 ## Domain language
 
-These terms are sigma's domain model. Use them with these meanings in code,
-tests, docs and conversation.
-
-```text
-home                    one directory of state, SIGMA_HOME; like a tenant
-├─ server (at most 1)   the process that owns the home's state and runs its work
-├─ conversation (0..n)
-└─ provider (1..n)      a way to reach models: Claude Code, agy or a ChatGPT
-                        sign-in
-```
-
-```text
-conversation            one transcript and the work done in it; like one chat
-├─ entry (0..n)         one immutable record in the transcript: a message, a
-│                       tool call, a result, an approval, a run_end
-├─ submission (0..n)    input handed to the conversation; it starts a run, or
-│                       waits in the queue while a run works
-├─ run (0..n)           the work from one input to its run_end; 1 at a time
-│  ├─ turn (1..n)       one model response and its tool calls
-│  └─ run_end (1)       the entry that says how the run ended
-├─ model (1)            a provider, a model and a reasoning effort
-└─ worker (0..n)        a conversation sigma starts for this one, on any
-                        provider, under it in a tree; it takes input from
-                        people and outlives its parent's turn
-```
-
-```text
-harness                 a program that runs its own model loop, tools and
-                        session, which sigma drives as a process: Claude Code
-                        or agy
-subagent                a child a harness owns and runs inside one of its
-                        turns, as Claude Code's Agent; sigma shows each as a
-                        conversation, but it is not a worker
-fork                    a worker that starts with its parent's history; only
-                        one on its parent's provider can fork
-```
-
-```text
-job                     work a harness started that can outlive the run that
-                        started it, such as a background command or subagent
-job report              the entry that tells the conversation a job ended,
-                        under the job's name, as input by no person
-wake run                a run the harness's own turn starts: held job reports
-                        are its input, and it sends the harness nothing
-```
-
-```text
-target                  the computer a conversation's tools act on, named by
-│                       an opaque id fixed at start; `local` is the server's
-│                       own machine, the default
-├─ instance (1 at a time) the machine or container behind the target now; it
-│                       can restart or be replaced
-├─ files                the storage behind the conversation's working folder;
-│                       a restart keeps it, a replacement does not
-└─ sigma-env            sigma's program on the instance; it runs the
-                        conversation's file and shell calls
-```
-
-```text
-connector               the command, set by whatever runs sigma, that opens a
-                        pipe from the server to a target's current instance
-remote conversation     a conversation whose target is not `local`
-remote hands            how a remote conversation runs Claude Code: its own
-                        tools off, acting only through sigma's tools
-```
-
-A conversation's workers and forks share its target. Sigma does not name who
-provides a target, or what kind of host it is.
-
-```text
-commit                  one atomic write to the store; the only way state
-                        changes, and what clients are shown
-task                    durable work the kernel runs in phases, each safe to
-                        rerun from its top; a run, a tool call and a worker
-                        are tasks, so a restart resumes them
-document                state the kernel keeps beside the transcript, such as
-                        a conversation's queue or its waiting approvals
-view                    what a client watches of a conversation: its entries
-                        through a window and its documents, then the changes
-                        each commit makes to them
-client                  a program connected to the server's socket that draws
-                        committed state and sends input; the TUI is one
-approval                a tool call waiting for a person to allow or deny it;
-                        the first answer counts
-ephemeral run           one prompt a provider answers with no tools, outside
-                        any conversation: not a run of one, with no entries
-                        and no run_end; nothing of it is committed
-```
+Always read [docs/glossary.md](docs/glossary.md) before writing code, tests,
+docs, or questions. It is Sigma's domain vocabulary — the ubiquitous language
+people and agents share. Use its terms, and never write a legacy name listed
+under its Tech debt section.
 
 ## Rules that keep it what it is
 
@@ -131,6 +47,7 @@ ephemeral run           one prompt a provider answers with no tools, outside
 
 | To learn                                                     | Read                                                      |
 | ------------------------------------------------------------ | --------------------------------------------------------- |
+| Sigma's domain vocabulary (ubiquitous language)              | `docs/glossary.md`                                        |
 | What sigma does, feature by feature, and how to drive each   | `.agents/skills/verify-sigma/features/README.md`          |
 | The commands and flags                                       | `bun packages/sigma/src/main.ts --help`                   |
 | What clients can call                                        | `schema/sigma.schema.json`, made from `packages/protocol` |
