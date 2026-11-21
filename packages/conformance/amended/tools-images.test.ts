@@ -59,10 +59,10 @@ describe("createNodePhotonImages", () => {
 	}, 60_000);
 
 	// Amends "gives the same result as the calling thread, and keeps the caller's bytes" (spec 7.3, amendments.json): the
-	// same image and checks, with a limit measured on Bun. On Bun 1.4.4 (10-core Apple M5) it takes about 7.4 s alone,
-	// 7.1 s of it vitest's toEqual over the caller's 4.8 MB of PNG bytes and 0.2-0.3 s the two prepares, and up to 46.5 s
-	// of upstream's 60 s with two conformance suites running at once over 7 rounds in each mode; 180 s is about four times
-	// that.
+	// same image and checks, comparing the caller's bytes in native code. Upstream's toEqual walks the 4.8 MB one element
+	// at a time: 7.1 s of the test's 7.4 s alone on a 10-core Apple M5, and 107-227 s beside scripts/under-load.ts's 44
+	// spinners on 22 cores (load 102 to 155), past upstream's 60 s. Compared byte for byte, it took 3.1-4.1 s over three
+	// runs under that load, so upstream's 60 s stays.
 	it("gives the same result as the calling thread, and keeps the caller's bytes", async () => {
 		const png = noisyPng(1100, 1100);
 		const copy = png.slice();
@@ -73,6 +73,6 @@ describe("createNodePhotonImages", () => {
 			DEFAULT_IMAGE_LIMITS,
 		);
 		expect(threaded).toEqual(inline);
-		expect(png).toEqual(copy);
-	}, 180_000);
+		expect(Buffer.compare(png, copy)).toBe(0);
+	}, 60_000);
 });

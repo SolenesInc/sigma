@@ -1309,6 +1309,13 @@
   "private": "onWake (D5)"
  },
  {
+  "test": "upstream/test/harness-ownership.test.ts :: ownership > tracks ownership chains deeper than the call stack",
+  "owner": "harness-run-core",
+  "spec": "5.4",
+  "rewrite": "The same 20,000-task chain and checks, waiting on the task graph's call for the top task's completing status instead of polling 500 times 5 ms apart, with a 240 s limit instead of 60 s. Receipt: beside scripts/under-load.ts's 44 spinners on 22 cores (load 102-155) the test took 33.4-58.1 s over three runs.",
+  "private": "timing: a 2.5 s poll and a 60 s limit that the chain's own work reaches when the machine is loaded"
+ },
+ {
   "test": "upstream/test/sqlite-commit.test.ts :: SqliteStorage batch commits against the memory reference > agrees with MemoryStorage on random batch calls (seed 1)",
   "owner": "kernel-session",
   "spec": "section 10",
@@ -1354,8 +1361,8 @@
   "test": "upstream/test/tools-images.test.ts :: createNodePhotonImages > gives the same result as the calling thread, and keeps the caller's bytes",
   "owner": "tools-package",
   "spec": "7.3",
-  "rewrite": "The same image and checks, with a 180 s limit measured on Bun under load instead of 60 s. Receipt: on Bun 1.4.4 (10-core Apple M5) it takes about 7.4 s alone, 7.1 s of it vitest's toEqual over the 4.8 MB input, and up to 46.5 s with two suites running at once, over 7 rounds in each mode.",
-  "private": "timing: a 60 s limit that vitest's toEqual over 4.8 MB of bytes nears on Bun when the machine is loaded"
+  "rewrite": "The same image and checks and upstream's 60 s limit, comparing the caller's 4.8 MB of bytes with Buffer.compare instead of toEqual. Receipt: toEqual took 7.1 s of the test's 7.4 s alone on a 10-core Apple M5 and the test 107-227 s beside scripts/under-load.ts's 44 spinners on 22 cores; compared byte for byte, 3.1-4.1 s under that load.",
+  "private": "timing: vitest's toEqual over 4.8 MB of bytes, element by element, passes a 60 s limit when the machine is loaded"
  },
  {
   "test": "upstream/test/harness-conversations.test.ts :: Harness agent > gives conversations created through Tx their documents: empty, an owner copy, or the fork's as-of copy",

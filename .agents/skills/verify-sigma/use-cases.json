@@ -74,6 +74,9 @@
   "amended/harness-nested-tools.test.ts :: nested tool calls > rejects a nested call of an aborted caller and leaves no document for it": [
     "tool-execute-tool"
   ],
+  "amended/harness-ownership.test.ts :: ownership > tracks ownership chains deeper than the call stack": [
+    "conversation-owner"
+  ],
   "amended/harness-reports.test.ts :: reports > tell extension, listener, wake, and timer failures from a failed Session": [
     "report-kinds"
   ],
