@@ -1,0 +1,8 @@
+{
+  "kind": "repair",
+  "state": "info",
+  "title": "Reverts the parallel check that turned main's CI red on Ubuntu and macOS",
+  "at": "2026-11-21T21:38:50.722Z",
+  "url": "https://github.com/SolenesInc/sigma/actions/runs/44641347419",
+  "repairs": "72abc55ae609f147e355ef8535487fd048c2690c"
+}
