@@ -1,1 +1,2 @@
 gate = "bun run check"
+feed = "https://land-feed.caketroll.cloud"
