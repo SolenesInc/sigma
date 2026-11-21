@@ -41,6 +41,8 @@ export class FakeMcpServer {
   readonly requests: FakeMcpRequest[] = []
   /** Called with each request as it arrives. */
   onRequest: ((request: FakeMcpRequest) => void) | undefined
+  /** When set, every POST is answered 401 with this text, as attn refuses a conversation no session holds. */
+  refusal: string | undefined
   /** The texts of the `wait` calls their client cancelled with `notifications/cancelled` before they were released. */
   readonly cancelled: string[] = []
   readonly #waiters = new Set<() => void>()
@@ -66,6 +68,7 @@ export class FakeMcpServer {
     }
     const body = await request.json()
     this.#received({ http: "POST", method: body.method, headers, body })
+    if (this.refusal !== undefined) return new Response(this.refusal, { status: 401 })
     const session = headers["mcp-session-id"]
     if (body.method !== "initialize" && session !== this.#session) return new Response(null, { status: 404 })
     if (body.method === "notifications/cancelled") this.#cancel(body.params?.requestId)

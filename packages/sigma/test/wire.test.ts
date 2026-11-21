@@ -897,6 +897,21 @@ test("mcp-unlisted: a server no client registers, or one that does not answer, o
   client.close()
 })
 
+test("mcp-unlisted: a server that refuses the conversation's root offers no tools, and the conversation's reason carries the server's answer", async () => {
+  using mcp = new FakeMcpServer()
+  mcp.refusal = "no session of sigma holds conversation talk"
+  await using server = await runningServer([{ text: "hello" }])
+  const client = await RawClient.connect(server.home.socket)
+  await registerFake(client, mcp)
+  const view = await talkWithFake(client, server.home.dir)
+  await view.until((watch) => watch.seen().some((entry) => entry.kind === "sigma.mcp_unlisted"))
+  expect(view.seen().find((entry) => entry.kind === "sigma.mcp_unlisted")?.data).toEqual({
+    server: "fake",
+    reason: expect.stringMatching(/^it did not list its tools: .+: no session of sigma holds conversation talk$/),
+  })
+  client.close()
+})
+
 const call = (name: string, input: Record<string, unknown>, agent?: string) => ({
   tool: { name, input },
   ...(agent === undefined ? {} : { agent }),

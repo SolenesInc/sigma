@@ -7,6 +7,7 @@
 // (`@sigma/claude`), the Agent SDK's own.
 import {
   type CallToolResult,
+  McpAuthRequiredError,
   McpClient,
   McpError,
   McpSessionExpiredError,
@@ -37,8 +38,21 @@ export type McpServers = ReturnType<typeof makeMcpServers>
 /** What the servers a conversation starts with listed: each with its listing, and why each that did not offers none. */
 export type McpListed = { readonly servers: ReadonlyArray<McpServer>; readonly unlisted: ReadonlyArray<Unlisted> }
 
-/** A failure's message, which says what went wrong without the request's headers. */
-const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
+/**
+ * A failure's message, which says what went wrong without the request's headers. pi-mcp's message for a 401 and for a
+ * lost session leaves out what the server answered, which for attn names the conversation it refused; it is added
+ * here, cut as pi-mcp cuts the answer it puts in its message for every other status.
+ */
+const reason = (error: unknown) => {
+  if (!(error instanceof Error)) return String(error)
+  if (!(error instanceof McpAuthRequiredError || error instanceof McpSessionExpiredError)) return error.message
+  const said = error.body.trim()
+  if (said === "") return error.message
+  return `${error.message}: ${said.length > ANSWER_CHARS ? `${said.slice(0, ANSWER_CHARS - 3)}...` : said}`
+}
+
+/** pi-mcp's `ERROR_MESSAGE_BODY_CHARS`: how much of a server's answer its message for a failed request keeps. */
+const ANSWER_CHARS = 500
 
 /** A `tools/call` result that tells the model the call did not reach `name`. */
 const refusal = (text: string): McpObject => ({ content: [{ type: "text", text }], isError: true })

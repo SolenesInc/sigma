@@ -29,7 +29,8 @@ each call with a message that names it. agy is offered no tools yet.
   home's files, the list or a transcript.
 - `mcp-unlisted` adds a `sigma.mcp_unlisted` entry `{server, reason}` for each
   server that did not list when the conversation started: no client registers
-  it, or it did not answer. The TUI shows
+  it, it did not answer, or it refused, such as attn refusing a conversation no
+  session holds; a refusal's reason ends with what the server answered. The TUI shows
   `◆ the MCP server <name> offers this conversation no tools: <reason>`, and
   the conversation is offered none of its tools.
 - `mcp-openai` offers a ChatGPT conversation each server's tools as
@@ -150,6 +151,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - mcp-cancel: interrupting a run cancels the server's call it waits on
 - mcp-reconnect: after the server restarts on its address, the next call reaches it
 - mcp-unlisted: a server no client registers, or one that does not answer, offers no tools, and the conversation says why
+- mcp-unlisted: a server that refuses the conversation's root offers no tools, and the conversation's reason carries the server's answer
 
 ## Gotchas
 
