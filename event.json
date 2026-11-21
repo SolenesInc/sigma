@@ -1,0 +1,8 @@
+{
+  "kind": "finding",
+  "state": "fail",
+  "title": "P1: Code mode merges two distinct MCP servers into one namespace",
+  "at": "2026-11-21T16:19:50.894Z",
+  "url": "https://github.com/SolenesInc/sigma/issues/153",
+  "detail": "`packages/sigma/src/tools/mcp.ts:134`\n\nRegister separate MCP servers named `team-tools` and `team_tools`, then choose both for a ChatGPT conversation. Both normalize to `mcp__team_tools`. The code mode catalog combines both tool sets under the first server's description. `describeNamespace()` returns only the first server's instructions, so the model loses the other server's instructions.\n\nGive each server its own unambiguous namespace and membership, or reject the ambiguous selection before startup.\n"
+}
