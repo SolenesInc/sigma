@@ -491,7 +491,8 @@ describe("documents", () => {
           expect((yield* Queue.take(seen)).value.next).toBe(caughtUp.value.next + 1)
         }),
       ),
-    // Its 20,000 commits take 3 to 5 s on CI, and up to 34 s on a 10-core M5 at load average 40 to 70.
-    60_000,
+    // Its 20,000 commits take 3 to 5 s on CI, and 48.6 to 56.2 s over three runs beside scripts/under-load.ts's 44
+    // spinners on 22 cores (load 102 to 155); 240 s is four times that.
+    240_000,
   )
 })
