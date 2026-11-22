@@ -409,11 +409,13 @@ test("server-stop: stopping the server answers the caller, then the server exits
   client.close()
 })
 
-test("wire-initialize: a client is answered with the server's version and the protocol", async () => {
+test("wire-initialize: a client is answered with the server's version and protocol 2, whether it asks for 2 or, as the released attn does, for 1", async () => {
   await using server = await runningServer()
   const client = await RawClient.connect(server.home.socket)
-  const reply = await client.call("initialize", { client: "test", version: "0", protocol: PROTOCOL_VERSION })
-  expect(reply.result).toEqual({ version: VERSION, protocol: PROTOCOL_VERSION, readOnly: false })
+  for (const asked of [2, 1]) {
+    const reply = await client.call("initialize", { client: "test", version: "0", protocol: asked })
+    expect(reply.result).toEqual({ version: VERSION, protocol: 2, readOnly: false })
+  }
   client.close()
 })
 

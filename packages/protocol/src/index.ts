@@ -5,7 +5,12 @@ import { Schema } from "effect"
 import * as Rpc from "effect/rpc/Rpc"
 import * as RpcGroup from "effect/rpc/RpcGroup"
 
-export const PROTOCOL_VERSION = 1
+/**
+ * The protocol `initialize` answers to every client. 2 is attn's `attn-app-server-v2`, whose base methods
+ * (`initialize`, `status/watch`, `conversation/list`, `conversation/submit`, `conversation/interrupt`,
+ * `models/list`) Sigma serves in the shapes it declares here; a client that asked for 1 compares the answer itself.
+ */
+export const PROTOCOL_VERSION = 2
 
 export const ConversationId = Schema.String.annotate({
   description: "A conversation's id: the one its client chose at conversation/start, or else the number it gave.",

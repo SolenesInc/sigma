@@ -9,7 +9,8 @@ leaves: the server logs no error for it.
 ## Sub-features
 
 - `wire-schema` prints the protocol's JSON Schema and version.
-- `wire-initialize` answers a client with the server's version and protocol.
+- `wire-initialize` answers a client with the server's version and protocol 2,
+  attn's `attn-app-server-v2`, whichever protocol the client asked for.
 - `wire-malformed` answers a call with missing fields with an error that names
   the field.
 - `wire-dropped` ends a watch that leaves 4096 changes unread with a
@@ -52,9 +53,9 @@ Preconditions:
   `--- stdout` and `--- stderr`, is the same text as
   `schema/sigma.schema.json`.
 - **Initialize.** Run `drive.ts r serve`, then
-  `drive.ts r rpc initialize '{"client": "verify", "version": "1", "protocol": 1}'`:
-  a result with the server's `version` and the `protocol` that `sigma schema`
-  printed, `1`.
+  `drive.ts r rpc initialize '{"client": "verify", "version": "1", "protocol": 1}'`,
+  then the same with `"protocol": 2`: each a result with the server's
+  `version` and the `protocol` that `sigma schema` printed, `2`.
 - **Malformed.** Run `drive.ts r rpc initialize '{"client": "verify"}'`: exit
   1, and an `error` whose message names `version`.
 - **Errors.** With the server up, run
@@ -88,7 +89,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - wire-dropped: a client that stops reading is dropped while the others keep up
 - wire-hangup: a client that hangs up while the server still writes to it is not logged as an error
 - wire-unknown: watching a conversation that does not exist says so
-- wire-initialize: a client is answered with the server's version and the protocol
+- wire-initialize: a client is answered with the server's version and protocol 2, whether it asks for 2 or, as the released attn does, for 1
 - wire-malformed: a call missing a field is answered with an error that names it, and the connection goes on
 - wire-errors: every error a call answers says what went wrong in its message, a fault included, and keeps the cause in its data
 
