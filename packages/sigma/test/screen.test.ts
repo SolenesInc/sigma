@@ -102,6 +102,20 @@ test("answer-tui, answer-author: a person types a prompt, presses enter and read
   await quit(session)
 })
 
+test("answer-typeahead: what a person types before the TUI has drawn shows in the prompt, and an enter typed with it sends it", async () => {
+  const early = await open()
+  // Typed at launch, before sigma has connected to its server or drawn anything, as a shell keeps it.
+  early.type("kept early")
+  await early.waitFor((screen) => screen.includes("READY") && /❯ kept early/.test(screen))
+  await quit(early)
+
+  const sent = await open([{ text: "hello ada" }])
+  sent.type("sent early\r")
+  const screen = await sent.waitFor((screen) => screen.includes("hello ada") && screen.includes("READY"))
+  expect(screen).toContain("sent early")
+  await quit(sent)
+})
+
 test("target-cli: sigma --target --cwd starts a conversation on the target, the TUI shows the target, and reopening shows it again", async () => {
   using targets = new TestTargets()
   const work = targets.add("box", "box-1")

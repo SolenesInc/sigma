@@ -11,6 +11,9 @@ printing the answer and exiting 0, or 1 when the run fails.
 - `answer-failed` a model failure is recorded after what was said, and the conversation goes idle.
 - `answer-tui` sends a prompt from the TUI and shows it under `ADA` and the
   answer under `SIGMA`.
+- `answer-typeahead` keeps what a person types before the TUI is up, as a
+  shell does: it shows in the `PROMPT` once the TUI draws, and an Enter typed
+  with it sends it.
 - `answer-newline` adds a line to the prompt with `⇧⏎` or `⌥⏎` and sends all
   lines as one message with `⏎`.
 - `answer-exec` prints the answer on stdout and exits 0. An exec too slow
@@ -118,6 +121,7 @@ Screen, `packages/sigma/test/screen.test.ts`:
 - answer-tui, answer-author: a person types a prompt, presses enter and reads the answer under their name
 - answer-author: without USER the TUI names a person's message after the system's user name
 - answer-newline: alt+enter adds a line to the prompt, and enter sends every line as one message
+- answer-typeahead: what a person types before the TUI has drawn shows in the prompt, and an enter typed with it sends it
 - tui-hangup, idle-closed: closing the terminal ends sigma instead of leaving it running unseen
 - answer-scroll, tui-load-earlier: a conversation longer than the window scrolls back to its first message, loading earlier entries on the way, and a reconnect leaves no gap
 

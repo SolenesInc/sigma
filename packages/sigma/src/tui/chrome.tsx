@@ -1,6 +1,13 @@
 // What every TUI draws around a transcript, whichever wire it speaks: the header, the splash, the prompt, the status
 // bar, the model picker and sign-in, and the renderer they draw on.
-import { createCliRenderer, type CliRenderer, type KeyBinding, type TextareaRenderable } from "@opentui/core"
+import {
+  CliRenderer,
+  type KeyBinding,
+  type KeyEvent,
+  type KeyHandler,
+  type PasteEvent,
+  type TextareaRenderable,
+} from "@opentui/core"
 import { render, useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { authEnded } from "@sigma/protocol"
 import type {
@@ -803,16 +810,50 @@ export const setupOf = (client: SetupClient, scope: Scope.Scope, renderer: () =>
     return setup
   })
 
-const openRenderer = Effect.acquireRelease(
-  Effect.promise(() =>
-    createCliRenderer({ exitOnCtrlC: false, targetFps: 30, useMouse: true, backgroundColor: color.background }),
-  ),
-  (renderer: CliRenderer) =>
-    Effect.promise(() => {
-      renderer.destroy()
-      return renderer.closed
-    }),
-)
+/**
+ * Keeps the keys and pastes that reach `input` until the returned function hands them on, in the order they came.
+ * The renderer reads the terminal as it sets it up, so what a person typed before the TUI was up would otherwise reach
+ * it before the prompt that takes it exists, and be lost.
+ */
+const holdTyped = (input: KeyHandler) => {
+  const held: Array<{ kind: "keypress"; event: KeyEvent } | { kind: "paste"; event: PasteEvent }> = []
+  const key = (event: KeyEvent) => held.push({ kind: "keypress", event })
+  const paste = (event: PasteEvent) => held.push({ kind: "paste", event })
+  input.on("keypress", key)
+  input.on("paste", paste)
+  return () => {
+    input.off("keypress", key)
+    input.off("paste", paste)
+    for (const typed of held.splice(0)) {
+      if (typed.kind === "keypress") input.emit("keypress", typed.event)
+      else input.emit("paste", typed.event)
+    }
+  }
+}
+
+/** The renderer, set up on the terminal, and what hands on what was typed before `app` was drawn to take it. */
+const openRenderer = Effect.gen(function* () {
+  const renderer = yield* Effect.acquireRelease(
+    Effect.sync(
+      () =>
+        new CliRenderer(process.stdin, process.stdout, process.stdout.columns || 80, process.stdout.rows || 24, {
+          exitOnCtrlC: false,
+          targetFps: 30,
+          useMouse: true,
+          backgroundColor: color.background,
+        }),
+    ),
+    (renderer) =>
+      Effect.promise(() => {
+        renderer.destroy()
+        return renderer.closed
+      }),
+  )
+  // Held from before the setup, which is when the renderer first reads the terminal.
+  const release = holdTyped(renderer.keyInput)
+  yield* Effect.promise(() => renderer.setupTerminal())
+  return { renderer, release }
+})
 
 /**
  * Draws `app` until the person quits (`done` succeeds), the terminal closes, or `done` fails with what to tell them;
@@ -829,9 +870,10 @@ export const showUntilDone = (
   Effect.gen(function* () {
     const outcome = yield* Effect.scoped(
       Effect.gen(function* () {
-        const renderer = yield* openRenderer
+        const { renderer, release } = yield* openRenderer
         opened(renderer)
         yield* Effect.promise(() => render(app, renderer))
+        release()
         const closedByTerminal = Effect.promise(() => renderer.closed)
         return yield* Effect.result(Effect.raceFirst(Deferred.await(done), closedByTerminal))
       }),
