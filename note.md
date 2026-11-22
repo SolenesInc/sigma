@@ -1,0 +1,1 @@
+`providers/list` now says of each provider whether it answers an ephemeral run (`ephemeral`), so a client such as attn offers background calls only on providers that can answer them; `agy` says false.
