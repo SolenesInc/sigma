@@ -1,7 +1,8 @@
 // A home's providers: a real server in process, driven as a raw JSON-RPC client
 // over its socket, with ChatGPT and Claude Code played by their fakes.
 import { expect, setDefaultTimeout, test } from "bun:test"
-import type { AuthState, ProviderModels, ProviderSnapshot } from "@sigma/protocol"
+import { ProviderSnapshot, type AuthState, type ProviderModels } from "@sigma/protocol"
+import { Schema } from "effect"
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
@@ -95,6 +96,16 @@ test("provider-config, signin-status, model-list, ephemeral-listed: two instance
     thinkingLevel: "high",
   })
   client.close()
+})
+
+test("ephemeral-listed: a client reads the providers of a server from before ephemeral was listed", () => {
+  const older = {
+    id: "openai",
+    driver: "openai",
+    signIn: ["browser"],
+    health: { status: "signed_out", checkedAt: 0 },
+  } as const
+  expect(Schema.decodeUnknownSync(ProviderSnapshot)(older)).toEqual(older)
 })
 
 test("model-default: a new conversation takes the project's default model, else the home's, else the one chosen last, across a restart", async () => {

@@ -681,7 +681,12 @@ export const ProviderSnapshot = Schema.Struct({
   driver: Schema.String.annotate({ description: "Its kind: claude, openai, agy or script." }),
   signIn: Schema.Array(AuthMethod).annotate({ description: "The ways to sign in, the first one preferred." }),
   health: ProviderHealth,
-  ephemeral: Schema.Boolean.annotate({ description: "Whether it answers an ephemeral run (`ephemeral/run`)." }),
+  ephemeral: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "Whether it answers an ephemeral run (`ephemeral/run`). A server from before it was listed leaves it out.",
+    }),
+  ),
 })
 export type ProviderSnapshot = typeof ProviderSnapshot.Type
 

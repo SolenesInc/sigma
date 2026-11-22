@@ -14,7 +14,7 @@ own. ChatGPT, Claude Code and the scripted model answer one; `agy` does not.
 - `ephemeral-schema` with a JSON Schema, answers a value that matches it, or fails saying where it does not
 - `ephemeral-turn-limit` a turn limit ends a Claude Code run that reaches it, saying so
 - `ephemeral-concurrent` runs at once each answer their own prompt, beside a conversation's working run
-- `ephemeral-listed` `providers/list` says of each provider whether it answers one, in `ephemeral`: false for `agy`
+- `ephemeral-listed` `providers/list` says of each provider whether it answers one, in `ephemeral`: false for `agy`. A client still reads a server from before `ephemeral`, which leaves it out
 - `ephemeral-refused` is refused saying why on `agy`, which cannot run one, on an unknown provider, and on a read-only server
 - `ephemeral-stop` a server asked to stop, or replaced by `serve --restart`, answers the runs in flight first
 - `ephemeral-cli` `sigma ephemeral` starts a server when none runs, prints the answer or `--json`, reads `-` from stdin, and exits 1 saying why it failed
@@ -112,6 +112,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 Provider, `packages/sigma/test/providers.test.ts`:
 
 - provider-config, signin-status, model-list, ephemeral-listed: two instances of one provider each list, report their health and their models
+- ephemeral-listed: a client reads the providers of a server from before ephemeral was listed
 
 Wire, `packages/sigma/test/wire.test.ts`:
 

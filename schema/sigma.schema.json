@@ -2687,15 +2687,14 @@
             },
             "ephemeral": {
               "type": "boolean",
-              "description": "Whether it answers an ephemeral run (`ephemeral/run`)."
+              "description": "Whether it answers an ephemeral run (`ephemeral/run`). A server from before it was listed leaves it out."
             }
           },
           "required": [
             "id",
             "driver",
             "signIn",
-            "health",
-            "ephemeral"
+            "health"
           ],
           "additionalProperties": true
         }
@@ -3111,15 +3110,14 @@
           },
           "ephemeral": {
             "type": "boolean",
-            "description": "Whether it answers an ephemeral run (`ephemeral/run`)."
+            "description": "Whether it answers an ephemeral run (`ephemeral/run`). A server from before it was listed leaves it out."
           }
         },
         "required": [
           "id",
           "driver",
           "signIn",
-          "health",
-          "ephemeral"
+          "health"
         ],
         "additionalProperties": true
       },
