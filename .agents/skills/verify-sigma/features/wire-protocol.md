@@ -109,8 +109,8 @@ Stack, `packages/sigma/test/stack.test.ts`:
   without the fix. The `wire-hangup` tests make the server write after the
   client is gone, and are the proof that tells the two apart.
 - `initialize` does not refuse a client that sends another protocol number; a
-  client has to compare the answer itself. Sigma's own TUI and `exec` do not
-  call `initialize`.
+  client has to compare the answer itself. Sigma's TUI calls it only to read
+  `readOnly`, and `sigma exec` does not call it.
 - A client handles `FellBehind` by watching again with `window.from` set to
   the entry after the last it holds. The socket does not close, so waiting
   for it to close never notices.
