@@ -1,0 +1,7 @@
+{
+  "kind": "finding",
+  "state": "fail",
+  "title": "P1: Provider snapshots require the planned optional field",
+  "at": "2026-11-22T10:37:24.172Z",
+  "detail": "ProviderSnapshot requires ephemeral at packages/protocol/src/index.ts:684. providers/list at line 754 and auth/logout at line 780 share that schema. The new CLI reuses a listening server (packages/sigma/src/client.ts:111), so a response from an older server fails provider discovery before login or fails decoding after logout (packages/sigma/src/login.ts:77 and :160). The review reproduced both with a scratch server. The implementation brief requires the capability field to be optional. Accept snapshots without the field and continue emitting an explicit boolean from current servers.\n"
+}
