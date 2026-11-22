@@ -29,7 +29,7 @@ const agentOf = async (client: RawClient, conversation: string) => {
 const listed = async (client: RawClient) =>
   (await client.call("providers/list", {})).result as ReadonlyArray<ProviderSnapshot>
 
-test("provider-config, signin-status, model-list: two instances of one provider each list, report their health and their models", async () => {
+test("provider-config, signin-status, model-list, ephemeral-listed: two instances of one provider each list, report their health and their models", async () => {
   using claude = new FakeClaude("models")
   // Its own fake, through the instance's env: each Claude provider probes its own Claude Code.
   using alt = new FakeClaude("models")
@@ -46,13 +46,21 @@ test("provider-config, signin-status, model-list: two instances of one provider 
   const client = await RawClient.connect(server.home.socket)
 
   const providers = await listed(client)
-  expect(providers.map(({ id, driver, signIn, health }) => ({ id, driver, signIn, status: health.status }))).toEqual([
-    { id: "script", driver: "script", signIn: [], status: "ready" },
-    { id: "claude", driver: "claude", signIn: ["terminal"], status: "ready" },
-    { id: "openai", driver: "openai", signIn: ["browser", "device_code"], status: "ready" },
-    { id: "agy", driver: "agy", signIn: [], status: "ready" },
-    { id: "openai-work", driver: "openai", signIn: ["browser", "device_code"], status: "signed_out" },
-    { id: "claude-alt", driver: "claude", signIn: ["terminal"], status: "ready" },
+  expect(
+    providers.map(({ id, driver, signIn, health, ephemeral }) => ({
+      id,
+      driver,
+      signIn,
+      status: health.status,
+      ephemeral,
+    })),
+  ).toEqual([
+    { id: "script", driver: "script", signIn: [], status: "ready", ephemeral: true },
+    { id: "claude", driver: "claude", signIn: ["terminal"], status: "ready", ephemeral: true },
+    { id: "openai", driver: "openai", signIn: ["browser", "device_code"], status: "ready", ephemeral: true },
+    { id: "agy", driver: "agy", signIn: [], status: "ready", ephemeral: false },
+    { id: "openai-work", driver: "openai", signIn: ["browser", "device_code"], status: "signed_out", ephemeral: true },
+    { id: "claude-alt", driver: "claude", signIn: ["terminal"], status: "ready", ephemeral: true },
   ])
   const health = (id: string) => providers.find((provider) => provider.id === id)!.health
   expect(health("openai").account).toBe(`${EMAIL} · ChatGPT Plus`)

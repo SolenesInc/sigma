@@ -42,7 +42,8 @@ home                    one directory of state, SIGMA_HOME; like a tenant
 │                       packages/protocol/src/index.ts; `hosted.job`,
 │                       packages/hosted/src/job.ts)
 └─ provider (1..n)      a named configuration in the home that reaches models,
-   │                    with its own sign-in and health (`ProviderSnapshot`,
+   │                    with its own sign-in and health, and whether it
+   │                    answers an ephemeral run (`ProviderSnapshot`,
    │                    packages/protocol/src/index.ts)
    └─ driver (1)        the backend kind behind a provider: `claude`, `openai`,
                         `agy`, or `script` (`ProviderSnapshot.driver`,

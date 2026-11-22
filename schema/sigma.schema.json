@@ -2684,13 +2684,18 @@
                 "checkedAt"
               ],
               "additionalProperties": true
+            },
+            "ephemeral": {
+              "type": "boolean",
+              "description": "Whether it answers an ephemeral run (`ephemeral/run`)."
             }
           },
           "required": [
             "id",
             "driver",
             "signIn",
-            "health"
+            "health",
+            "ephemeral"
           ],
           "additionalProperties": true
         }
@@ -3103,13 +3108,18 @@
               "checkedAt"
             ],
             "additionalProperties": true
+          },
+          "ephemeral": {
+            "type": "boolean",
+            "description": "Whether it answers an ephemeral run (`ephemeral/run`)."
           }
         },
         "required": [
           "id",
           "driver",
           "signIn",
-          "health"
+          "health",
+          "ephemeral"
         ],
         "additionalProperties": true
       },

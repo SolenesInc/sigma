@@ -8,7 +8,7 @@ import {
   type ProviderModels,
   type ProviderSnapshot,
 } from "@sigma/protocol"
-import { defaultModelOf, type ProviderAccount } from "@sigma/models"
+import { defaultModelOf, type ProviderAccount, type ProviderInstance } from "@sigma/models"
 import { Context, Effect, Fiber, Queue, Semaphore, Stream } from "effect"
 
 /** Where every connection sees sign-ins: the last state of each provider's, then every change. */
@@ -43,7 +43,7 @@ export class Setup extends Context.Service<
    * Sign-ins, health and model lists over a home's providers, by id, with sign-in states recorded in `log`; sign-ins
    * end with the scope.
    */
-  static readonly make = (drivers: ReadonlyMap<string, ProviderAccount>, log: SignInLog) =>
+  static readonly make = (drivers: ReadonlyMap<string, ProviderInstance>, log: SignInLog) =>
     Effect.gen(function* () {
       const scope = yield* Effect.scope
       const flows = new Map<string, Flow>()
@@ -59,7 +59,7 @@ export class Setup extends Context.Service<
           return driver ? Effect.succeed(driver) : Effect.fail(new UnknownProvider({ provider }))
         })
 
-      const snapshot = (id: string, driver: ProviderAccount, refresh: boolean) =>
+      const snapshot = (id: string, driver: ProviderInstance, refresh: boolean) =>
         Effect.map(
           driver.health(refresh),
           (health): ProviderSnapshot => ({
@@ -67,6 +67,7 @@ export class Setup extends Context.Service<
             driver: driver.kind,
             signIn: driver.signInMethods,
             health: { ...health, checkedAt: Date.now() },
+            ephemeral: driver.once !== undefined,
           }),
         )
 

@@ -183,7 +183,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 
 Provider, `packages/sigma/test/providers.test.ts`:
 
-- provider-config, signin-status, model-list: two instances of one provider each list, report their health and their models
+- provider-config, signin-status, model-list, ephemeral-listed: two instances of one provider each list, report their health and their models
 - provider-unknown, model-flags: a conversation starts on the model and effort it names, and sigma refuses a provider or effort it does not have
 - provider-binary: a Claude provider whose binary is missing is unavailable, saying where it looked
 

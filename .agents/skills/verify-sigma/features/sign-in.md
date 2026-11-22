@@ -233,7 +233,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 
 Provider, `packages/sigma/test/providers.test.ts`:
 
-- provider-config, signin-status, model-list: two instances of one provider each list, report their health and their models
+- provider-config, signin-status, model-list, ephemeral-listed: two instances of one provider each list, report their health and their models
 - signin-device-code, signout: one instance signs in and out on its own, and every connection sees it
 - signin-shared: a sign-in the server stopped during is failed for every connection of the next server
 - signin-browser, openai-sign-in: signing in through a browser saves the tokens for this user only and names the account

@@ -681,6 +681,7 @@ export const ProviderSnapshot = Schema.Struct({
   driver: Schema.String.annotate({ description: "Its kind: claude, openai, agy or script." }),
   signIn: Schema.Array(AuthMethod).annotate({ description: "The ways to sign in, the first one preferred." }),
   health: ProviderHealth,
+  ephemeral: Schema.Boolean.annotate({ description: "Whether it answers an ephemeral run (`ephemeral/run`)." }),
 })
 export type ProviderSnapshot = typeof ProviderSnapshot.Type
 

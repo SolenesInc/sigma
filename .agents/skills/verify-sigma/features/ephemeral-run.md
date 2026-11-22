@@ -14,6 +14,7 @@ own. ChatGPT, Claude Code and the scripted model answer one; `agy` does not.
 - `ephemeral-schema` with a JSON Schema, answers a value that matches it, or fails saying where it does not
 - `ephemeral-turn-limit` a turn limit ends a Claude Code run that reaches it, saying so
 - `ephemeral-concurrent` runs at once each answer their own prompt, beside a conversation's working run
+- `ephemeral-listed` `providers/list` says of each provider whether it answers one, in `ephemeral`: false for `agy`
 - `ephemeral-refused` is refused saying why on `agy`, which cannot run one, on an unknown provider, and on a read-only server
 - `ephemeral-stop` a server asked to stop, or replaced by `serve --restart`, answers the runs in flight first
 - `ephemeral-cli` `sigma ephemeral` starts a server when none runs, prints the answer or `--json`, reads `-` from stdin, and exits 1 saying why it failed
@@ -29,6 +30,8 @@ own. ChatGPT, Claude Code and the scripted model answer one; `agy` does not.
 - Call `ephemeral/run` with `{"prompt", "system"?, "schema"?, "provider"?, "model"?, "effort"?, "maxTurns"?}`;
   it answers `{"text", "output"?, "provider", "model", "turns", "usage"}` or fails
   `EphemeralFailed`, `UnknownProvider`, `UnknownEffort` or `ReadOnlyServer`.
+- Call `providers/list`: each provider's `ephemeral` says whether it answers
+  one, so a caller offers only those.
 - Run `sigma ephemeral` as a subprocess, as attn's one-shot model calls do:
   the prompt on stdin with `-`, `--json` on stdout, the reason on stderr with
   exit 1.
@@ -56,6 +59,8 @@ Preconditions:
   exits 1 and stderr says what ChatGPT answered.
   `drive.ts r rpc ephemeral/run '{"prompt": "hi", "provider": "agy"}'` fails
   `EphemeralFailed`, `agy cannot answer an ephemeral run`.
+- **Who answers one.** `drive.ts r rpc providers/list`: `"ephemeral": true`
+  on `script`, `claude` and `openai`, `"ephemeral": false` on `agy`.
 
 Claude Code, each journey in a run of its own with a fake Claude Code
 replaying its recording, then `down`:
@@ -103,6 +108,10 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - ephemeral-schema: an ephemeral run on Claude Code hands it the schema and answers the value Claude Code gave for it
 - ephemeral-turn-limit: an ephemeral run that reaches its turn limit on Claude Code fails saying so
 - ephemeral-concurrent: ephemeral runs on Claude Code at once each answer their own prompt, while a conversation's run works beside them
+
+Provider, `packages/sigma/test/providers.test.ts`:
+
+- provider-config, signin-status, model-list, ephemeral-listed: two instances of one provider each list, report their health and their models
 
 Wire, `packages/sigma/test/wire.test.ts`:
 

@@ -171,7 +171,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 
 Provider, `packages/sigma/test/providers.test.ts`:
 
-- provider-config, signin-status, model-list: two instances of one provider each list, report their health and their models
+- provider-config, signin-status, model-list, ephemeral-listed: two instances of one provider each list, report their health and their models
 - model-default: a new conversation takes the project's default model, else the home's, else the one chosen last, across a restart
 - provider-unknown, model-flags: a conversation starts on the model and effort it names, and sigma refuses a provider or effort it does not have
 
