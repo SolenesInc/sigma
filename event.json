@@ -1,0 +1,8 @@
+{
+  "kind": "finding",
+  "state": "fail",
+  "title": "P1: Multiline paste can submit a prompt before the TUI is ready",
+  "at": "2026-11-22T11:38:22.630Z",
+  "url": "https://github.com/SolenesInc/sigma/issues/156",
+  "detail": "A two-line paste before bracketed paste is enabled can commit the first line as a prompt and start a run. The startup buffer captures and replays unframed carriage returns as keypresses in packages/sigma/src/tui/chrome.tsx:827 and :875. Return and linefeed submit at :51-55 and :395-412. Preserve paste framing across startup so multiline paste stays in the composer and an explicit Enter still submits.\n"
+}
