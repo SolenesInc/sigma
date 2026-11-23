@@ -215,14 +215,12 @@ interface Index {
 }
 
 /**
- * A subagent's conversation, and the title and type a hosted one (Claude's) was given, which its call does not carry.
- * `task` is the name agents address one of Sigma's own subagents by; a subagent Claude Code runs has none.
+ * A child's conversation, and the title and type a hosted subagent (Claude's) was given, which its call does not carry.
  */
 type Subagent = {
   readonly conversation: string
   readonly title?: string | undefined
   readonly agentType?: string | undefined
-  readonly task?: string | undefined
 }
 
 const indexOf = (items: ReadonlyArray<TranscriptItem>): Index => {
@@ -470,19 +468,10 @@ const jobsOf = (followed: Followed) => {
 }
 
 /**
- * The work going on under the tree beside its runs, which `Esc` on an idle conversation stops: Sigma's own subagents
- * that work, and the jobs Claude Code runs in the background. A subagent Claude Code runs counts as its job.
+ * The hosted background work running on the root conversation beside its runs, which `Esc` on an idle conversation
+ * stops: the jobs Claude Code runs in the background (including its hosted subagents). Workers are not counted here.
  */
-const backgroundOf = (tree: Tree) => {
-  const own = new Set(
-    Object.values(tree.started).flatMap((started) => (started.task === undefined ? [] : [started.conversation])),
-  )
-  const subagents = Object.values(tree.children).filter(
-    (child) => own.has(child.id) && child.loaded() && statusOf(child.docs()) !== "idle",
-  ).length
-  const jobs = [tree.root, ...Object.values(tree.children)].flatMap(jobsOf).filter((job) => job.state === "working")
-  return subagents + jobs.length
-}
+const backgroundOf = (tree: Tree) => jobsOf(tree.root).filter((job) => job.state === "working").length
 
 /** What a job's card says of it. */
 const JOB_STATES: Readonly<Record<JobRecord["state"], { label: string; tone: string }>> = {
@@ -1165,7 +1154,6 @@ const conversationScreen = Effect.fnUntraced(function* (
                 conversation: each.id,
                 title: lineage.title,
                 agentType: lineage.agentType,
-                task: lineage.task,
               },
             }))
           adopt(each.id, lineage.parent)

@@ -1,20 +1,23 @@
 # Status and chosen ids
 
-A client can follow every conversation people started without reading its
-transcript: `status/watch` lists the trees that are busy, then reports each
-commit that changes a tree's status or ends its root's run, with how that run
-ended and what the model said last. A client that was not watching when a run
-ended reads the same from the conversation's `ended`. A client can also choose
-a new conversation's id, and starting with an id that exists answers with that
-conversation. attn uses these to run Sigma sessions.
+A client can follow every conversation people started and every worker without
+reading its transcript: `status/watch` lists the trees that are busy (one tree
+per conversation people started, and one per worker, each together with its
+hosted subagents), then reports each commit that changes a tree's status or
+ends its root's run, with how that run ended and what the model said last. A
+client that was not watching when a run ended reads the same from the
+conversation's `ended`. A client can also choose a new conversation's id, and
+starting with an id that exists answers with that conversation. attn uses these
+to run Sigma sessions.
 
 ## Sub-features
 
 - `status-snapshot` opens with every tree that is not idle; the rest are idle.
 - `status-follow` reports `working`, `waiting` and `idle` for each tree, in
-  `seq` order.
-- `status-subagent` shows a subagent waiting on a person as its whole tree
-  `waiting`.
+  `seq` order. Each worker is the root of a tree of its own, so a worker's
+  status and run end report on the worker's tree, not its parent's.
+- `status-subagent` shows a hosted subagent waiting on a person as its parent's
+  tree `waiting`.
 - `status-ended` carries the outcome of the root's run and its last message.
 - `conversation-ended` shows how a conversation's last run ended, as `ended`
   on it in `conversation/list`, also after a restart; a conversation that
@@ -55,12 +58,12 @@ Preconditions:
   `conversation/list` shows it once, with `cwd` `/tmp`. After
   `drive.ts r kill-server` and `drive.ts r serve` the same call answers the
   same conversation. An all-digit id such as `"42"` is refused by name.
-- **Follow.** In one shell run
-  `drive.ts r watch-status 11111111-1111-4111-8111-111111111111 --until waiting --save status`.
+- **Follow.** In one shell run `drive.ts r watch-status --save status`.
   In another, run
   `drive.ts r rpc conversation/submit '{"conversation": "11111111-1111-4111-8111-111111111111", "requestId": "s1", "author": {"id": "ada", "name": "ada"}, "text": "write a note"}'`.
   The watch opens with the trees that are busy, none here, then prints the
-  tree `working`, then `waiting` once the subagent asks.
+  parent's tree `working`, and the worker's own tree `working`, then `waiting`
+  once the worker asks.
 - **Shown.** With the server up, run
   `drive.ts r watch-status --save shown` in one shell. In another, run
   `SIGMA_AUTHOR_ID=attn-terminal:t-1 drive.ts r tui start --conversation 11111111-1111-4111-8111-111111111111`,
@@ -70,22 +73,26 @@ Preconditions:
   screen opens. A new `drive.ts r watch-status` lists the fork under `shown`
   in its first line.
 - **Snapshot.** While it waits, run `drive.ts r watch-status`: its first line
-  lists the tree as `waiting`. It returns after a second with no change.
+  lists the parent's tree as `working` and the worker's tree as `waiting`. It
+  returns after a second with no change.
 - **Ended.** Run
   `drive.ts r rpc conversation/interrupt '{"author": {"id": "ada", "name": "ada"}, "conversation": "11111111-1111-4111-8111-111111111111"}'`
   while `drive.ts r watch-status 11111111-1111-4111-8111-111111111111 --until idle`
-  runs. Interrupting stops the subagent too, and the last line is `idle`
-  with `"ended":{"outcome":"interrupted","message":"aborted"}`. Between
-  `waiting` and `idle` the tree may report `working` once: the subagent's
-  call settles and its approval request goes in one commit, while both runs
-  still have to commit their ends.
+  runs. Interrupting stops only the parent (the worker stays `waiting` on its
+  own tree), and the parent's last line is `idle` with
+  `"ended":{"outcome":"interrupted","message":"aborted"}`. Interrupting the
+  worker's own conversation ends the worker's tree `idle` with the same `ended`.
 - **Ended, read later.** Then run `drive.ts r rpc conversation/list`: the
   conversation carries `"ended":{"outcome":"interrupted","message":"aborted"}`,
   with `said` when the model wrote a message.
 
 ## Contexts
 
-- **Subagents.** A subagent waiting on a person shows its whole tree as waiting.
+- **Hosted subagents.** A hosted subagent waiting on a person shows its parent's
+  tree as waiting.
+- **Workers.** A worker starts a tree of its own: its status and run ends report
+  under its own id, while its parent's tree reports only the parent's own run
+  and hosted subagents.
 
 ## Tests
 
@@ -95,9 +102,13 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - start-with-id: a chosen id that names an object property, such as toString, opens its own conversation
 - approval-restart, status-snapshot: a call waiting for approval across a restart asks again after it, and runs once allowed
 - status-follow, status-ended: watching status follows each run of a tree and says how it ended
-- status-subagent, status-snapshot: a subagent waiting on a person shows as its whole tree waiting, to watchers then and later
+- status-follow, status-snapshot, status-ended: a worker waiting on a person reports its own tree waiting while its parent reports only its own run, and the worker's own tree survives a server restart
 - conversation-ended: conversation/list tells a client that was not watching how a conversation's last run ended, also after a restart
 - status-shown: what a client says it shows reaches every status watcher under its author, by the id other calls use, and later watchers find it in the snapshot
+
+Provider, `packages/sigma/test/claude.test.ts`:
+
+- status-subagent, status-snapshot, subagent-claude: a hosted Claude subagent waiting on a person shows its parent's tree waiting, to watchers then and later
 
 Screen, `packages/sigma/test/screen.test.ts`:
 

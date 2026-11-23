@@ -5,7 +5,7 @@ reaches them over sigma's MCP server as `mcp__sigma__<tool>`, and Gemini
 through `agy`, which reaches them as `mcp_sigma_<tool>` over sigma's bridge,
 can start workers with the worker tools: `start_worker`, `wait_worker`, `message_worker`,
 `assign_worker`, `list_workers` and `stop_worker`. A worker is a conversation
-of its own, under its parent in a tree, on any ready provider of the home:
+of its own, starting a tree of its own, on any ready provider of the home:
 its parent's, by default, or the `provider` and `model` its `start_worker`
 names, which pass unchanged. It shares its parent's directory and target, is
 addressed by a task name such as `/root/scribe`, takes input from people,
@@ -15,7 +15,8 @@ works, waits on a person or ended; a call the worker asks about shows on its
 card and `^Y` or `^N` answers it from the parent. A worker's last message of
 each run reaches its parent: through `wait_worker` when the parent waits,
 otherwise as mail; a worker whose job outlives its run mails what it says
-when the job wakes it. `Esc` stops the run and every worker's under it. Claude
+when the job wakes it. Interrupting a parent leaves its workers running;
+`stop_worker` or interrupting the worker's own conversation stops it. Claude
 Code's own subagents are not workers: Claude Code runs them, and sigma
 commits each into a conversation of its own the same way (`subagent-claude`).
 A local Claude Code keeps its Agent tool beside the worker tools; on a
@@ -96,9 +97,10 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
   (`{"workers": [{"name", "status"}]}`, each `running`, `interrupted`,
   `completed` or `errored`), and stops one worker from its parent with
   `stop_worker`, answering its `previous_status`.
-- `worker-root-env` runs a worker's commands, on any provider, with
-  `SIGMA_ROOT_CONVERSATION` set to the id of the conversation people started,
-  as its client chose it.
+- `worker-root-env` runs a worker's commands and MCP calls, on any provider
+  (and in its hosted subagents), with `SIGMA_ROOT_CONVERSATION` and
+  `Sigma-Root-Conversation` set to the worker's own conversation id, because
+  a worker starts a tree of its own (`lineage.root` equals its own id).
 - `worker-answer` hands a worker's last message to its parent: a waiting
   `wait_worker` returns it as
   `{"timed_out": false, "received": [{"from": "/root/<name>", "kind": "final_answer", "text": ...}]}`
@@ -118,16 +120,16 @@ prompt cache is in [Prompt cache](./prompt-cache.md).
 - `worker-assign` wakes an idle worker with `assign_worker`, and each of
   its answers reaches the parent.
 - `worker-interrupt` stops the parent's run with `Esc` or
-  `conversation/interrupt`, and leaves its workers working; a second `Esc`,
-  on the idle parent, stops every run under it, and the card shows
-  `interrupted` (`interrupt-idle` in [Interrupt](./interrupt.md)), a worker on
-  another provider included, whose waiting approval clears. Stopping
-  just a worker, from its own conversation, stops its run, not its parent.
-  The workers Claude Code starts in the background differ: Claude Code
+  `conversation/interrupt` and leaves its workers running; interrupting an
+  idle parent leaves its workers running too, because interrupts stop at
+  worker boundaries (`interrupt-idle` in [Interrupt](./interrupt.md)).
+  `stop_worker` or `conversation/interrupt` on the worker's own conversation
+  stops the worker and clears its waiting approval, leaving its parent alone.
+  The subagents Claude Code starts in the background differ: Claude Code
   stops them with its parent's run.
 - `worker-exec` makes `sigma exec` without `--auto` deny the calls its
   workers would ask about, as it does its own; `exec` follows every
-  conversation of its tree.
+  conversation under its own (workers and subagents).
 - `worker-limits` takes `[agents] max_threads` (default 6) from
   `SIGMA_HOME/config.toml`: a tree runs at most `max_threads` workers at
   once, and a start past it fails naming `max_threads`. A worker keeps
@@ -354,7 +356,7 @@ Preconditions:
   `drive.ts r watch <helper id>` shows a `sigma.approval` by `ada` and the
   `pi.tool-result` `deep`.
 
-- **Root conversation in a subagent.** With the script
+- **Root conversation in a worker.** With the script
 
   ```json
   [
@@ -367,15 +369,15 @@ Preconditions:
   ```
 
   run `drive.ts r sigma exec --auto delegate`: stdout `envy answered`. Take the
-  ids from `drive.ts r rpc conversation/list`: the subagent's `lineage` names
-  the parent as `root`. `drive.ts r watch <subagent id> --save root-env`
-  holds a `pi.tool-result` `root=<the parent's id>`.
+  ids from `drive.ts r rpc conversation/list`: the worker's `lineage` names the
+  worker itself as `root` (and the parent as `parent`). `drive.ts r watch <worker id> --save root-env`
+  holds a `pi.tool-result` `root=<worker id>`.
 
-- **Exec denies a subagent's call.** With the `Spawn, approve, answer` script, in a fresh run,
+- **Exec denies a worker's call.** With the `Spawn, approve, answer` script, in a fresh run,
   `drive.ts r sigma exec delegate`: exit 0, stdout `the scribe is done`,
   stderr `› start_worker(scribe)`, `› wait_worker` and
   `denied bash(echo scribbled): exec cannot ask, pass --auto to allow calls`:
-  `exec` follows every conversation of its tree. `drive.ts r watch <subagent id>`
+  `exec` follows every conversation under its own (workers and subagents). `drive.ts r watch <worker id>`
   shows the denied call's `pi.tool-result`, then `wrote it`. In another fresh run, `drive.ts r sigma exec --auto delegate`
   prints no denial.
 
@@ -390,8 +392,9 @@ Preconditions:
   ```
 
   `drive.ts r tui start`, wait for `READY`, type `count`, `Enter`, wait for
-  `slowpoke`, press `Escape` and wait for `READY`: the card reads
-  `⧉ slowpoke interrupted`, then `◆ interrupted`.
+  `slowpoke`, press `Escape` and wait for `READY`: the parent shows
+  `◆ interrupted` while `slowpoke` finishes on its own (`⧉ slowpoke done`),
+  because interrupts stop at worker boundaries.
 
 - **Interrupt over the wire.** With the script
 
@@ -407,13 +410,15 @@ Preconditions:
 
   run `drive.ts r serve`, start a conversation with `conversation/start`, and
   `drive.ts r watch <id> --submit 'start a slow one' --save root-start`; take
-  the subagent's id from the `details` of the `start_worker` result.
-  `drive.ts r watch <subagent id>` shows its `bash` call in
+  the worker's id from the `details` of the `start_worker` result.
+  `drive.ts r watch <worker id>` shows its `bash` call in
   `sigma.approvals`. Run
   `drive.ts r rpc conversation/interrupt '{"author": {"id": "ada", "name": "ada"}, "conversation": "<id>"}'` (result
-  `{"withdrawn": []}`) on the root only. `drive.ts r watch <id>` and
-  `drive.ts r watch <subagent id>` each end with a `sigma.run_end`
-  `interrupted`, no `pi.live` run, and the subagent's approval requests are
+  `{"withdrawn": []}`) on the parent: the parent ends with `sigma.run_end`
+  `interrupted`, while the worker stays waiting with its approval open. A second
+  `conversation/interrupt` on the idle parent still leaves the worker waiting.
+  Run `conversation/interrupt` on `<worker id>`: now `<worker id>` ends with
+  `sigma.run_end` `interrupted`, no `pi.live` run, and its approval requests are
   empty; `made` was never created.
 
 - **Follow-up.** With the script
@@ -609,11 +614,11 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - worker-limits, child-tools: a follow-up task does not wake an idle worker while maxThreads workers work
 - child-tools, worker-message, worker-assign: a worker takes messages and follow-up tasks
 - child-tools, worker-list: interrupting a worker stops its turn and reports what it was doing
-- worker-root-env, tool-root-env: a worker's command knows the conversation people started by the id its client chose
+- worker-root-env, tool-root-env, mcp-start: a worker's bash and MCP calls name the worker as root, while its parent's name the parent by the id its client chose
 - worker-limits: a tree runs at most as many workers at once as config.toml allows
 - worker-limits: with max_threads 0 in config.toml the root conversation is not offered start_worker
 - worker-limits, child-tools: under the default config a worker starts a worker of its own, told only its own task
-- worker-interrupt, interrupt-idle: interrupting a conversation's run leaves its workers working, and interrupting it again, idle, stops them, so the tree goes idle
+- worker-interrupt, interrupt-idle: interrupting a conversation, running or idle, leaves its workers running, and interrupting the worker itself stops it
 - worker-start, worker-model: conversation/list shows each worker with its lineage, on its parent's model or the one its start_worker names, and an unlisted model fails the call
 - worker-answer: a worker's answer reaches its idle parent as input that starts a run, so the parent acts on it
 - worker-provider: start_worker refuses a provider the home does not have and one that is not ready, naming the ready ones, and a fork onto another provider
@@ -642,8 +647,9 @@ Provider, `packages/sigma/test/openai.test.ts`:
 
 Provider, `packages/sigma/test/claude.test.ts`:
 
-- worker-provider, worker-model, worker-root-env: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone and whose commands know the conversation people started, and the agent's wait returns the worker's answer
-- worker-interrupt, worker-approve: a Claude Code worker asks its own approval, and stopping its idle parent ends the worker's run and clears the approval
+- worker-provider, worker-model, worker-root-env: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone and whose commands know the worker as root, and the agent's wait returns the worker's answer
+- worker-provider, mcp-claude, worker-root-env: a Claude Code worker and its hosted subagent call a registered MCP server with the worker's id as root
+- worker-interrupt, worker-approve: a Claude Code worker asks its own approval, interrupting its idle parent leaves it waiting, and interrupting the worker itself ends its run and clears the approval
 - worker-claude-parent, worker-answer: a Claude Code parent starts a scripted worker with sigma's worker tools and reads its answer from wait_worker
 - worker-claude-parent, subagent-claude: a Claude subagent that calls sigma's worker tools is refused in its own conversation, so it neither starts workers its tree cannot see nor answers as /root
 - target-remote-hands, worker-claude-parent: a local conversation's Claude Code keeps its own tools, settings and folder, and is offered sigma's worker tools beside them

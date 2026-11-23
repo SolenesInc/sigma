@@ -910,28 +910,17 @@ export const wakeWorker = (harness: Harness, child: ConversationId, reports: Rea
   })
 
 /**
- * What `conversation/interrupt` stops (D7 of s-cjk9k6). A conversation with a run stops that run only: its subagents
- * and the jobs Claude Code started keep working. An idle one stops the work under it: the run of every subagent in its
- * tree, and the jobs Claude Code started in any of them, each told to stop. Each conversation of the tree is aborted on
- * its own, all at once, so the reporters that relay answers carry on as they do when one subagent is stopped, and
- * background work such as compaction is left alone. A subagent its parent started before the parent stopped is found
- * by the next pass.
+ * What `conversation/interrupt` stops: a conversation with a run stops that run only, leaving its hosted background
+ * jobs and its workers working. An idle one stops its own hosted background jobs (Claude Code's background subagents
+ * and commands), and never crosses a worker boundary: workers are independent trees, stopped by `stop_worker` or by
+ * interrupting the worker's own conversation. Background work such as compaction is left alone.
  */
 export const interrupt = (harness: Harness, root: ConversationId) =>
   Effect.gen(function* () {
     const abort = (id: ConversationId) =>
       Effect.flatMap(harness.conversation(id), (conversation) => conversation?.abort() ?? Effect.void)
     if ((yield* harness.session.snapshot(LiveDoc, root))?.run !== undefined) return yield* abort(root)
-    const stopped = new Set<ConversationId>()
-    for (;;) {
-      const fresh = (yield* treeOf(harness, root)).filter((id) => !stopped.has(id))
-      if (fresh.length === 0) return
-      for (const id of fresh) stopped.add(id)
-      yield* Effect.forEach(fresh, (id) => Effect.andThen(abort(id), stopJobs(harness, id)), {
-        concurrency: "unbounded",
-        discard: true,
-      })
-    }
+    yield* Effect.andThen(abort(root), stopJobs(harness, root))
   })
 
 /** Aborts the tasks of the jobs Claude Code started in the conversation that still work. */
@@ -939,17 +928,6 @@ const stopJobs = (harness: Harness, id: ConversationId) =>
   Effect.gen(function* () {
     const jobs = Object.values((yield* harness.session.snapshot(JobsDoc, id))?.jobs ?? {})
     for (const job of jobs) if (job.state === "working") yield* harness.abortTask(idFromNumber<TaskId>(job.taskId))
-  })
-
-/** The conversation and its subagents', each parent before its subagents. */
-const treeOf = (harness: Harness, root: ConversationId) =>
-  Effect.gen(function* () {
-    const tree = [root]
-    for (let at = 0; at < tree.length; at++) {
-      const registry = yield* harness.session.snapshot(AgentsDoc, tree[at]!)
-      for (const child of Object.values(registry?.agents ?? {})) tree.push(idFromNumber(child.conversationId))
-    }
-    return tree
   })
 
 /**

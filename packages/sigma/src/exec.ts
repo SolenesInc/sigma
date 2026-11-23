@@ -214,11 +214,10 @@ export const exec = Effect.fnUntraced(function* (
   const watching = <E, R>(effect: Effect.Effect<void, E, R>) =>
     Effect.forkScoped(Effect.catchCause(Effect.orDie(effect), (cause) => Deferred.failCause(failed, cause)))
 
-  // Subagents ask in their own conversations, so exec follows every conversation under its own, which may itself be a
-  // subagent: it looks again when the status of the tree it is in changes, as when a subagent waits on a person, and
-  // when a followed conversation adds entries, as when it starts one. A subagent's watch ends when exec does.
+  // Workers and subagents ask in their own conversations, so exec follows every conversation under its own, which may
+  // itself be a worker: it looks again when any tree's status changes, as when a worker or subagent waits on a person,
+  // and when a followed conversation adds entries, as when it starts one. Their watches end when exec does.
   const listed = yield* reconnecting(client["conversation/list"]())
-  const root = listed.find((info) => info.id === conversation)?.lineage?.root ?? conversation
   const followed = new Set([conversation])
   const discover: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {
     const conversations = yield* Effect.orDie(reconnecting(client["conversation/list"]()))
@@ -241,7 +240,7 @@ export const exec = Effect.fnUntraced(function* (
   })
   yield* watching(
     rewatched(() => client["status/watch"]()).pipe(
-      Stream.filter((item) => item._tag === "trees" || (item._tag === "tree" && item.conversation === root)),
+      Stream.filter((item) => item._tag !== "shown"),
       Stream.runForEach(() => discover),
     ),
   )

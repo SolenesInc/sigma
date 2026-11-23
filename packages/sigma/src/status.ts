@@ -1,10 +1,10 @@
-// Tree status (`status/watch`): a tree is a conversation people started and the subagents under it. A
-// conversation works while `pi.live` holds a run and waits while `sigma.approvals` holds a request without an answer;
-// a tree waits when any of its conversations waits, works when any works, and is idle otherwise. The tracker follows
-// every commit on the Session line from the documents the publication carries, so each status is the committed one at
-// that commit's seq; what a client reads of it is completed off the line. Beside it the tracker holds what each client
-// says it shows (`client/shows`), which is no commit and lasts only while that client's stream does.
-import { ApprovalsDoc, type Harness, LiveDoc } from "@sigma/harness"
+// Tree status (`status/watch`): a tree is a conversation people started, or a worker, together with the subagents
+// under it. A conversation works while `pi.live` holds a run and waits while `sigma.approvals` holds a request without
+// an answer; a tree waits when any of its conversations waits, works when any works, and is idle otherwise. The tracker
+// follows every commit on the Session line from the documents the publication carries, so each status is the committed
+// one at that commit's seq; what a client reads of it is completed off the line. Beside it the tracker holds what each
+// client says it shows (`client/shows`), which is no commit and lasts only while that client's stream does.
+import { ApprovalsDoc, type Harness, LiveDoc, SubagentOriginDoc } from "@sigma/harness"
 import {
   type CommitPublication,
   type ConversationId,
@@ -38,6 +38,11 @@ const asking = (value: unknown) =>
 
 const running = (value: unknown) => (value as { run?: unknown } | undefined)?.run !== undefined
 
+const isWorkerOrigin = (value: unknown) => {
+  const task = (value as { task?: unknown } | undefined)?.task
+  return typeof task === "string" && task !== ""
+}
+
 export interface TreeStatuses {
   /** Every tree that is not idle, then each change to a tree's status or its root's run ending. */
   readonly watch: (limit: number) => Stream.Stream<TreeItem, FellBehind>
@@ -62,10 +67,10 @@ export const followTreeStatus = (harness: Harness): Effect.Effect<TreeStatuses> 
       for (const watcher of [...watchers]) if (!watcher(heard)) watchers.delete(watcher)
     }
 
-    const learn = (record: ConversationRecord) => {
+    const learn = (record: ConversationRecord, worker: boolean) => {
       if (roots.has(record.id)) return
       const owner = record.owner?.conversationId
-      roots.set(record.id, owner === undefined ? record.id : (roots.get(owner) ?? owner))
+      roots.set(record.id, owner === undefined || worker ? record.id : (roots.get(owner) ?? owner))
     }
 
     const set = (id: ConversationId, change: { working?: boolean; waiting?: boolean }) => {
@@ -83,7 +88,21 @@ export const followTreeStatus = (harness: Harness): Effect.Effect<TreeStatuses> 
 
     const advance = (publication: CommitPublication) => {
       seq = publication.seq
-      for (const change of publication.changes) if (change.type === "conversation") learn(change.value)
+      const workers = new Set<ConversationId>()
+      for (const change of publication.changes) {
+        if (
+          change.type === "document" &&
+          change.kind === "change" &&
+          change.conversationId !== undefined &&
+          change.record.kind === SubagentOriginDoc.definition.kind &&
+          isWorkerOrigin(change.value)
+        ) {
+          workers.add(change.conversationId)
+        }
+      }
+      for (const change of publication.changes) {
+        if (change.type === "conversation") learn(change.value, workers.has(change.value.id))
+      }
       const touched = new Set<ConversationId>()
       const ends = new Map<ConversationId, EntryRecord>()
       for (const change of publication.changes) {
@@ -116,7 +135,11 @@ export const followTreeStatus = (harness: Harness): Effect.Effect<TreeStatuses> 
           let cursor: Cursor | undefined
           do {
             const page = yield* reads.storage.scanConversations({}, SCAN_PAGE, cursor)
-            for (const record of page.items) learn(record)
+            for (const record of page.items) {
+              const origin =
+                record.owner === undefined ? undefined : yield* reads.document(SubagentOriginDoc, record.id)
+              learn(record, isWorkerOrigin(origin?.value))
+            }
             cursor = page.next
           } while (cursor !== undefined)
           for (const id of roots.keys()) {

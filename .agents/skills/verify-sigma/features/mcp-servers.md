@@ -24,9 +24,12 @@ each call with a message that names it. agy is offered no tools yet.
   `-` and `_`, and a URL that is not http or https are refused by name.
 - `mcp-start` keeps the servers `conversation/start` (or `--mcp-server`)
   names, each `{name, description}`, and what each listed then, fixed for the
-  conversation's life; `conversation/list` shows them, and a fork or subagent,
-  forked or fresh, has them too and names its root. No header value reaches the
-  home's files, the list or a transcript.
+  conversation's life; `conversation/list` shows them, and a fork, worker
+  (forked or fresh), or hosted subagent has them too. Each request carries
+  `Sigma-Root-Conversation` naming its tree's root: the conversation people
+  started for it and its hosted subagents, and the worker itself for a worker
+  and its hosted subagents. No header value reaches the home's files, the
+  list or a transcript.
 - `mcp-unlisted` adds a `sigma.mcp_unlisted` entry `{server, reason}` for each
   server that did not list when the conversation started: no client registers
   it, it did not answer, or it refused, such as attn refusing a conversation no
@@ -118,7 +121,9 @@ On ChatGPT, through sigma's own loop:
 
 ## Contexts
 
-- **Subagents.** A Claude Code subagent's call names its root conversation.
+- **Subagents and workers.** A hosted Claude Code subagent's call names its
+  tree's root (its parent or worker). A worker's call names the worker itself,
+  over its own MCP client connection.
 - **Server restart.** Registrations live in the server's memory: a new server
   has none until its clients register again.
 - **Provider.** Claude and ChatGPT conversations are offered the tools; agy
@@ -136,6 +141,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - mcp-claude, mcp-register, mcp-start: Claude Code and its subagent call a registered server's tool through sigma, with its headers and the conversation's id
 - mcp-claude: two conversations on one server each name themselves to the MCP server
 - mcp-gone: once the client that registered a server disconnects, each call of its tools is refused with a message naming it
+- worker-provider, mcp-claude, worker-root-env: a Claude Code worker and its hosted subagent call a registered MCP server with the worker's id as root
 
 Provider, `packages/sigma/test/openai.test.ts`:
 
@@ -147,7 +153,8 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - mcp-start: a conversation keeps the MCP servers it started with, and a fork of it uses them too
 - mcp-openai, mcp-typed: a code mode script calls a server's tool by its namespaced name and gets the result its outputSchema types, and describeNamespace() answers with the server's instructions
 - mcp-openai: a model that takes tools directly is offered an always-loaded tool, and calls a deferred one only once tool_search loaded it, over a stream the server holds open
-- mcp-openai, mcp-start: a forked and a fresh subagent each call their root's server, naming the root
+- mcp-openai, mcp-start: a forked and a fresh worker each call their parent's server, naming themselves as root
+- worker-root-env, tool-root-env, mcp-start: a worker's bash and MCP calls name the worker as root, while its parent's name the parent by the id its client chose
 - mcp-cancel: interrupting a run cancels the server's call it waits on
 - mcp-reconnect: after the server restarts on its address, the next call reaches it
 - mcp-unlisted: a server no client registers, or one that does not answer, offers no tools, and the conversation says why

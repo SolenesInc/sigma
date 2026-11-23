@@ -14,11 +14,12 @@ home                    one directory of state, SIGMA_HOME; like a tenant
 │  └─ client (0..n)     a program connected to the server's socket that draws
 │                       committed state and sends input; the TUI is one
 │                       (`Client`, packages/sigma/src/client.ts)
-├─ tree (0..n)          one root conversation and every conversation owned
-│  │                    under it (`TreeStatus`, packages/protocol/src/index.ts)
+├─ tree (0..n)          one root conversation (a conversation people started,
+│  │                    or a worker) and every subagent owned under it
+│  │                    (`TreeStatus`, packages/protocol/src/index.ts)
 │  ├─ root conversation (1)
-│  │                    a conversation with no owning task, at the top of a
-│  │                    tree (`Lineage.root`, packages/protocol/src/index.ts;
+│  │                    a conversation people started or a worker, at the top of
+│  │                    a tree (`Lineage.root`, packages/protocol/src/index.ts;
 │  │                    `rootOf`, packages/sigma/src/conversations.ts)
 │  ├─ status (1)        the tree's live state (`TreeStatus.status`,
 │  │  │                 packages/sigma/src/status.ts)
@@ -29,18 +30,18 @@ home                    one directory of state, SIGMA_HOME; like a tenant
 │  │  └─ waiting        at least one approval in the tree awaits a person's
 │  │                    answer (distinct from `idle`, and from a kernel task
 │  │                    waiting on child tasks)
-│  ├─ worker (0..n)     a child conversation sigma starts (`start_worker`), on
-│  │  │                 any provider; it takes input from people and outlives
-│  │  │                 its parent's run (packages/sigma/src/agents.ts)
-│  │  └─ worker path (1)
-│  │                    a worker's slash address in the tree, such as
-│  │                    `/root/scout` (`TaskPathDoc`,
-│  │                    packages/sigma/src/agents.ts)
 │  └─ subagent (0..n)   a child conversation a harness owns and runs, such as
 │                       Claude Code's Agent; sigma shows it as a conversation,
 │                       but it takes no direct input (`TakesNoInput`,
 │                       packages/protocol/src/index.ts; `hosted.job`,
 │                       packages/hosted/src/job.ts)
+├─ worker (0..n)        a child conversation sigma starts (`start_worker`), on
+│  │                    any provider; it starts a tree of its own, takes input
+│  │                    from people, and outlives its parent's run
+│  │                    (packages/sigma/src/agents.ts)
+│  └─ worker path (1)   a worker's slash address across its parent
+│                       conversation's workers, such as `/root/scout`
+│                       (`TaskPathDoc`, packages/sigma/src/agents.ts)
 └─ provider (1..n)      a named configuration in the home that reaches models,
    │                    with its own sign-in and health, and whether it
    │                    answers an ephemeral run (`ProviderSnapshot`,

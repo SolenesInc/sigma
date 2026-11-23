@@ -22,7 +22,7 @@ const asking = <T extends ToolRegistration>(tool: T): T => ({ ...tool, asks: tru
 /**
  * Sigma's tools, where `read` prepares images with `images`, as attached ones are, and `bash` stops a command after
  * `bashTimeout` seconds unless its call says otherwise. Every command runs with `SIGMA_ROOT_CONVERSATION` set to the
- * id clients name the conversation people started by.
+ * id clients name the root of its tree by (the conversation people started, or the worker itself).
  */
 export const sigmaTools = (harness: () => Harness, images: ImageProcessor, bashTimeout?: number) =>
   defineExtension({

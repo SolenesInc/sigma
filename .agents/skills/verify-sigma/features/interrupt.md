@@ -8,16 +8,18 @@ can interrupt any conversation's run.
 
 - `interrupt-tui` stops the run with `Esc`.
 - `interrupt-wire` stops it with `conversation/interrupt` from another client.
-- `interrupt-idle` stops the work still going on under an idle conversation:
-  `Esc` or `conversation/interrupt` with no run stops the run of every
-  subagent in its tree, and every background job Claude Code started in any
-  of them, each told to stop. Stopping a run leaves that work going.
-- `background-count` shows `⧉ <n> in background` in the status bar while work
-  goes on under the conversation beside its runs: its own subagents that
-  work, and the jobs Claude Code runs in the background. The prompt's bottom
-  border says what `Esc` stops now: `esc  stop the run` during a run, and
-  `esc  stop <n> background jobs` while the conversation is idle with such
-  work.
+- `interrupt-idle` stops the background jobs still going on under an idle
+  conversation: `Esc` or `conversation/interrupt` with no run stops every
+  hosted background job (Claude Code's background subagents and commands) on
+  that conversation, and never crosses a worker boundary. Workers are
+  independent trees, stopped by `stop_worker` or by interrupting the worker's
+  own conversation. Stopping a run leaves its hosted background jobs and
+  workers going.
+- `background-count` shows `⧉ <n> in background` in the status bar while
+  hosted background jobs work under the conversation beside its runs. The
+  prompt's bottom border says what `Esc` stops now: `esc  stop the run` during
+  a run, and `esc  stop <n> background jobs` while the conversation is idle
+  with such work.
 - `interrupt-withdraw` withdraws the prompts waiting in the queue: each leaves
   the queue without running, and the transcript gets a `sigma.withdrawn` entry
   naming its `requestId`, so a client that lost its watch learns the prompt's
@@ -102,7 +104,7 @@ Preconditions:
 
 - **Second client.** Any client can interrupt, and every client sees the run end `interrupted`.
 - **Claude.** Stopping a Claude run interrupts Claude Code's turn and keeps its process for the next prompt, in [Claude](./claude.md) `claude-stop`.
-- **Subagents.** Stopping a run stops that run only: its subagents keep working, and a second `Esc` on the idle conversation stops them (`interrupt-idle`). `Esc` in a subagent's own conversation stops its run, not its parent.
+- **Workers.** Stopping a parent, running or idle, leaves its workers working; `stop_worker` or interrupting the worker's own conversation stops it (`worker-interrupt`).
 - **Claude jobs.** Stopping a Claude run leaves the background commands Claude Code started working, and `Esc` on the idle conversation stops them through Claude Code's `stopTask`; Claude Code stops its background subagents with the run. See [Claude](./claude.md) `claude-job-cut-off`.
 
 ## Tests
@@ -112,7 +114,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - interrupt-wire: interrupting keeps what sigma already said and marks the run interrupted
 - interrupt-withdraw: interrupting withdraws the prompts that wait, and the transcript names each by its requestId
 - interrupt-withdraw: the interrupt answers which prompts it withdrew, each with its id, requestId, author and text, oldest first
-- worker-interrupt, interrupt-idle: interrupting a conversation's run leaves its workers working, and interrupting it again, idle, stops them, so the tree goes idle
+- worker-interrupt, interrupt-idle: interrupting a conversation, running or idle, leaves its workers running, and interrupting the worker itself stops it
 
 Screen, `packages/sigma/test/screen.test.ts`:
 

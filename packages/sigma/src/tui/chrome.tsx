@@ -75,7 +75,7 @@ export interface Screen {
   readonly empty: boolean
   /** Every call of it and its subagents waiting on a person, in the order `^Y` and `^N` answer them. */
   readonly asks: ReadonlyArray<Ask>
-  /** How much work goes on under it beside its runs: its subagents working, and Claude Code's background jobs. */
+  /** How many hosted background jobs still work under this conversation beside its runs. */
   readonly background: number
   /** What the last command or input came to, such as why it was refused, until the next one. */
   readonly notice?: Notice | undefined

@@ -465,7 +465,7 @@ export const Interrupt = Rpc.make("conversation/interrupt", {
   success: Schema.Struct({
     withdrawn: Schema.Array(WithdrawnPrompt).annotate({
       description:
-        "The people's inputs waiting in the conversation's queue that this interrupt withdrew, oldest first, from the same commit that withdrew them: an input a run took in before it is not here. Inputs it withdrew from other conversations, and any that arrive while the run stops, are not listed.",
+        "The people's inputs waiting in the conversation's inbox that this interrupt withdrew, oldest first, from the same commit that withdrew them: an input a run took in before it, or any that arrive while the run stops, is not listed.",
     }),
   }),
   error: Schema.Union([ReadOnlyServer, NoSuchConversation]),
@@ -490,17 +490,20 @@ export const ResolveApproval = Rpc.make("approval/resolve", {
 
 export const Lineage = Schema.Struct({
   parent: ConversationId,
-  root: ConversationId.annotate({ description: "The conversation people started, at the top of the tree." }),
+  root: ConversationId.annotate({
+    description:
+      "The root of this conversation's tree: the worker itself for a worker, or the nearest worker or conversation people started for a subagent.",
+  }),
   call: Schema.String.annotate({ description: "The parent's call that started it." }),
   title: Schema.String,
   task: Schema.optionalKey(
     Schema.String.annotate({
       description:
-        "Its task name, such as /root/explore, which agents address it by. Absent when its parent's provider runs it, as Claude Code runs its own subagents: then it takes input only through its parent, and stops when its parent's run does.",
+        "Its worker path, such as /root/explore, which agents address it by. Present on a worker, which starts a tree of its own and takes direct input; absent on a subagent its parent's harness runs inside its parent's tree.",
     }),
   ),
   agentType: Schema.optionalKey(Schema.String),
-}).annotate({ description: "Where a subagent comes from. It runs on its parent's provider, in its directory." })
+}).annotate({ description: "Where a worker or subagent comes from." })
 export type Lineage = typeof Lineage.Type
 
 export const ConversationInfo = Schema.Struct({
@@ -619,7 +622,7 @@ export const ReadContext = Rpc.make("conversation/context", {
 
 export const TreeStatus = Schema.TaggedStruct("tree", {
   conversation: ConversationId.annotate({
-    description: "A conversation people started; its tree is it and its subagents.",
+    description: "A conversation people started, or a worker; its tree is it and its subagents.",
   }),
   seq: Schema.Int.annotate({
     description:

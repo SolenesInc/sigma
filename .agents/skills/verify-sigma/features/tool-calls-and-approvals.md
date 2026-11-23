@@ -40,9 +40,10 @@ conversation was started with `--auto`, which runs every call without asking.
 - `tool-output-live` shows a command's output as it prints, under its call
   while the status reads `WORKING`, then commits it whole with the result.
 - `tool-root-env` runs every command with `SIGMA_ROOT_CONVERSATION` set to the
-  id of the conversation people started, as its client chose it at
-  `conversation/start` (its number when the client chose none), in a subagent
-  too.
+  id of its tree's root: the conversation people started (as its client chose
+  it at `conversation/start`, or its number) for that conversation and its
+  hosted subagents, and the worker's own id for a worker and its hosted
+  subagents.
 
 ## How to get to it
 
@@ -109,8 +110,9 @@ Preconditions:
   then `drive.ts r watch 1e647688-9113-4df0-8e6c-b3d89966c4ed --save root-env`:
   the `pi.tool-result` is `root=1e647688-9113-4df0-8e6c-b3d89966c4ed`, the id
   the client chose, not the `number` `rpc conversation/list` shows. Without
-  `--conversation`, it is that number. A subagent's commands get the same id,
-  in [Subagents](./workers.md).
+  `--conversation`, it is that number. A hosted subagent's commands get its tree
+  root's id; a worker starts its own tree and gets its own id, in
+  [Workers](./workers.md).
 - **Output streams live.** In a fresh run whose script is
 
   ```json
@@ -184,7 +186,7 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - approval-wire: a denied call is reported to the model as denied and does not run, and an unknown approval is refused by name
 - tool-read-only, approval-auto: reading calls and conversations started with auto approvals run without asking
 - child-tools, approval-auto: a subagent of a conversation that runs calls without asking does not ask either
-- worker-root-env, tool-root-env: a worker's command knows the conversation people started by the id its client chose
+- worker-root-env, tool-root-env, mcp-start: a worker's bash and MCP calls name the worker as root, while its parent's name the parent by the id its client chose
 - approval-restart, status-snapshot: a call waiting for approval across a restart asks again after it, and runs once allowed
 - approval-ask: a call that changes things waits for a person, and every client sees what it asks and that the tree waits
 - tool-output-live: a running command's output streams live and ends as its result

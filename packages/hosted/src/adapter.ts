@@ -37,7 +37,7 @@ export interface Adapter<S = any> {
 export type ProcessConfig<S = unknown> = {
   readonly agent: Agent
   readonly settings: S
-  /** The id of the conversation people started, for the `SIGMA_ROOT_CONVERSATION` its commands see. */
+  /** The id of the tree's root conversation (the conversation people started, or the worker), for `SIGMA_ROOT_CONVERSATION`. */
   readonly rootConversation: string
   /** What the harness adds to its own system prompt: the sections of the extensions it is offered, then the agent's instructions. */
   readonly instructions?: string

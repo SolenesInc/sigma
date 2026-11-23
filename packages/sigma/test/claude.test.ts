@@ -12,6 +12,8 @@ import {
   type EntryRecord,
   type ProviderModels,
   type ProviderSnapshot,
+  type TreeItem,
+  type TreeStatus,
   USER_KIND,
 } from "@sigma/protocol"
 import { ECHO_TOOL, FAKE_INSTRUCTIONS, FakeMcpServer } from "./support/mcp.ts"
@@ -700,6 +702,41 @@ test("subagent-claude: a call a Claude subagent wants to make waits for a person
     },
   ])
   expect(runEnds(child.view.seen())).toEqual([expect.objectContaining({ outcome: "answered" })])
+})
+
+test("status-subagent, status-snapshot, subagent-claude: a hosted Claude subagent waiting on a person shows its parent's tree waiting, to watchers then and later", async () => {
+  using claude = new FakeClaude("subagent_asks")
+  await using session = await conversationWith(claude)
+  const watch = session.client.watch<TreeItem>("status/watch")
+  await watch.until((items) => items.length > 0)
+  const treeEvents = (items: ReadonlyArray<TreeItem>, id: string) =>
+    items.filter((item): item is TreeStatus => item._tag === "tree" && item.conversation === id)
+
+  await session.submit("go")
+  const child = await subagentOf(session)
+  await waitingApproval(child.view)
+  await watch.until((items) => treeEvents(items, session.conversation).at(-1)?.status === "waiting", DEADLINE)
+  expect(treeEvents(watch.items, child.id)).toEqual([])
+
+  const late = await RawClient.connect(session.server.home.socket)
+  const lateWatch = late.watch<TreeItem>("status/watch")
+  await lateWatch.until((items) => items.length > 0)
+  expect(lateWatch.items[0]).toMatchObject({
+    _tag: "trees",
+    trees: [{ _tag: "tree", conversation: session.conversation, status: "waiting" }],
+  })
+  late.close()
+
+  await session.answer(true, child.view, child.id)
+  await child.view.until(childEnded, DEADLINE)
+  await watch.until((items) => {
+    const events = treeEvents(items, session.conversation)
+    return events.at(-1)?.status === "idle" && events.some((tree) => tree.ended !== undefined)
+  }, DEADLINE)
+  const events = treeEvents(watch.items, session.conversation)
+  expect(events.at(-1)?.status).toBe("idle")
+  expect(events.find((tree) => tree.ended !== undefined)?.ended).toMatchObject({ outcome: "answered" })
+  expect(treeEvents(watch.items, child.id)).toEqual([])
 })
 
 test("subagent-claude: a Claude subagent's approval waits and is answered in its own job, which writes its conversation instead of its parent's run", async () => {
@@ -2003,7 +2040,7 @@ const workerOf = (watch: ViewWatch, task: string) => {
   return details === undefined ? undefined : String(details.conversation)
 }
 
-test("worker-provider, worker-model, worker-root-env: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone and whose commands know the conversation people started, and the agent's wait returns the worker's answer", async () => {
+test("worker-provider, worker-model, worker-root-env: a scripted agent starts a worker on Claude Code with the model it names, which starts from its brief alone and whose commands know the worker as root, and the agent's wait returns the worker's answer", async () => {
   using claude = new FakeClaude("models", "text")
   await using session = await scriptedWith(
     claude,
@@ -2034,20 +2071,22 @@ test("worker-provider, worker-model, worker-root-env: a scripted agent starts a 
     received: [{ from: "/root/poet", kind: "final_answer", text: "fixture text ok" }],
   })
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: the poet answered", "run_end: answered"])
-  // The provider and model the call named reach the worker unchanged.
+  // The provider and model the call named reach the worker unchanged, and the worker is the root of its own tree.
   const listed = (await session.client.call("conversation/list")).result as Array<{
     id: string
     model: unknown
-    lineage?: { task?: string }
+    lineage?: { parent?: string; root?: string; task?: string }
   }>
-  expect(listed.find((each) => each.lineage?.task === "/root/poet")?.model).toEqual({
+  const poet = listed.find((each) => each.lineage?.task === "/root/poet")!
+  expect(poet.model).toEqual({
     provider: "claude",
     model: "claude-opus-5-5",
     effort: "high",
   })
+  expect(poet.lineage).toMatchObject({ parent: "chosen-root", root: poet.id, task: "/root/poet" })
   expect(claude.spawns()[0]!["--model"]).toBe("claude-opus-5-5")
-  // The worker's Claude Code runs its commands under the conversation people started, named as its client chose.
-  expect(claude.log().find((entry) => entry.argv && entry.probe === undefined)?.rootConversation).toBe("chosen-root")
+  // The worker's Claude Code runs its commands with the worker itself as SIGMA_ROOT_CONVERSATION.
+  expect(claude.log().find((entry) => entry.argv && entry.probe === undefined)?.rootConversation).toBe(poet.id)
   // Claude Code is told the brief and its task, beside the workers section, none of the parent's instructions or history.
   const append: string = claude.log().find((entry) => entry.initialize && entry.probe === undefined)
     ?.initialize.appendSystemPrompt
@@ -2058,7 +2097,66 @@ test("worker-provider, worker-model, worker-root-env: a scripted agent starts a 
   expect(claude.userTexts()).toEqual([[expect.stringMatching(/Payload:\nReply with exactly: fixture text ok$/)]])
 })
 
-test("worker-interrupt, worker-approve: a Claude Code worker asks its own approval, and stopping its idle parent ends the worker's run and clears the approval", async () => {
+test("worker-provider, mcp-claude, worker-root-env: a Claude Code worker and its hosted subagent call a registered MCP server with the worker's id as root", async () => {
+  using mcp = new FakeMcpServer()
+  using claude = new FakeClaude("models", "mcp_tool")
+  await using server = await runningServer(
+    [
+      { tool: { name: "mcp__fake__echo", input: { text: "parent" } } },
+      {
+        tool: {
+          name: "start_worker",
+          input: {
+            task_name: "delegate",
+            message: "echo root, then have a subagent echo sub",
+            provider: "claude",
+          },
+        },
+      },
+      { tool: { name: "wait_worker", input: { timeout_ms: 600_000 } } },
+      { text: "all echoed" },
+    ],
+    { claude: claude.options },
+  )
+  const client = await RawClient.connect(server.home.socket)
+  try {
+    await registerFake(client, mcp)
+    const conversation = (
+      await client.call("conversation/start", {
+        author: person("ada"),
+        cwd: server.home.dir,
+        id: "chosen-root",
+        approvals: "auto",
+        mcpServers: FAKE_SERVERS,
+      })
+    ).result.conversation as string
+    const view = watchView(client, conversation)
+    await submit(client, conversation, "echo across parent, worker and subagent")
+    await view.until(settled(1), DEADLINE)
+
+    const listed = (await client.call("conversation/list")).result as Array<{
+      id: string
+      lineage?: { parent?: string; root?: string; task?: string }
+    }>
+    const worker = listed.find((each) => each.lineage?.task === "/root/delegate")!
+    const hostedSubagent = listed.find((each) => each.lineage?.parent === worker.id && each.lineage.task === undefined)!
+    expect(worker.lineage).toMatchObject({ parent: "chosen-root", root: worker.id, task: "/root/delegate" })
+    expect(hostedSubagent.lineage).toMatchObject({ parent: worker.id, root: worker.id })
+    expect(
+      mcp
+        .calls()
+        .map((call) => [call.body.params, call.headers.authorization, call.headers["sigma-root-conversation"]]),
+    ).toEqual([
+      [{ name: "echo", arguments: { text: "parent" } }, SECRET, "chosen-root"],
+      [{ name: "echo", arguments: { text: "root" } }, SECRET, worker.id],
+      [{ name: "echo", arguments: { text: "sub" } }, SECRET, worker.id],
+    ])
+  } finally {
+    client.close()
+  }
+})
+
+test("worker-interrupt, worker-approve: a Claude Code worker asks its own approval, interrupting its idle parent leaves it waiting, and interrupting the worker itself ends its run and clears the approval", async () => {
   // Recorded with the stop landing while the call waits on a person, so Claude Code ends the turn as it does then.
   using claude = new FakeClaude("models", "bash_interrupted")
   await using session = await scriptedWith(
@@ -2071,12 +2169,25 @@ test("worker-interrupt, worker-approve: a Claude Code worker asks its own approv
   )
   await submit(session.client, session.conversation, "start a maker")
   await session.view.until(settled(1), DEADLINE)
+  const makerId = workerOf(session.view, "/root/maker")!
   const maker = await session.worker("/root/maker")
   // The call waits on a person in the worker's own conversation, not its parent's.
   await maker.until((watch) => Object.keys(approvalsOf(watch)?.requests ?? {}).length > 0)
   expect(approvalsOf(session.view)?.requests ?? {}).toEqual({})
 
+  // Interrupting the idle parent never crosses the worker boundary.
   await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  const checkWatch = session.client.watch<TreeItem>("status/watch")
+  await checkWatch.until((items) => items.length > 0)
+  expect(checkWatch.items[0]).toMatchObject({
+    _tag: "trees",
+    trees: [{ _tag: "tree", conversation: makerId, status: "waiting" }],
+  })
+  expect(Object.keys(approvalsOf(maker)?.requests ?? {})).toHaveLength(1)
+  expect(runEnds(maker.seen())).toEqual([])
+
+  // Interrupting the worker itself stops its run and clears the approval.
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: makerId })
   await maker.until((watch) => runEnds(watch.seen()).length > 0)
   expect(runEnds(maker.seen())).toEqual([expect.objectContaining({ outcome: "interrupted" })])
   expect(approvalsOf(maker)?.requests ?? {}).toEqual({})

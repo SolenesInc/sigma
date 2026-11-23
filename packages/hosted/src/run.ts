@@ -79,8 +79,8 @@ export interface HostedRunOptions {
   /** The conversation's title, which names a fresh session so the harness does not ask a model for one. */
   readonly title?: (conversation: ConversationId) => Effect.Effect<string | undefined>
   /**
-   * The id clients name the conversation people started by, for a conversation under it or for it: what the
-   * harness's commands see as `SIGMA_ROOT_CONVERSATION`.
+   * The id clients name the root of `conversation`'s tree by (the conversation people started, or the worker itself):
+   * what the harness's commands see as `SIGMA_ROOT_CONVERSATION` and MCP servers see as `Sigma-Root-Conversation`.
    */
   readonly rootConversation: (conversation: ConversationId) => Effect.Effect<string>
   /** The live processes the runs lease, from `makeHostedProcesses`. */

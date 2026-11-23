@@ -166,11 +166,13 @@ lists when a change touches them.
   `codemode` tool whose scripts call sigma's tools in a sandbox, asking like
   direct calls, and survive a server restart.
 - [Workers](./workers.md) (people, agents): OpenAI and scripted models start workers
-  on any ready provider, Claude Code included, each a conversation under its
-  parent, shown as cards whose calls `^Y` and `^N` answer; a wait returns what
+  on any ready provider, Claude Code included, each starting a tree of its own
+  and shown as a card whose calls `^Y` and `^N` answer; a wait returns what
   they sent; follow-ups, history forks, named providers and models, `[agents]`
   limits and `exec` denials; agent types from `.claude/agents`; Claude Code's
-  own subagents; `Esc` stops them all, or one from its own pane.
+  own hosted subagents; `Esc` stops only the current conversation's run or
+  hosted background jobs, while `stop_worker` or interrupting the worker's own
+  conversation stops a worker.
 - [Sign-in](./sign-in.md) (people, agents): the splash, `^L`, `sigma login` and `logout`, and
   `auth/*` show, start, answer and cancel a sign-in by browser, device code or
   Claude Code's terminal.

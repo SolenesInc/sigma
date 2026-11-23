@@ -737,7 +737,9 @@ const talkWithFake = async (client: RawClient, cwd: string, model = "script") =>
 
 /** What the fake's calls asked for, with the Authorization and root each carried. */
 const fakeCalls = (mcp: FakeMcpServer) =>
-  mcp.calls().map((call) => [call.body.params, call.headers.authorization, call.headers["sigma-root-conversation"]])
+  mcp
+    .calls()
+    .map((call) => [call.body.params, call.headers.authorization, call.headers["sigma-root-conversation"]] as const)
 
 test("mcp-openai, mcp-typed: a code mode script calls a server's tool by its namespaced name and gets the result its outputSchema types, and describeNamespace() answers with the server's instructions", async () => {
   using mcp = new FakeMcpServer([ECHO_TOOL, WAIT_TOOL])
@@ -798,29 +800,34 @@ test("mcp-openai: a model that takes tools directly is offered an always-loaded 
   client.close()
 })
 
-test("mcp-openai, mcp-start: a forked and a fresh subagent each call their root's server, naming the root", async () => {
+test("mcp-openai, mcp-start: a forked and a fresh worker each call their parent's server, naming themselves as root", async () => {
   using mcp = new FakeMcpServer()
   await using server = await runningServer([
     call("start_worker", { task_name: "forked", message: "echo forked" }),
     call("start_worker", { task_name: "fresh", message: "echo fresh", fork_turns: "none" }),
+    { text: "spawned" },
     call("mcp__fake__echo", { text: "forked" }, "/root/forked"),
     { text: "echoed", agent: "/root/forked" },
     call("mcp__fake__echo", { text: "fresh" }, "/root/fresh"),
     { text: "echoed", agent: "/root/fresh" },
-    call("wait_worker", { timeout_ms: 600_000 }),
-    call("wait_worker", { timeout_ms: 600_000 }),
-    { text: "both echoed" },
   ])
   const client = await RawClient.connect(server.home.socket)
   await registerFake(client, mcp)
   const view = await talkWithFake(client, server.home.dir)
-  await submit(client, "talk", "have two subagents echo")
-  await mcp.until((fake) => fake.calls().length === 2, "both subagents to call the server")
-  expect(fakeCalls(mcp).sort()).toEqual([
-    [{ name: "echo", arguments: { text: "forked" } }, "Bearer s3cret", "talk"],
-    [{ name: "echo", arguments: { text: "fresh" } }, "Bearer s3cret", "talk"],
-  ])
+  await submit(client, "talk", "have two workers echo")
   await view.until(settled(1), DEADLINE)
+  const forkedId = spawned(view, "/root/forked")
+  const freshId = spawned(view, "/root/fresh")
+  await Promise.all([
+    watchView(client, forkedId).until(settled(1), DEADLINE),
+    watchView(client, freshId).until(settled(1), DEADLINE),
+  ])
+  const byText = (entry: readonly [unknown, string | undefined, string | undefined]) =>
+    (entry[0] as { arguments: { text: string } }).arguments.text
+  expect(fakeCalls(mcp).sort((a, b) => byText(a).localeCompare(byText(b)))).toEqual([
+    [{ name: "echo", arguments: { text: "forked" } }, "Bearer s3cret", forkedId],
+    [{ name: "echo", arguments: { text: "fresh" } }, "Bearer s3cret", freshId],
+  ])
   client.close()
 })
 
@@ -1363,23 +1370,42 @@ const startAuto = async (client: RawClient, cwd: string, id?: string) =>
     })
   ).result.conversation as string
 
-test("worker-root-env, tool-root-env: a worker's command knows the conversation people started by the id its client chose", async () => {
+test("worker-root-env, tool-root-env, mcp-start: a worker's bash and MCP calls name the worker as root, while its parent's name the parent by the id its client chose", async () => {
+  using mcp = new FakeMcpServer([ECHO_TOOL])
   await using server = await runningServer([
+    { tool: { name: "bash", input: { command: "echo root=$SIGMA_ROOT_CONVERSATION" } } },
+    call("mcp__fake__echo", { text: "from-parent" }),
     { tool: { name: "start_worker", input: { task_name: "envy", message: "show your root", fork_turns: "none" } } },
     { tool: { name: "wait_worker", input: { timeout_ms: 600000 } } },
     { text: "envy answered" },
     { agent: "/root/envy", tool: { name: "bash", input: { command: "echo root=$SIGMA_ROOT_CONVERSATION" } } },
+    call("mcp__fake__echo", { text: "from-worker" }, "/root/envy"),
     { agent: "/root/envy", text: "shown" },
   ])
   const client = await RawClient.connect(server.home.socket)
-  const conversation = await startAuto(client, server.home.dir, "chosen-root")
+  await registerFake(client, mcp)
+  const conversation = (
+    await client.call("conversation/start", {
+      author: person("ada"),
+      cwd: server.home.dir,
+      approvals: "auto",
+      id: "chosen-root",
+      mcpServers: [{ name: "fake", description: "Echoes text" }],
+    })
+  ).result.conversation as string
   expect(conversation).toBe("chosen-root")
   const view = watchView(client, conversation)
   await submit(client, conversation, "delegate")
   await view.until(settled(1), DEADLINE)
-  const child = watchView(client, spawned(view, "/root/envy"))
-  await child.until(() => toolResults(child).length > 0)
-  expect(toolResults(child).map((result) => result.text)).toEqual([`root=${conversation}\n`])
+  const workerId = spawned(view, "/root/envy")
+  const child = watchView(client, workerId)
+  await child.until(settled(1), DEADLINE)
+  expect(toolResults(view)[0]?.text).toBe(`root=${conversation}\n`)
+  expect(toolResults(child)[0]?.text).toBe(`root=${workerId}\n`)
+  expect(fakeCalls(mcp)).toEqual([
+    [{ name: "echo", arguments: { text: "from-parent" } }, "Bearer s3cret", conversation],
+    [{ name: "echo", arguments: { text: "from-worker" } }, "Bearer s3cret", workerId],
+  ])
   client.close()
 })
 test("approval-restart, status-snapshot: a call waiting for approval across a restart asks again after it, and runs once allowed", async () => {
@@ -1447,37 +1473,76 @@ test("status-follow, status-ended: watching status follows each run of a tree an
   client.close()
 })
 
-test("status-subagent, status-snapshot: a subagent waiting on a person shows as its whole tree waiting, to watchers then and later", async () => {
-  await using server = await runningServer([
-    call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
-    call("wait_worker", { timeout_ms: 600_000 }),
-    { tool: { name: "bash", input: { command: "echo noted" } }, agent: "/root/writer" },
-  ])
-  const client = await RawClient.connect(server.home.socket)
-  const watch = client.watch<Trees>("status/watch")
-  await watch.until((items) => items.length > 0)
-  const conversation = await start(client, server.home.dir)
-  await submit(client, conversation, "have someone write a note")
-  await watch.until((items) => treesOf(items, conversation).at(-1)?.status === "waiting", DEADLINE)
+test("status-follow, status-snapshot, status-ended: a worker waiting on a person reports its own tree waiting while its parent reports only its own run, and the worker's own tree survives a server restart", async () => {
+  const home = tempHome()
+  let conversation: string
+  let workerId: string
+  let approval: string
+  {
+    await using server = await runningServer(
+      [
+        call("start_worker", { task_name: "writer", message: "write a note", fork_turns: "none" }),
+        call("wait_worker", { timeout_ms: 600_000 }),
+        { tool: { name: "bash", input: { command: "echo noted" } }, agent: "/root/writer" },
+      ],
+      { home },
+    )
+    const client = await RawClient.connect(server.home.socket)
+    const watch = client.watch<Trees>("status/watch")
+    await watch.until((items) => items.length > 0)
+    conversation = await start(client, home.dir)
+    const view = watchView(client, conversation)
+    await submit(client, conversation, "have someone write a note")
+    await view.until((current) => toolResults(current).length > 0, DEADLINE)
+    workerId = spawned(view, "/root/writer")
+    const writer = watchView(client, workerId)
+    approval = await waitingApproval(writer)
+    await watch.until((items) => treesOf(items, workerId).at(-1)?.status === "waiting", DEADLINE)
 
-  const late = await RawClient.connect(server.home.socket)
-  const lateWatch = late.watch<Trees>("status/watch")
-  await lateWatch.until((items) => items.length > 0)
-  expect(lateWatch.items[0]).toMatchObject({
-    _tag: "trees",
-    trees: [{ _tag: "tree", conversation, status: "waiting" }],
-  })
-  expect(treesOf(watch.items, conversation).map((tree) => tree.status)).toEqual(["working", "waiting"])
-  // An interrupt of the root's run leaves its subagent waiting; a second, on the idle root, stops the subagent too.
-  await client.call("conversation/interrupt", { author: person("ada"), conversation })
-  await watch.until((items) => treesOf(items, conversation).some((tree) => tree.ended), DEADLINE)
-  expect(treesOf(watch.items, conversation).at(-1)?.status).toBe("waiting")
-  await client.call("conversation/interrupt", { author: person("ada"), conversation })
-  await watch.until((items) => treesOf(items, conversation).at(-1)?.status === "idle", DEADLINE)
-  const ended = treesOf(watch.items, conversation).filter((tree) => tree.ended)
-  expect(ended.map((tree) => tree.ended)).toEqual([{ outcome: "interrupted", message: "aborted" }])
-  client.close()
-  late.close()
+    expect(treesOf(watch.items, conversation).map((tree) => tree.status)).toEqual(["working"])
+    expect(treesOf(watch.items, workerId).map((tree) => tree.status)).toEqual(["working", "waiting"])
+
+    const late = await RawClient.connect(server.home.socket)
+    const lateWatch = late.watch<Trees>("status/watch")
+    await lateWatch.until((items) => items.length > 0)
+    const snapshot = lateWatch.items[0] as {
+      _tag: string
+      trees: Array<{ _tag: string; conversation: string; status: string }>
+    }
+    expect(snapshot._tag).toBe("trees")
+    expect(snapshot.trees.map(({ conversation: c, status }) => ({ conversation: c, status }))).toEqual([
+      { conversation, status: "working" },
+      { conversation: workerId, status: "waiting" },
+    ])
+
+    await client.call("conversation/interrupt", { author: person("ada"), conversation })
+    await watch.until((items) => treesOf(items, conversation).some((tree) => tree.ended), DEADLINE)
+    expect(treesOf(watch.items, conversation).at(-1)).toMatchObject({
+      status: "idle",
+      ended: { outcome: "interrupted", message: "aborted" },
+    })
+    expect(treesOf(watch.items, workerId).at(-1)?.status).toBe("waiting")
+    client.close()
+    late.close()
+  }
+  {
+    await using server = await runningServer([{ agent: "/root/writer", text: "written" }], { home })
+    const client = await RawClient.connect(server.home.socket)
+    const watch = client.watch<Trees>("status/watch")
+    await watch.until((items) => items.length > 0)
+    expect(watch.items[0]).toMatchObject({
+      _tag: "trees",
+      trees: [{ _tag: "tree", conversation: workerId, status: "waiting" }],
+    })
+    await client.call("approval/resolve", { conversation: workerId, approval, author: person("ada"), allow: true })
+    await watch.until((items) => treesOf(items, workerId).some((tree) => tree.ended), DEADLINE)
+    expect(treesOf(watch.items, workerId).at(-1)).toMatchObject({
+      status: "idle",
+      ended: { outcome: "answered", said: "written" },
+    })
+    client.close()
+  }
+  rmSync(home.dir, { recursive: true })
 })
 
 type Shown = { _tag: "shown"; author: { id: string; name: string }; conversation: string }
@@ -1631,11 +1696,13 @@ test("worker-limits, child-tools: under the default config a worker starts a wor
 
 const idle = (watch: ViewWatch) => (watch.view().docs["pi.live"] as { run?: unknown } | undefined)?.run === undefined
 
-test("worker-interrupt, interrupt-idle: interrupting a conversation's run leaves its workers working, and interrupting it again, idle, stops them, so the tree goes idle", async () => {
+test("worker-interrupt, interrupt-idle: interrupting a conversation, running or idle, leaves its workers running, and interrupting the worker itself stops it", async () => {
   await using server = await runningServer([
     call("start_worker", { task_name: "slow", message: "make it", fork_turns: "none" }),
     call("wait_worker", { timeout_ms: 600_000 }),
     call("bash", { command: "touch made" }, "/root/slow"),
+    call("list_workers", {}),
+    { text: "still running" },
     call("list_workers", {}),
     call("assign_worker", { target: "slow", message: "try again" }),
     call("wait_worker", { timeout_ms: 600_000 }),
@@ -1647,29 +1714,37 @@ test("worker-interrupt, interrupt-idle: interrupting a conversation's run leaves
   const view = watchView(client, conversation)
   await submit(client, conversation, "start a slow one")
   await view.until((current) => toolResults(current).length > 0)
-  const slow = watchView(client, spawned(view, "/root/slow"))
-  // The subagent waits on a person while its parent waits on it.
+  const slowId = spawned(view, "/root/slow")
+  const slow = watchView(client, slowId)
+  // The worker waits on a person while its parent waits on it.
   await waitingApproval(slow)
 
   await client.call("conversation/interrupt", { author: person("ada"), conversation })
   await view.until(settled(1))
   expect(runEnds(view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
-  // The subagent still waits on the person.
+  // Interrupting the idle parent leaves its worker waiting on the person too.
+  await client.call("conversation/interrupt", { author: person("ada"), conversation })
+  await submit(client, conversation, "check workers")
+  await view.until(settled(2), DEADLINE)
+  expect(JSON.parse(toolResults(view).at(-1)!.text).workers).toEqual([
+    { name: "/root", status: "running" },
+    { name: "/root/slow", status: "running" },
+  ])
   expect(Object.keys(approvalsOf(slow)!.requests)).toHaveLength(1)
   expect(runEnds(slow.seen())).toEqual([])
 
-  await client.call("conversation/interrupt", { author: person("ada"), conversation })
+  // Interrupting the worker itself stops its run and clears its approval.
+  await client.call("conversation/interrupt", { author: person("ada"), conversation: slowId })
   await slow.until(settled(1))
-  expect(runEnds(view.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   expect(runEnds(slow.seen()).map((end) => end.outcome)).toEqual(["interrupted"])
   expect(approvalsOf(slow)!.requests).toEqual({})
   await view.until(idle)
   await slow.until(idle)
   expect(await Bun.file(`${server.home.dir}/made`).exists()).toBe(false)
 
-  // The subagent stays in the tree, and takes a new task.
+  // The worker stays available for a new task.
   await submit(client, conversation, "go on")
-  await view.until(settled(2), DEADLINE)
+  await view.until(settled(3), DEADLINE)
   expect(JSON.parse(toolResults(view).at(-3)!.text).workers).toEqual([
     { name: "/root", status: "running" },
     { name: "/root/slow", status: "interrupted" },
@@ -1756,7 +1831,13 @@ test("worker-start, worker-model: conversation/list shows each worker with its l
       target: "local",
       model: { provider: "script", model: "script" },
       approvals: "ask",
-      lineage: { parent: "lead", root: "lead", call: calls[0]!, title: "same", task: "/root/same" },
+      lineage: {
+        parent: "lead",
+        root: spawned(view, "/root/same"),
+        call: calls[0]!,
+        title: "same",
+        task: "/root/same",
+      },
       ended: { outcome: "answered", said: "same done" },
     },
     {
@@ -1767,7 +1848,13 @@ test("worker-start, worker-model: conversation/list shows each worker with its l
       target: "local",
       model: { provider: "script", model: "script-code-mode" },
       approvals: "ask",
-      lineage: { parent: "lead", root: "lead", call: calls[1]!, title: "other", task: "/root/other" },
+      lineage: {
+        parent: "lead",
+        root: spawned(view, "/root/other"),
+        call: calls[1]!,
+        title: "other",
+        task: "/root/other",
+      },
       ended: { outcome: "answered", said: "other done" },
     },
   ])
