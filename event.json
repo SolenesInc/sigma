@@ -1,0 +1,14 @@
+{
+  "kind": "bug",
+  "state": "fail",
+  "title": "Keep unrelated tree updates from rescanning the home in sigma exec",
+  "at": "2026-11-23T23:09:33.610Z",
+  "detail": "When an unrelated conversation started and finished in the same home, a held sigma exec made two full conversation/list requests at e69ff71 and zero at its parent. The status watch forwards unrelated tree changes to discovery in packages/sigma/src/exec.ts:241. Discovery lists all conversations before checking ancestry at line 223. Scope discovery to descendants and preserve discovery of new workers and recovery after reconnect.\n",
+  "severity": "p1",
+  "source": "review",
+  "location": {
+    "path": "packages/sigma/src/exec.ts",
+    "line": 241
+  },
+  "culprit": "e69ff7115b34c27c300c7653cce080bacb7e1dfa"
+}
