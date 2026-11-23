@@ -1190,7 +1190,17 @@ const conversationScreen = Effect.fnUntraced(function* (
           refusal = undefined
         }),
       ),
-      Effect.andThen(Stream.runForEach(client["status/watch"](), () => listed)),
+      Effect.andThen(
+        Effect.all(
+          [
+            Stream.runDrain(client["client/shows"]({ conversation, author })).pipe(
+              Effect.catchTag("NoSuchConversation", () => Effect.void),
+            ),
+            Stream.runForEach(client["status/watch"](), (item) => (item._tag === "shown" ? Effect.void : listed)),
+          ],
+          { concurrency: "unbounded", discard: true },
+        ),
+      ),
       Effect.catchTag("RpcClientError", (error) =>
         Effect.sync(() => {
           const said = serverRefusal(error)

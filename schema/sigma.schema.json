@@ -2523,12 +2523,50 @@
                   "additionalProperties": true
                 },
                 "description": "Every tree that is not idle; the rest are idle."
+              },
+              "shown": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "author": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Who it is to the program that runs sigma; sigma never reads it."
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "What people see."
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": true,
+                      "description": "The author the client that shows it named in client/shows."
+                    },
+                    "conversation": {
+                      "type": "string",
+                      "description": "A conversation's id: the one its client chose at conversation/start, or else the number it gave."
+                    }
+                  },
+                  "required": [
+                    "author",
+                    "conversation"
+                  ],
+                  "additionalProperties": true
+                },
+                "description": "What each client shows now, as client/shows said, oldest first: one entry per client/shows stream."
               }
             },
             "required": [
               "_tag",
               "seq",
-              "trees"
+              "trees",
+              "shown"
             ],
             "additionalProperties": true
           },
@@ -2595,12 +2633,106 @@
               "status"
             ],
             "additionalProperties": true
+          },
+          {
+            "type": "object",
+            "properties": {
+              "_tag": {
+                "type": "string",
+                "enum": [
+                  "shown"
+                ]
+              },
+              "author": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Who it is to the program that runs sigma; sigma never reads it."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "What people see."
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": true,
+                "description": "The author the client that shows it named in client/shows."
+              },
+              "conversation": {
+                "type": "string",
+                "description": "A conversation's id: the one its client chose at conversation/start, or else the number it gave."
+              }
+            },
+            "required": [
+              "_tag",
+              "author",
+              "conversation"
+            ],
+            "additionalProperties": true,
+            "description": "A client now shows this conversation, as it said with client/shows. It is not a commit, so it has no seq."
           }
         ],
-        "description": "The status of every tree, then each commit that changes one or ends the run of its root."
+        "description": "The status of every tree and what each client shows, then each commit that changes a tree's status or ends the run of its root, and each conversation a client starts to show."
       },
       "error": {
         "$ref": "#/$defs/FellBehindEncoded"
+      },
+      "stream": true
+    },
+    "client/shows": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "string",
+            "description": "A conversation's id: the one its client chose at conversation/start, or else the number it gave."
+          },
+          "author": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Who it is to the program that runs sigma; sigma never reads it."
+              },
+              "name": {
+                "type": "string",
+                "description": "What people see."
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": true,
+            "description": "Who shows it: the author the client writes as."
+          }
+        },
+        "required": [
+          "conversation",
+          "author"
+        ],
+        "additionalProperties": true
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "string",
+            "description": "A conversation's id: the one its client chose at conversation/start, or else the number it gave."
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": true,
+        "description": "Once, when status/watch has reported it, with the id every other call names the conversation by. It lasts while the stream does: ending the stream, or the connection, removes it. A client calls this after it opens a conversation and again after each reconnect, so a watcher of status/watch knows what that client shows."
+      },
+      "error": {
+        "$ref": "#/$defs/NoSuchConversationEncoded"
       },
       "stream": true
     },

@@ -21,16 +21,23 @@ conversation. attn uses these to run Sigma sessions.
   never ran has none.
 - `start-with-id` starts a conversation with a chosen id, and answers a second
   start with that id with the first conversation.
+- `status-shown` reports each conversation a client says it shows with
+  `client/shows`, under that client's author, and the snapshot lists what
+  clients show now. The TUI says it once it opens a conversation, such as the
+  fork `/fork` moved it to, and again after each reconnect; a fork it never
+  opened is never reported.
 
 ## How to get to it
 
 ### People
 
-None.
+- Opening a conversation in the TUI, or moving to a fork with `/fork`, says
+  it shows that conversation (`status-shown`).
 
 ### Agents
 
 - Call `status/watch`, a stream.
+- Call `client/shows`, a stream that lasts while the client shows the conversation.
 - Call `conversation/start` with `id`.
 - Call `conversation/list`.
 
@@ -54,6 +61,14 @@ Preconditions:
   `drive.ts r rpc conversation/submit '{"conversation": "11111111-1111-4111-8111-111111111111", "requestId": "s1", "author": {"id": "ada", "name": "ada"}, "text": "write a note"}'`.
   The watch opens with the trees that are busy, none here, then prints the
   tree `working`, then `waiting` once the subagent asks.
+- **Shown.** With the server up, run
+  `drive.ts r watch-status --save shown` in one shell. In another, run
+  `SIGMA_AUTHOR_ID=attn-terminal:t-1 drive.ts r tui start --conversation 11111111-1111-4111-8111-111111111111`,
+  type a prompt, wait for its answer, then type `/fork`. The watch prints
+  `{"_tag":"shown","author":{"id":"attn-terminal:t-1",...},"conversation":"11111111-1111-4111-8111-111111111111"}`
+  once the TUI draws it, then the same with the fork's number once the fork's
+  screen opens. A new `drive.ts r watch-status` lists the fork under `shown`
+  in its first line.
 - **Snapshot.** While it waits, run `drive.ts r watch-status`: its first line
   lists the tree as `waiting`. It returns after a second with no change.
 - **Ended.** Run
@@ -82,10 +97,13 @@ Wire, `packages/sigma/test/wire.test.ts`:
 - status-follow, status-ended: watching status follows each run of a tree and says how it ended
 - status-subagent, status-snapshot: a subagent waiting on a person shows as its whole tree waiting, to watchers then and later
 - conversation-ended: conversation/list tells a client that was not watching how a conversation's last run ended, also after a restart
+- status-shown: what a client says it shows reaches every status watcher under its author, by the id other calls use, and later watchers find it in the snapshot
 
 Screen, `packages/sigma/test/screen.test.ts`:
 
 - start-with-id: a launcher opens sigma on an id it chose with a first prompt, and that id reopens the conversation
+- status-shown: the TUI says which conversation it shows once it opens it, then the fork /fork opened, and says it again to a server that replaced its own
+- status-shown: of two /fork typed at once, the TUI reports only the fork it opened, never the one it left behind
 
 Stack, `packages/sigma/test/stack.test.ts`:
 
@@ -103,5 +121,9 @@ Stack, `packages/sigma/test/stack.test.ts`:
 - An interrupted tree can report `working` after `waiting` and before
   `idle`. That is the committed state while its runs wind down, not a stale
   status.
+- `shown` is what a client said, not a commit: it carries no `seq`, a
+  server restart forgets it until each TUI says it again, and nothing is
+  sent when a client stops showing a conversation. Read the snapshot for
+  what clients show now; the last entry for an author is the newest.
 - In `status/watch`, `ended` belongs to the root's own run. A subagent's run
   ending never carries it there.

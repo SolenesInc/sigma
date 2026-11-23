@@ -2,7 +2,8 @@
 // conversation works while `pi.live` holds a run and waits while `sigma.approvals` holds a request without an answer;
 // a tree waits when any of its conversations waits, works when any works, and is idle otherwise. The tracker follows
 // every commit on the Session line from the documents the publication carries, so each status is the committed one at
-// that commit's seq; what a client reads of it is completed off the line.
+// that commit's seq; what a client reads of it is completed off the line. Beside it the tracker holds what each client
+// says it shows (`client/shows`), which is no commit and lasts only while that client's stream does.
 import { ApprovalsDoc, type Harness, LiveDoc } from "@sigma/harness"
 import {
   type CommitPublication,
@@ -12,8 +13,8 @@ import {
   type EntryRecord,
   readOnLine,
 } from "@sigma/kernel"
-import { FellBehind, RUN_END_KIND, type TreeItem, type TreeStatus } from "@sigma/protocol"
-import { Cause, Effect, Queue, Stream } from "effect"
+import { FellBehind, RUN_END_KIND, type Shown, type TreeItem, type TreeStatus } from "@sigma/protocol"
+import { Cause, Effect, Queue, type Scope, Stream } from "effect"
 import { endedAt, wireId } from "./conversations.ts"
 
 type Status = TreeStatus["status"]
@@ -21,7 +22,9 @@ type Status = TreeStatus["status"]
 /** A tree's change as the line sees it; `end` is its root's run_end. */
 type Raw = { readonly root: ConversationId; readonly seq: number; readonly status: Status; readonly end?: EntryRecord }
 
-type Watcher = (raw: Raw) => boolean
+type Heard = Raw | { readonly shown: Shown }
+
+type Watcher = (heard: Heard) => boolean
 
 const SCAN_PAGE = 256
 
@@ -38,6 +41,8 @@ const running = (value: unknown) => (value as { run?: unknown } | undefined)?.ru
 export interface TreeStatuses {
   /** Every tree that is not idle, then each change to a tree's status or its root's run ending. */
   readonly watch: (limit: number) => Stream.Stream<TreeItem, FellBehind>
+  /** Says a client shows `shown` until the scope closes. */
+  readonly shows: (shown: Shown) => Effect.Effect<void, never, Scope.Scope>
 }
 
 /** Starts following tree status on `harness`'s Session line; it ends with the Session. */
@@ -50,7 +55,12 @@ export const followTreeStatus = (harness: Harness): Effect.Effect<TreeStatuses> 
     /** What a watcher last heard of each tree that is not idle, with the seq it changed at. */
     const reported = new Map<ConversationId, { status: Status; seq: number }>()
     const watchers = new Set<Watcher>()
+    const presence = new Set<Shown>()
     let seq = 0
+
+    const tell = (heard: Heard) => {
+      for (const watcher of [...watchers]) if (!watcher(heard)) watchers.delete(watcher)
+    }
 
     const learn = (record: ConversationRecord) => {
       if (roots.has(record.id)) return
@@ -95,8 +105,7 @@ export const followTreeStatus = (harness: Harness): Effect.Effect<TreeStatuses> 
         if (end === undefined && status === (reported.get(root)?.status ?? "idle")) continue
         if (status === "idle") reported.delete(root)
         else reported.set(root, { status, seq })
-        const raw: Raw = end === undefined ? { root, seq, status } : { root, seq, status, end }
-        for (const watcher of [...watchers]) if (!watcher(raw)) watchers.delete(watcher)
+        tell(end === undefined ? { root, seq, status } : { root, seq, status, end })
       }
     }
 
@@ -122,7 +131,10 @@ export const followTreeStatus = (harness: Harness): Effect.Effect<TreeStatuses> 
       ),
     )
 
-    const toItem = (raw: Raw): Effect.Effect<TreeStatus> =>
+    const toItem = (heard: Heard): Effect.Effect<TreeItem> =>
+      "shown" in heard ? Effect.succeed({ _tag: "shown", ...heard.shown }) : toStatus(heard)
+
+    const toStatus = (raw: Raw): Effect.Effect<TreeStatus> =>
       Effect.gen(function* () {
         const conversation = yield* wireId(harness, raw.root)
         if (raw.end === undefined) return { _tag: "tree", conversation, seq: raw.seq, status: raw.status }
@@ -131,23 +143,34 @@ export const followTreeStatus = (harness: Harness): Effect.Effect<TreeStatuses> 
       })
 
     return {
+      shows: (shown) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            const held = { ...shown }
+            presence.add(held)
+            tell({ shown: held })
+            return held
+          }),
+          (held) => Effect.sync(() => presence.delete(held)),
+        ),
       watch: (limit) =>
         Stream.unwrap(
           Effect.gen(function* () {
-            const queue = yield* Queue.bounded<Raw, FellBehind | Cause.Done>(limit)
+            const queue = yield* Queue.bounded<Heard, FellBehind | Cause.Done>(limit)
             // Taken and attached in one synchronous step, between two commits.
             const busy = [...reported].map(([root, { status, seq: at }]) => ({ root, status, seq: at }))
+            const shown = [...presence]
             const at = seq
-            const watcher: Watcher = (raw) => {
-              if (Queue.offerUnsafe(queue, raw)) return true
+            const watcher: Watcher = (heard) => {
+              if (Queue.offerUnsafe(queue, heard)) return true
               Effect.runSync(Queue.clear(queue))
               Queue.failCauseUnsafe(queue, Cause.fail(new FellBehind({ limit })))
               return false
             }
             watchers.add(watcher)
             yield* Effect.addFinalizer(() => Effect.sync(() => watchers.delete(watcher)))
-            const trees = yield* Effect.forEach(busy, toItem)
-            const first: TreeItem = { _tag: "trees", seq: at, trees }
+            const trees = yield* Effect.forEach(busy, toStatus)
+            const first: TreeItem = { _tag: "trees", seq: at, trees, shown }
             return Stream.concat(Stream.make(first), Stream.mapEffect(Stream.fromQueue(queue), toItem))
           }),
         ),

@@ -115,6 +115,10 @@ export class RawClient {
     return { id, items, ended, until }
   }
 
+  interrupt(requestId: number) {
+    this.send({ jsonrpc: "2.0", method: "@effect/rpc/Interrupt", params: { requestId } })
+  }
+
   resumeAcks(requestId: number) {
     this.ack = true
     this.send({ jsonrpc: "2.0", method: "@effect/rpc/Ack", params: { requestId } })

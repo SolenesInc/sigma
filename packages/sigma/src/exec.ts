@@ -241,7 +241,7 @@ export const exec = Effect.fnUntraced(function* (
   })
   yield* watching(
     rewatched(() => client["status/watch"]()).pipe(
-      Stream.filter((item) => item._tag === "trees" || item.conversation === root),
+      Stream.filter((item) => item._tag === "trees" || (item._tag === "tree" && item.conversation === root)),
       Stream.runForEach(() => discover),
     ),
   )

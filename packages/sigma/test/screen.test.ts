@@ -1030,6 +1030,81 @@ test("fork-rpc, fork-shown: /fork moves the screen to a new conversation that go
   await quit(session)
 })
 
+type ShownItem =
+  | { _tag: "trees"; shown: Array<{ author: { id: string }; conversation: string }> }
+  | { _tag: "shown"; author: { id: string }; conversation: string }
+  | { _tag: "tree" }
+/** Each conversation a status watch heard a client show, from its snapshot on, by its author's id. */
+const shownBy = (items: ReadonlyArray<ShownItem>) =>
+  items.flatMap((item) =>
+    item._tag === "trees"
+      ? item.shown.map((each) => [each.author.id, each.conversation])
+      : item._tag === "shown"
+        ? [[item.author.id, item.conversation]]
+        : [],
+  )
+
+test("status-shown: the TUI says which conversation it shows once it opens it, then the fork /fork opened, and says it again to a server that replaced its own", async () => {
+  const sigmaHome = home()
+  const session = await open([{ text: "answer one" }, { text: "answer two" }], ["--conversation", "talk"], sigmaHome, {
+    SIGMA_AUTHOR_ID: "attn-terminal:t-1",
+  })
+  await session.waitFor((screen) => screen.includes("READY"))
+  const client = await RawClient.connect(sigmaHome.socket)
+  const watch = client.watch<ShownItem>("status/watch")
+  await watch.until((items) => shownBy(items).some(([, conversation]) => conversation === "talk"))
+  await ask(session, "prompt one", "answer one")
+  await ask(session, "prompt two", "answer two")
+  const before = session.screen().split("\n")[0]!
+  session.type("/fork\r")
+  await session.waitFor((screen) => screen.split("\n")[0] !== before && screen.includes("READY"))
+  await watch.until((items) => shownBy(items).some(([, conversation]) => conversation !== "talk"))
+  const forked = shownBy(watch.items).at(-1)![1]
+  expect(shownBy(watch.items)).toEqual([
+    ["attn-terminal:t-1", "talk"],
+    ["attn-terminal:t-1", forked],
+  ])
+  const listed = (await client.call("conversation/list")).result as Array<{ id: string; fork?: { of: string } }>
+  expect(listed.find((each) => each.id === forked)?.fork?.of).toBe("talk")
+
+  const writer = await serving(await scriptEnv(sigmaHome, []), undefined, ["serve", "--restart"])
+  const again = await RawClient.connect(sigmaHome.socket)
+  const rewatch = again.watch<ShownItem>("status/watch")
+  await rewatch.until((items) => shownBy(items).some(([, conversation]) => conversation === forked))
+  expect(shownBy(rewatch.items)).toEqual([["attn-terminal:t-1", forked]])
+  client.close()
+  again.close()
+  await quit(session)
+  writer.kill()
+  await writer.exited
+})
+
+test("status-shown: of two /fork typed at once, the TUI reports only the fork it opened, never the one it left behind", async () => {
+  const sigmaHome = home()
+  const session = await open([{ text: "answer one" }, { text: "answer two" }], ["--conversation", "talk"], sigmaHome, {
+    SIGMA_AUTHOR_ID: "attn-terminal:t-1",
+  })
+  await session.waitFor((screen) => screen.includes("READY"))
+  const client = await RawClient.connect(sigmaHome.socket)
+  const watch = client.watch<ShownItem>("status/watch")
+  await watch.until((items) => shownBy(items).some(([, conversation]) => conversation === "talk"))
+  await ask(session, "prompt one", "answer one")
+  await ask(session, "prompt two", "answer two")
+  const before = session.screen().split("\n")[0]!
+  session.type("/fork\r/fork\r")
+  const opened = await session.waitFor((screen) => screen.split("\n")[0] !== before && screen.includes("READY"))
+  const shown = /conversation (\S+)/.exec(opened.split("\n")[0]!)![1]!
+  await watch.until((items) => shownBy(items).some(([, conversation]) => conversation === shown))
+  const listed = (await client.call("conversation/list")).result as Array<{ id: string; fork?: { of: string } }>
+  expect(listed.filter((each) => each.fork?.of === "talk")).toHaveLength(2)
+  expect(shownBy(watch.items)).toEqual([
+    ["attn-terminal:t-1", "talk"],
+    ["attn-terminal:t-1", shown],
+  ])
+  client.close()
+  await quit(session)
+})
+
 test("reset-rpc, reset-handoff: /reset draws a new context with its handoff, and the conversation goes on after it", async () => {
   const session = await open([{ text: "answer one" }])
   await session.waitFor((screen) => screen.includes("READY"))

@@ -1088,6 +1088,14 @@ const Handlers = SigmaRpcs.toLayer(
         }),
       ),
       "status/watch": () => Stream.unwrap(Effect.as(lifetime.hold, status.watch(connectionQueue))),
+      "client/shows": ({ conversation, author }) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const shown = yield* wireId(harness, (yield* find(conversation)).id)
+            yield* status.shows({ author, conversation: shown })
+            return Stream.concat(Stream.make({ conversation: shown }), Stream.never)
+          }),
+        ),
       // Stops once the runs in flight settle; a run is never cut off by a stop. The line tells whoever watches the
       // server's stderr that the stop arrived.
       "server/stop": () =>

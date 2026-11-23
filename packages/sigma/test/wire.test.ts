@@ -31,7 +31,7 @@ import { ECHO_TOOL, FAKE_INSTRUCTIONS, FakeMcpServer, WAIT_TOOL } from "./suppor
 setDefaultTimeout(TEST_TIMEOUT)
 
 type Tree = { _tag: "tree"; conversation: string; seq: number; status: string; ended?: Record<string, string> }
-type Trees = { _tag: "trees"; seq: number; trees: Array<Tree> } | Tree
+type Trees = { _tag: "trees"; seq: number; trees: Array<Tree>; shown?: Array<Omit<Shown, "_tag">> } | Tree
 const opened = (watch: ViewWatch) => watch.until(() => true)
 
 /** The model has said something the view shows live, before the run ends. */
@@ -1478,6 +1478,61 @@ test("status-subagent, status-snapshot: a subagent waiting on a person shows as 
   expect(ended.map((tree) => tree.ended)).toEqual([{ outcome: "interrupted", message: "aborted" }])
   client.close()
   late.close()
+})
+
+type Shown = { _tag: "shown"; author: { id: string; name: string }; conversation: string }
+const shownIn = (items: ReadonlyArray<Trees | Shown>) => items.filter((item): item is Shown => item._tag === "shown")
+
+test("status-shown: what a client says it shows reaches every status watcher under its author, by the id other calls use, and later watchers find it in the snapshot", async () => {
+  await using server = await runningServer([])
+  const watcher = await RawClient.connect(server.home.socket)
+  const watch = watcher.watch<Trees | Shown>("status/watch")
+  await watch.until((items) => items.length > 0)
+  const tile = await RawClient.connect(server.home.socket)
+  const chosen = await start(tile)
+  const numbered = (await tile.call("conversation/start", { author: person("ada"), cwd: "/work" })).result
+    .conversation as string
+  const terminal = { id: "attn-terminal:t-1", name: "you" }
+  const other = { id: "attn-terminal:t-2", name: "you" }
+
+  const first = tile.watch<{ conversation: string }>("client/shows", { conversation: chosen, author: terminal })
+  await first.until((items) => items.length > 0)
+  expect(first.items).toEqual([{ conversation: chosen }])
+  const second = tile.watch<{ conversation: string }>("client/shows", { conversation: numbered, author: other })
+  await second.until((items) => items.length > 0)
+  await watch.until((items) => shownIn(items).length === 2)
+  expect(shownIn(watch.items)).toEqual([
+    { _tag: "shown", author: terminal, conversation: chosen },
+    { _tag: "shown", author: other, conversation: numbered },
+  ])
+
+  const late = await RawClient.connect(server.home.socket)
+  const lateWatch = late.watch<Trees | Shown>("status/watch")
+  await lateWatch.until((items) => items.length > 0)
+  expect(lateWatch.items[0]).toEqual({
+    _tag: "trees",
+    seq: expect.any(Number),
+    trees: [],
+    shown: [
+      { author: terminal, conversation: chosen },
+      { author: other, conversation: numbered },
+    ],
+  })
+
+  const missing = await tile.watch("client/shows", { conversation: "nowhere", author: terminal }).ended
+  expect(errorTag(missing)).toBe("NoSuchConversation")
+
+  tile.interrupt(first.id)
+  await first.ended
+  const after = await RawClient.connect(server.home.socket)
+  const afterWatch = after.watch<Trees | Shown>("status/watch")
+  await afterWatch.until((items) => items.length > 0)
+  expect(afterWatch.items[0]).toMatchObject({ _tag: "trees", shown: [{ author: other, conversation: numbered }] })
+  expect((afterWatch.items[0] as { shown: unknown }).shown).toEqual([{ author: other, conversation: numbered }])
+  watcher.close()
+  tile.close()
+  late.close()
+  after.close()
 })
 
 test("submit-author, queue-shared: every client sees who wrote each prompt, while it waits and once it runs", async () => {

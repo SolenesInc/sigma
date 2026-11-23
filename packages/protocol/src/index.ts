@@ -640,22 +640,50 @@ export const TreeStatus = Schema.TaggedStruct("tree", {
 })
 export type TreeStatus = typeof TreeStatus.Type
 
+export const Shown = Schema.Struct({
+  author: Author.annotate({ description: "The author the client that shows it named in client/shows." }),
+  conversation: ConversationId,
+})
+export type Shown = typeof Shown.Type
+
+export const TreeShown = Schema.TaggedStruct("shown", Shown.fields).annotate({
+  description:
+    "A client now shows this conversation, as it said with client/shows. It is not a commit, so it has no seq.",
+})
+
 export const TreeSnapshot = Schema.TaggedStruct("trees", {
   seq: Schema.Int.annotate({
     description:
       "The last commit this server published before the watch began; 0 when it has published none since it started. Every later item has a greater seq.",
   }),
   trees: Schema.Array(TreeStatus).annotate({ description: "Every tree that is not idle; the rest are idle." }),
+  shown: Schema.Array(Shown).annotate({
+    description: "What each client shows now, as client/shows said, oldest first: one entry per client/shows stream.",
+  }),
 })
 
-export const TreeItem = Schema.Union([TreeSnapshot, TreeStatus])
+export const TreeItem = Schema.Union([TreeSnapshot, TreeStatus, TreeShown])
 export type TreeItem = typeof TreeItem.Type
 
 export const WatchStatus = Rpc.make("status/watch", {
   success: TreeItem.annotate({
-    description: "The status of every tree, then each commit that changes one or ends the run of its root.",
+    description:
+      "The status of every tree and what each client shows, then each commit that changes a tree's status or ends the run of its root, and each conversation a client starts to show.",
   }),
   error: FellBehind,
+  stream: true,
+})
+
+export const Shows = Rpc.make("client/shows", {
+  payload: {
+    conversation: ConversationId,
+    author: Author.annotate({ description: "Who shows it: the author the client writes as." }),
+  },
+  success: Schema.Struct({ conversation: ConversationId }).annotate({
+    description:
+      "Once, when status/watch has reported it, with the id every other call names the conversation by. It lasts while the stream does: ending the stream, or the connection, removes it. A client calls this after it opens a conversation and again after each reconnect, so a watcher of status/watch knows what that client shows.",
+  }),
+  error: NoSuchConversation,
   stream: true,
 })
 
@@ -1076,6 +1104,7 @@ export const SigmaRpcs = RpcGroup.make(
   WatchTasks,
   ResolveApproval,
   WatchStatus,
+  Shows,
   StopServer,
   ListProviders,
   ListModels,
