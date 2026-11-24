@@ -103,6 +103,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 
 - codemode-replay: a script whose server is killed during a nested call resumes in a new server without running its finished calls again
 - codemode-stop: a script stuck in a long built-in stops when its run is interrupted, and the server then exits at once
+- worker-exec, codemode-nested-policy: sigma exec without --auto denies a call asked by a worker started inside code mode
 
 Provider, `packages/sigma/test/openai.test.ts`:
 

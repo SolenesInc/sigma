@@ -3,6 +3,7 @@
 // nobody is there to answer.
 import { applyImmutable, type Op } from "@sigma/delta"
 import {
+  type ConversationInfo,
   type EntryRecord,
   type FellBehind,
   LOCAL_TARGET,
@@ -21,9 +22,19 @@ import { launchAuthor } from "./author.ts"
 import { Client, serverRefusal, type StartOptions } from "./client.ts"
 import { describeCall, describeTargetChange } from "./tui/calls.ts"
 
+const SUBAGENT_KIND = "sigma.subagent"
+
 type Block = { readonly type: string; readonly text?: string; readonly name?: string; readonly arguments?: unknown }
-type Message = { readonly content?: ReadonlyArray<Block> | string }
-type Live = { readonly generation?: { message?: Message } }
+type Message = {
+  readonly content?: ReadonlyArray<Block> | string
+  readonly toolName?: string
+  readonly details?: { readonly conversation?: number }
+}
+type NestedTool = { readonly taskId: number; readonly name: string; readonly status: string }
+type Live = {
+  readonly generation?: { message?: Message }
+  readonly nestedTools?: ReadonlyArray<NestedTool>
+}
 type Request = { readonly tool: string; readonly arguments: unknown; readonly answer?: unknown }
 
 const write = (text: string) => process.stdout.write(text)
@@ -133,13 +144,13 @@ const following = <E>(
     () => ({ view: undefined as View | undefined, held: new Set<number>(), newest: undefined as number | undefined }),
     (state, item) =>
       Effect.gen(function* () {
+        const initial = state.view === undefined
+        const reconnected = !initial && item._tag === "view"
         const view = item._tag === "view" ? item.view : applyImmutable(state.view, item.ops as ReadonlyArray<Op>)
         // A window that starts past the newest entry held, or past the start of a transcript that was empty when first
         // watched: a watch opened again, or one commit that added more entries than the window keeps.
         const gap =
-          state.view !== undefined &&
-          view.before !== undefined &&
-          (state.newest === undefined || view.before > state.newest)
+          !initial && view.before !== undefined && (state.newest === undefined || view.before > state.newest)
             ? yield* missed(state.newest, view.before)
             : []
         const added = [...gap, ...view.entries].filter((entry) => !state.held.has(entry.id))
@@ -147,7 +158,7 @@ const following = <E>(
         const newest = added.reduce((most, entry) => Math.max(most, entry.id), state.newest ?? -Infinity)
         return [
           { view, held: state.held, newest: Number.isFinite(newest) ? newest : undefined },
-          [{ item, view, added }],
+          [{ item, view, added, initial, reconnected }],
         ] as const
       }),
   )
@@ -215,40 +226,67 @@ export const exec = Effect.fnUntraced(function* (
     Effect.forkScoped(Effect.catchCause(Effect.orDie(effect), (cause) => Deferred.failCause(failed, cause)))
 
   // Workers and subagents ask in their own conversations, so exec follows every conversation under its own, which may
-  // itself be a worker: it looks again when any tree's status changes, as when a worker or subagent waits on a person,
-  // and when a followed conversation adds entries, as when it starts one. Their watches end when exec does.
-  const listed = yield* reconnecting(client["conversation/list"]())
+  // itself be a worker. It starts from the home's list once its watch holds the conversation's view, and lists again
+  // only when a followed conversation commits a child, finishes a nested start_worker or codemode call, opens a
+  // truncated child window, or reconnects. Unrelated conversations never wake it. Their watches end when exec does.
   const followed = new Set([conversation])
-  const discover: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {
-    const conversations = yield* Effect.orDie(reconnecting(client["conversation/list"]()))
-    const parents = new Map(conversations.map((info) => [info.id, info.lineage?.parent]))
-    const under = (id: string | undefined): boolean => id !== undefined && (followed.has(id) || under(parents.get(id)))
-    for (const info of conversations) {
-      if (followed.has(info.id) || !under(info.lineage?.parent)) continue
-      followed.add(info.id)
-      yield* watching(
-        following(
-          rewatched(() => client["conversation/watch"]({ conversation: info.id })),
-          (after, to) => missedEntries(client, info.id, after, to),
-        ).pipe(
-          Stream.runForEach(({ view, added }) =>
-            Effect.andThen(deny(info.id, view), added.length > 0 ? discover : Effect.void),
-          ),
-        ),
-      )
+  const seenNestedStarts = new Set<number>()
+  const namesNewChild = (entry: EntryRecord) => {
+    if (entry.kind === SUBAGENT_KIND) {
+      const child = (entry.data as { conversation?: number } | undefined)?.conversation
+      return child !== undefined && !followed.has(String(child))
     }
-  })
-  yield* watching(
-    rewatched(() => client["status/watch"]()).pipe(
-      Stream.filter((item) => item._tag !== "shown"),
-      Stream.runForEach(() => discover),
-    ),
+    if (entry.kind !== "pi.tool-result") return false
+    const message = entry.model?.[0] as Message | undefined
+    const child = message?.details?.conversation
+    if (child !== undefined) return !followed.has(String(child))
+    return message?.toolName === "start_worker" || message?.toolName === "codemode"
+  }
+  const hasNewNestedStart = (view: View) => {
+    let found = false
+    for (const slot of liveOf(view)?.nestedTools ?? []) {
+      if (slot.name !== "start_worker" || slot.status !== "done") continue
+      if (seenNestedStarts.has(slot.taskId)) continue
+      seenNestedStarts.add(slot.taskId)
+      found = true
+    }
+    return found
+  }
+  const shouldDiscover = (view: View, added: ReadonlyArray<EntryRecord>, force: boolean) => {
+    const nested = hasNewNestedStart(view)
+    return force || nested || added.some(namesNewChild)
+  }
+  const adopt = (conversations: ReadonlyArray<ConversationInfo>): Effect.Effect<void, never, Scope.Scope> =>
+    Effect.gen(function* () {
+      const parents = new Map(conversations.map((info) => [info.id, info.lineage?.parent]))
+      const under = (id: string | undefined): boolean =>
+        id !== undefined && (followed.has(id) || under(parents.get(id)))
+      for (const info of conversations) {
+        if (followed.has(info.id) || !under(info.lineage?.parent)) continue
+        followed.add(info.id)
+        yield* watching(
+          following(
+            rewatched(() => client["conversation/watch"]({ conversation: info.id })),
+            (after, to) => missedEntries(client, info.id, after, to),
+          ).pipe(
+            Stream.runForEach(({ view, added, initial, reconnected }) =>
+              Effect.andThen(
+                deny(info.id, view),
+                shouldDiscover(view, added, reconnected || (initial && view.before !== undefined))
+                  ? discover
+                  : Effect.void,
+              ),
+            ),
+          ),
+        )
+      }
+    })
+  const discover: Effect.Effect<void, never, Scope.Scope> = Effect.flatMap(
+    Effect.orDie(reconnecting(client["conversation/list"]())),
+    adopt,
   )
 
   const printer = new Printer()
-  // Images are read on this machine: from the conversation's folder when it is here, else from this shell's folder.
-  const info = listed.find((each) => each.id === conversation)
-  const images = imagesIn(prompt, info?.target === LOCAL_TARGET ? info.cwd : process.cwd())
   const requestId = crypto.randomUUID()
   let submitted = false
   // The prompt's fate is read from the entries committed under its requestId, which every watch, reopened or not, is
@@ -292,10 +330,14 @@ export const exec = Effect.fnUntraced(function* (
     rewatched(() => client["conversation/watch"]({ conversation })),
     (after, to) => missedEntries(client, conversation, after, to),
   ).pipe(
-    Stream.tap(({ item, view, added }) =>
+    Stream.tap(({ item, view, added, initial, reconnected }) =>
       Effect.gen(function* () {
         // Submitted once the watch holds the view, so the entries it is handed from then on cover the whole run.
         if (!submitted) {
+          const listed = yield* reconnecting(client["conversation/list"]())
+          // Images are read on this machine: from the conversation's folder when it is here, else from this shell's folder.
+          const info = listed.find((each) => each.id === conversation)
+          const images = imagesIn(prompt, info?.target === LOCAL_TARGET ? info.cwd : process.cwd())
           yield* reconnecting(
             client["conversation/submit"]({
               conversation,
@@ -306,6 +348,8 @@ export const exec = Effect.fnUntraced(function* (
             }),
           )
           submitted = true
+          yield* adopt(listed)
+          hasNewNestedStart(view)
         }
         if (json) write(`${JSON.stringify(item)}\n`)
         for (const entry of added) if (ended === undefined && !withdrawn) onEntry(entry)
@@ -320,7 +364,7 @@ export const exec = Effect.fnUntraced(function* (
           if (live !== undefined) printer.show(textOf(live))
         }
         yield* deny(conversation, view)
-        if (added.length > 0) yield* discover
+        if (!initial && shouldDiscover(view, added, reconnected)) yield* discover
       }),
     ),
     Stream.takeUntil(() => ended !== undefined || withdrawn),

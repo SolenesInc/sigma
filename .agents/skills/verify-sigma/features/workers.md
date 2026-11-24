@@ -637,6 +637,9 @@ Stack, `packages/sigma/test/stack.test.ts`:
 
 - worker-exec: sigma exec without --auto denies the calls its workers would ask about too
 - worker-exec: sigma exec continuing a worker denies the calls of the workers it starts
+- worker-exec: sigma exec does not list conversations when an unrelated conversation runs in the same home
+- worker-exec, codemode-nested-policy: sigma exec without --auto denies a call asked by a worker started inside code mode
+- worker-exec, wire-dropped: a sigma exec dropped while its conversation starts a worker denies the worker's call after reconnecting
 
 Provider, `packages/sigma/test/openai.test.ts`:
 

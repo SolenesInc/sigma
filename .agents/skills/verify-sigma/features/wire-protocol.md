@@ -99,6 +99,7 @@ Stack, `packages/sigma/test/stack.test.ts`:
 - answer-exec, wire-dropped: a sigma exec whose prompt waits, runs and ends while exec is dropped still prints the answer and exits 0
 - answer-exec, wire-dropped: a sigma exec dropped while an earlier prompt runs prints only its own answer
 - answer-exec, wire-dropped: a sigma exec too slow for the run watches again when dropped, prints every call it missed, and exits 0
+- worker-exec, wire-dropped: a sigma exec dropped while its conversation starts a worker denies the worker's call after reconnecting
 
 ## Gotchas
 

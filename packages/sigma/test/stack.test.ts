@@ -2,9 +2,10 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { applyImmutable, type Op } from "@sigma/delta"
-import { PROTOCOL_VERSION, type View, type ViewItem } from "@sigma/protocol"
+import { PROTOCOL_VERSION, type TreeItem, type View, type ViewItem } from "@sigma/protocol"
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from "node:fs"
 import { open, readFile } from "node:fs/promises"
+import * as Net from "node:net"
 import { join } from "node:path"
 import { FakeClaude } from "./support/claude.ts"
 import { FakeOpenAi, signIn } from "./support/openai.ts"
@@ -731,6 +732,176 @@ test("worker-exec: sigma exec continuing a worker denies the calls of the worker
   const kid = (await conversationsOf(sigmaHome)).find((info) => (info as { lineage?: unknown }).lineage)!.id
   const result = await finished(sigma(["exec", "-c", kid, "go on"], env))
   expect(result).toMatchObject({ code: 0, stdout: "the grandchild is done\n" })
+  expect(result.stderr).toContain("denied bash(echo ran): exec cannot ask")
+})
+
+test("worker-exec: sigma exec does not list conversations when an unrelated conversation runs in the same home", async () => {
+  const sigmaHome = home()
+  const proxyHome = home()
+  using held = hold()
+  const env = await scriptEnv(sigmaHome, [
+    { text: "hold this run", hold: held.path },
+    { tool: { name: "bash", input: { command: "echo peer" } } },
+    { text: "peer done" },
+  ])
+  await serving(env)
+
+  let phase: "startup" | "peer" | "finish" = "startup"
+  const listedIn: Array<string> = []
+  const seenMethods = new Set<string>()
+  const sockets = new Set<Net.Socket>()
+  const proxy = Net.createServer((client) => {
+    const upstream = Net.connect(sigmaHome.socket)
+    sockets.add(client)
+    sockets.add(upstream)
+    let buffer = ""
+    client.on("data", (chunk) => {
+      buffer += chunk.toString("utf8")
+      let newline: number
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline)
+        buffer = buffer.slice(newline + 1)
+        if (!line) continue
+        const frame = JSON.parse(line) as { method?: string }
+        if (frame.method !== undefined) seenMethods.add(frame.method)
+        if (frame.method === "conversation/list") listedIn.push(phase)
+      }
+    })
+    client.pipe(upstream)
+    upstream.pipe(client)
+    const drop = () => {
+      client.destroy()
+      upstream.destroy()
+      sockets.delete(client)
+      sockets.delete(upstream)
+    }
+    client.on("close", drop)
+    upstream.on("close", drop)
+    client.on("error", drop)
+    upstream.on("error", drop)
+  })
+  await deadline(
+    new Promise<void>((resolve, reject) => {
+      proxy.once("error", reject)
+      proxy.listen(proxyHome.socket, resolve)
+    }),
+    DEADLINE,
+    "proxy socket listening",
+  )
+  await using _proxy = {
+    [Symbol.asyncDispose]: async () => {
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve) => proxy.close(() => resolve()))
+    },
+  }
+
+  const observed = sigma(["exec", "--conversation", "observed", "--json", "hold this run"], sigmaEnv(proxyHome))
+  const stdout = observed.stdout.getReader()
+  let printed = ""
+  while (!printed.includes('"generation"') || !printed.includes("hold ")) {
+    const { value, done } = await deadline(stdout.read(), DEADLINE, "observed exec held mid-run")
+    if (done) throw new Error(`observed exec exited early: ${await new Response(observed.stderr).text()}`)
+    printed += new TextDecoder().decode(value)
+  }
+
+  phase = "peer"
+  const client = await RawClient.connect(sigmaHome.socket)
+  await using _client = { [Symbol.asyncDispose]: async () => client.close() }
+  const status = client.watch<TreeItem>("status/watch")
+  await status.until((items) => items.some((item) => item._tag === "trees"))
+  const peer = await finished(sigma(["exec", "--conversation", "peer", "run peer"], env))
+  expect(peer).toMatchObject({ code: 0, stdout: "peer done\n" })
+  expect(peer.stderr).toContain("denied bash(echo peer): exec cannot ask")
+  await status.until((items) =>
+    items.some((item) => item._tag === "tree" && item.conversation === "peer" && item.status === "idle"),
+  )
+
+  phase = "finish"
+  held.release()
+  while (true) {
+    const { value, done } = await deadline(stdout.read(), DEADLINE, "observed exec finished")
+    if (done) break
+    printed += new TextDecoder().decode(value)
+  }
+  expect(await deadline(observed.exited, DEADLINE, "observed exec exit")).toBe(0)
+  expect(seenMethods.has("conversation/watch")).toBe(true)
+  expect(listedIn.filter((when) => when !== "startup")).toEqual([])
+})
+
+test("worker-exec, codemode-nested-policy: sigma exec without --auto denies a call asked by a worker started inside code mode", async () => {
+  const env = await scriptEnv(home(), [
+    {
+      tool: {
+        name: "codemode",
+        input: {
+          code: 'await tools.start_worker({ task_name: "kid", message: "go", fork_turns: "none" })\nawait tools.wait_worker({ timeout_ms: 600000 })',
+        },
+      },
+    },
+    { text: "the kid is done" },
+    { agent: "/root/kid", tool: { name: "codemode", input: { code: 'await tools.bash({ command: "echo ran" })' } } },
+    { agent: "/root/kid", text: "could not run it" },
+  ])
+  const result = await finished(sigma(["exec", "--model", "script-code-mode", "delegate"], env))
+  expect(result).toMatchObject({ code: 0, stdout: "the kid is done\n" })
+  expect(result.stderr).toContain("denied bash(echo ran): exec cannot ask")
+})
+
+test("worker-exec, wire-dropped: a sigma exec dropped while its conversation starts a worker denies the worker's call after reconnecting", async () => {
+  const sigmaHome = home()
+  using held = hold()
+  writeFileSync(join(sigmaHome.dir, "note.txt"), "a note\n")
+  const code = [
+    'for (let i = 0; i < 20; i++) await tools.read({ path: "note.txt" })',
+    'await tools.start_worker({ task_name: "kid", message: "go", fork_turns: "none" })',
+    "await tools.wait_worker({ timeout_ms: 600000 })",
+  ].join("\n")
+  const script = [
+    { text: "holding first run", hold: held.path },
+    { tool: { name: "codemode", input: { code } } },
+    { text: "the kid is done" },
+    { agent: "/root/kid", tool: { name: "codemode", input: { code: 'await tools.bash({ command: "echo ran" })' } } },
+    { agent: "/root/kid", text: "could not run it" },
+  ]
+  await using server = await runningServer(script, { home: sigmaHome, connectionQueue: 16 })
+  const client = await RawClient.connect(server.home.socket)
+  await using _client = { [Symbol.asyncDispose]: async () => client.close() }
+  const conversation = (
+    await client.call("conversation/start", {
+      author: person("ada"),
+      cwd: sigmaHome.dir,
+      model: "script-code-mode",
+      id: "gated",
+    })
+  ).result.conversation as string
+  const watch = watchView(client, conversation)
+  const status = client.watch<TreeItem>("status/watch")
+  await status.until((items) => items.some((item) => item._tag === "trees"))
+  await submit(client, conversation, "hold first")
+  await watch.until((current) => {
+    const live = current.view().docs["pi.live"] as
+      | { run?: unknown; generation?: { message?: { content?: Array<{ text?: string }> } } }
+      | undefined
+    return live?.run !== undefined && (live.generation?.message?.content?.[0]?.text ?? "").includes("holding")
+  })
+
+  const exec = sigma(["exec", "--conversation", conversation, "delegate"], sigmaEnv(sigmaHome))
+  const queued = (current: ViewWatch) =>
+    ((current.view().docs["pi.inbox"] as { items?: unknown[] } | undefined)?.items ?? []).length > 0
+  await watch.until(queued)
+  // Exec is stopped before its run overflows its watch queue and spawns a waiting worker in code mode.
+  exec.kill("SIGSTOP")
+  try {
+    held.release()
+    await status.until((items) =>
+      items.some((item) => item._tag === "tree" && item.conversation !== conversation && item.status === "waiting"),
+    )
+  } finally {
+    exec.kill("SIGCONT")
+  }
+
+  const result = await finished(exec)
+  expect(result).toMatchObject({ code: 0, stdout: "the kid is done\n" })
   expect(result.stderr).toContain("denied bash(echo ran): exec cannot ask")
 })
 
