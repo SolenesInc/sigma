@@ -121,6 +121,10 @@ const holdBefore = process.env.FAKE_CLAUDE_HOLD_BEFORE
 let held = false
 const released = new Promise<void>((resolve) => process.on("SIGUSR1", () => resolve()))
 
+// A test can have the process go on from a call's approval only once sigma's interrupt reached it, as when a stop lands
+// right after the answer: what it says as it goes on is then on its way while the stop waits for it.
+const goOnAtInterrupt = process.env.FAKE_CLAUDE_GO_ON_AT_INTERRUPT !== undefined
+
 const inbound: Array<any> = []
 let wake: (() => void) | undefined
 let ended = false
@@ -164,6 +168,11 @@ const receive = async (wanted: (frame: any) => boolean) => {
   }
 }
 
+const interrupted = async () => {
+  while (!ended && !inbound.some((frame) => frame.type === "control_request" && frame.request?.subtype === "interrupt"))
+    await new Promise<void>((resolve) => (wake = resolve))
+}
+
 const skippedHooks = new Set<string>()
 const hookRequests = new Set<string>()
 const callbacks = new Map<string, string>()
@@ -192,6 +201,7 @@ for (const step of segments[spawn] ?? []) {
         received: await receive((f) => f.type === "control_response" && f.response?.request_id === answering),
         answered: asked.get(answering),
       })
+      if (goOnAtInterrupt && asked.get(answering) === "can_use_tool") await interrupted()
     }
   } else if (step.type === "exit") {
     // The process dies here, as a crashed Claude Code does, once what it wrote is out.

@@ -29,6 +29,7 @@ export class FakeClaude {
 
   readonly #fixture: string
   #holdBefore: string | undefined
+  #goOnAtInterrupt = false
   #env: Record<string, string> = {}
 
   /** Plays the fixtures' Claude Code processes one per spawn, in order: several chain one journey after another. */
@@ -48,6 +49,7 @@ export class FakeClaude {
         FAKE_CLAUDE_FIXTURE: this.#fixture,
         FAKE_CLAUDE_DIR: this.dir,
         ...(this.#holdBefore === undefined ? {} : { FAKE_CLAUDE_HOLD_BEFORE: this.#holdBefore }),
+        ...(this.#goOnAtInterrupt ? { FAKE_CLAUDE_GO_ON_AT_INTERRUPT: "1" } : {}),
         ...this.#env,
       },
     }
@@ -59,6 +61,15 @@ export class FakeClaude {
    */
   holdBefore(subtype: string) {
     this.#holdBefore = subtype
+    return this
+  }
+
+  /**
+   * Has each process go on from a call's approval only once sigma's interrupt reached it, as when a person stops the run
+   * right after they answer. Set before the server starts.
+   */
+  goingOnAtInterrupt() {
+    this.#goOnAtInterrupt = true
     return this
   }
 

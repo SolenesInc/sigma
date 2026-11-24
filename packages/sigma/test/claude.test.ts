@@ -591,6 +591,29 @@ test("claude-stop, claude-resume: a Claude Code process that does not end its tu
   expect(transcript(session.view.seen()).slice(-2)).toEqual(["assistant: resumed ok", "run_end: answered"])
 })
 
+test("claude-stop: a run stopped as Claude Code goes on from an approval stays stopped, and nothing runs until the next prompt", async () => {
+  using claude = new FakeClaude("resume_after_kill").goingOnAtInterrupt()
+  await using session = await conversationWith(claude, {}, { claudeStop: "100 millis" })
+  await session.submit(
+    // clock: a command in the prompt the fake replays, not a wait in the test
+    "Run the bash command `echo started > started.fifo && python3 -c 'import time; time.sleep(120)'` with the Bash tool. If the call is cut off or interrupted, do not run anything again; reply with exactly: resumed ok",
+  )
+  await session.answer(true)
+  await claude.logged((fake) => fake.permissionAnswers().length === 1)
+  await session.client.call("conversation/interrupt", { author: person("ada"), conversation: session.conversation })
+  await session.view.until(settled(1))
+
+  await session.submit("Go on.")
+  await session.view.until(settled(2))
+  expect(transcript(session.view.seen()).slice(1)).toEqual([
+    "assistant: ",
+    "run_end: interrupted (aborted)",
+    "user: Go on.",
+    "assistant: resumed ok",
+    "run_end: answered",
+  ])
+})
+
 test("claude-resume: a run that answered before the server stopped is not run again", async () => {
   using claude = new FakeClaude("crash_points")
   const first = await conversationWith(claude, { approvals: "auto" })
