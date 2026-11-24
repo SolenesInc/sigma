@@ -45,7 +45,9 @@ it into a run that serves Claude Code's own follow-up.
   Code ended the turn. The next prompt goes to that process, told nothing
   about the cut-off calls, since its session holds the stop. A process that
   does not end its turn within 5 seconds is closed, and the next run resumes,
-  told which calls were cut off.
+  told which calls were cut off. What Claude Code says as it stops, such as
+  that it goes on from an approval, starts no run: the conversation stays
+  stopped until the next prompt.
 - `claude-idle-release` closes a live process after 30 minutes without a run;
   the next run starts one that resumes the session. A process that waits to
   compact (`claude-idle-compaction`) stays past the 30 minutes, and one with a
@@ -476,6 +478,7 @@ Provider, `packages/sigma/test/claude.test.ts`:
 - claude-cut-off: a run cut off by a server stop resumes, and Claude Code is told which call was cut off
 - claude-stop, claude-live: stopping a run mid-call interrupts Claude Code's turn, and the next prompt goes to the same process, told only that prompt
 - claude-stop, claude-resume: a Claude Code process that does not end its turn after a stop is closed, and the next run resumes, told which call was cut off
+- claude-stop: a run stopped as Claude Code goes on from an approval stays stopped, and nothing runs until the next prompt
 - claude-resume: a run that answered before the server stopped is not run again
 - claude-read: a skill Claude Code runs shows as its call and result, and Claude answers from it
 - claude-job-report, claude-wake: a background subagent that ends during the run reports in it, Claude's turn after the report is that run's answer, and the next prompt gets its own

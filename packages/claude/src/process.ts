@@ -260,6 +260,8 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
     /** What Claude Code answers with now: what it was spawned with, then what the last run switched it to. */
     let selected: Selection = { modelId, effort }
     let resetting = false
+    /** Claude Code is in a turn, from its `running` to its `idle`. */
+    let turn = false
     // `modelUsage` at this process's previous result: a process reports its own running totals, which a resumed
     // session does not carry over (died_while_idle's second process reports a first turn's cache read again).
     let totals: Record<string, UsageTotals> | undefined
@@ -533,8 +535,14 @@ export const openConnection = (config: ProcessConfig<ClaudeProcessSettings>, sta
           case "init":
             return [{ type: "began" }]
           case "session_state_changed":
-            if (message.state === "running") return [{ type: "woke" }]
-            return message.state === "idle" ? [{ type: "idle" }] : []
+            if (message.state === "idle") {
+              turn = false
+              return [{ type: "idle" }]
+            }
+            // Within a turn, `running` follows `requires_action`: Claude Code goes on once its ask is answered or stopped.
+            if (message.state !== "running" || turn) return []
+            turn = true
+            return [{ type: "woke" }]
           case "task_started": {
             if (!message.tool_use_id) return []
             jobs.set(message.tool_use_id, message.task_id)
