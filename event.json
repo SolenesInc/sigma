@@ -1,0 +1,7 @@
+{
+  "kind": "repair",
+  "state": "pass",
+  "title": "Fixed: A Claude run stopped as Claude Code goes on from an approval wakes itself and stalls the next prompt",
+  "at": "2026-11-24T06:31:02.112Z",
+  "repairs": "be30cd59baa595492fdc9fa4a18a3d55e32e56b1"
+}
